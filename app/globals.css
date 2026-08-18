@@ -1,0 +1,385 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+@import 'shadcn/tailwind.css';
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --font-sans: var(--font-poppins);
+  --font-mono: var(--font-jetbrains);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+:root {
+  color-scheme: light;
+  /* Ingenico liquid-glass cockpit — bright canvas, navy ink (#0A1E3C),
+     cyan (#00B9E4) as light/glow and a DEEPENED azure wherever it must
+     carry text, because bright cyan under white is only ~2.4:1. */
+  --brand-cyan: oklch(0.755 0.132 219);
+  --brand-navy: oklch(0.26 0.05 259);
+
+  --background: oklch(0.977 0.006 240);
+  --foreground: oklch(0.235 0.045 259);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.235 0.045 259);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.235 0.045 259);
+  --primary: oklch(0.555 0.135 232);
+  --primary-foreground: oklch(0.995 0 0);
+  --secondary: oklch(0.955 0.012 240);
+  --secondary-foreground: oklch(0.3 0.045 255);
+  --muted: oklch(0.958 0.01 240);
+  --muted-foreground: oklch(0.505 0.03 250);
+  --accent: oklch(0.935 0.035 225);
+  --accent-foreground: oklch(0.38 0.11 235);
+  --destructive: oklch(0.555 0.205 25);
+  --success: oklch(0.545 0.13 162);
+  --warning: oklch(0.6 0.14 62);
+  /* Amber is too light to carry white text, so it carries its own dark ink. */
+  --warning-foreground: oklch(0.24 0.05 60);
+  --border: oklch(0.895 0.014 245);
+  --input: oklch(0.895 0.014 245);
+  --ring: oklch(0.555 0.135 232);
+  --chart-1: oklch(0.555 0.135 232);
+  --chart-2: oklch(0.545 0.13 162);
+  --chart-3: oklch(0.6 0.14 62);
+  --chart-4: oklch(0.5 0.14 275);
+  --chart-5: oklch(0.555 0.205 25);
+  --radius: 1.125rem;
+  --sidebar: oklch(1 0 0);
+  --sidebar-foreground: oklch(0.235 0.045 259);
+  --sidebar-primary: oklch(0.555 0.135 232);
+  --sidebar-primary-foreground: oklch(0.995 0 0);
+  --sidebar-accent: oklch(0.955 0.012 240);
+  --sidebar-accent-foreground: oklch(0.3 0.045 255);
+  --sidebar-border: oklch(0.895 0.014 245);
+  --sidebar-ring: oklch(0.555 0.135 232);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+    /* Soft colour fields drift under the glass so the panels have something
+       worth refracting — on a flat white page, glass reads as plain grey. */
+    background-image:
+      radial-gradient(42rem 30rem at 72% -6%, oklch(0.755 0.132 219 / 0.62), transparent 62%),
+      radial-gradient(38rem 28rem at 16% 8%, oklch(0.5 0.14 275 / 0.36), transparent 62%),
+      radial-gradient(40rem 30rem at 92% 48%, oklch(0.62 0.14 200 / 0.4), transparent 60%),
+      radial-gradient(38rem 28rem at 30% 96%, oklch(0.755 0.132 219 / 0.42), transparent 62%),
+      linear-gradient(to right, oklch(0.235 0.045 259 / 0.028) 1px, transparent 1px),
+      linear-gradient(to bottom, oklch(0.235 0.045 259 / 0.028) 1px, transparent 1px);
+    background-size:
+      100% 100%,
+      100% 100%,
+      100% 100%,
+      100% 100%,
+      52px 52px,
+      52px 52px;
+    background-attachment: fixed;
+  }
+}
+
+@layer components {
+  .input-base {
+    @apply w-full rounded-xl border border-white/70 bg-white/60 px-3.5 py-2.5 text-sm text-foreground shadow-[inset_0_1px_0_0_rgb(255_255_255/0.9)] backdrop-blur-md transition-all placeholder:text-muted-foreground focus:border-ring/60 focus:bg-white/85 focus:outline-none focus:ring-4 focus:ring-ring/15;
+  }
+}
+
+@property --agent-angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+
+@layer utilities {
+  /* On a bright canvas a "glow" cannot glow — it reads as a coloured halo
+     cast by the element, so these are tinted shadows rather than light. */
+  .glow-primary {
+    box-shadow:
+      0 0 0 1px oklch(0.555 0.135 232 / 0.28),
+      0 12px 34px -12px oklch(0.555 0.135 232 / 0.55);
+  }
+  .glow-soft {
+    box-shadow: 0 10px 26px -12px oklch(0.555 0.135 232 / 0.6);
+  }
+  .text-glow {
+    text-shadow: 0 2px 18px oklch(0.555 0.135 232 / 0.32);
+  }
+  .grid-fade {
+    background-image:
+      linear-gradient(to right, oklch(0.235 0.045 259 / 0.05) 1px, transparent 1px),
+      linear-gradient(to bottom, oklch(0.235 0.045 259 / 0.05) 1px, transparent 1px);
+    background-size: 22px 22px;
+  }
+
+  /* Liquid glass — the default surface.
+     Three parts make it read as glass rather than a translucent box:
+     a specular bloom in the top-left, a body tint, and a bright inner rim
+     that catches light along the top edge. The sheen lives in the background
+     stack, NOT a pseudo-element, because ::before/::after are already spoken
+     for by .agent-border and .edge-lit on these same panels. */
+  .glass {
+    background-image:
+      radial-gradient(
+        128% 88% at 0% 0%,
+        oklch(1 0 0 / 0.92),
+        oklch(1 0 0 / 0.34) 46%,
+        transparent 72%
+      ),
+      linear-gradient(to bottom, oklch(1 0 0 / 0.66), oklch(1 0 0 / 0.5));
+    backdrop-filter: blur(22px) saturate(190%);
+    -webkit-backdrop-filter: blur(22px) saturate(190%);
+    border: 1px solid oklch(1 0 0 / 0.72);
+    box-shadow:
+      inset 0 1px 0 0 oklch(1 0 0 / 0.95),
+      inset 0 -1px 0 0 oklch(1 0 0 / 0.4),
+      0 1px 2px oklch(0.235 0.045 259 / 0.04),
+      0 16px 40px -16px oklch(0.235 0.045 259 / 0.18);
+  }
+
+  /* Overlay glass — anything floating OVER content must stay legible, so it
+     keeps the sheen but nearly closes the transparency. A frosted overlay
+     that lets the page bleed through its own text is not glass, it is a bug. */
+  .glass-solid {
+    background-image:
+      radial-gradient(
+        128% 88% at 0% 0%,
+        oklch(1 0 0 / 0.99),
+        oklch(1 0 0 / 0.94) 48%,
+        oklch(1 0 0 / 0.9) 74%
+      ),
+      linear-gradient(to bottom, oklch(1 0 0 / 0.96), oklch(1 0 0 / 0.93));
+    backdrop-filter: blur(40px) saturate(200%);
+    -webkit-backdrop-filter: blur(40px) saturate(200%);
+    border: 1px solid oklch(1 0 0 / 0.85);
+    box-shadow:
+      inset 0 1px 0 0 oklch(1 0 0 / 1),
+      0 2px 6px oklch(0.235 0.045 259 / 0.06),
+      0 32px 70px -22px oklch(0.235 0.045 259 / 0.3);
+  }
+
+  /* A raised lozenge of glass — for pills, chips and small controls. */
+  .glass-pill {
+    background-image: linear-gradient(
+      to bottom,
+      oklch(1 0 0 / 0.8),
+      oklch(1 0 0 / 0.55)
+    );
+    backdrop-filter: blur(14px) saturate(180%);
+    -webkit-backdrop-filter: blur(14px) saturate(180%);
+    border: 1px solid oklch(1 0 0 / 0.8);
+    box-shadow:
+      inset 0 1px 0 0 oklch(1 0 0 / 0.95),
+      0 4px 12px -6px oklch(0.235 0.045 259 / 0.16);
+  }
+
+  /* Glass lifts toward the cursor, the way a physical lens would. */
+  .glass-hover {
+    transition:
+      transform 0.32s cubic-bezier(0.22, 1, 0.36, 1),
+      box-shadow 0.32s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  @media (hover: hover) {
+    .glass-hover:hover {
+      transform: translateY(-2px);
+      box-shadow:
+        inset 0 1px 0 0 oklch(1 0 0 / 0.95),
+        inset 0 -1px 0 0 oklch(1 0 0 / 0.4),
+        0 2px 4px oklch(0.235 0.045 259 / 0.05),
+        0 26px 56px -20px oklch(0.235 0.045 259 / 0.26);
+    }
+  }
+
+  /* A light rakes across the top edge, like a lit console bezel */
+  .edge-lit {
+    position: relative;
+  }
+  .edge-lit::after {
+    content: '';
+    position: absolute;
+    inset-inline: 12%;
+    top: -1px;
+    height: 1px;
+    pointer-events: none;
+    background: linear-gradient(
+      90deg,
+      transparent,
+      oklch(0.555 0.135 232 / 0.55),
+      transparent
+    );
+  }
+
+  /* Rotating conic border — marks a surface the agent is actively working on */
+  .agent-border {
+    position: relative;
+  }
+  .agent-border::before {
+    content: '';
+    position: absolute;
+    inset: -1px;
+    border-radius: inherit;
+    padding: 1px;
+    background: conic-gradient(
+      from var(--agent-angle),
+      transparent 0deg,
+      oklch(0.555 0.135 232 / 1) 44deg,
+      oklch(0.5 0.14 275 / 0.7) 92deg,
+      transparent 164deg,
+      transparent 360deg
+    );
+    -webkit-mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    mask-composite: exclude;
+    animation: agent-spin 3.4s linear infinite;
+    pointer-events: none;
+  }
+}
+
+@keyframes agent-pulse {
+  0%,
+  100% {
+    opacity: 0.5;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.12);
+  }
+}
+@keyframes agent-ring {
+  0% {
+    transform: scale(0.85);
+    opacity: 0.6;
+  }
+  100% {
+    transform: scale(1.9);
+    opacity: 0;
+  }
+}
+@keyframes trace-in {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes caret-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+@keyframes agent-spin {
+  to {
+    --agent-angle: 360deg;
+  }
+}
+@keyframes shimmer {
+  0% {
+    background-position: -160% 0;
+  }
+  100% {
+    background-position: 260% 0;
+  }
+}
+@keyframes drift {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+  50% {
+    transform: translate3d(0, -6px, 0);
+  }
+}
+.animate-shimmer {
+  background-image: linear-gradient(
+    90deg,
+    transparent,
+    oklch(0.755 0.132 219 / 0.22),
+    transparent
+  );
+  background-size: 60% 100%;
+  background-repeat: no-repeat;
+  animation: shimmer 2.6s ease-in-out infinite;
+}
+.animate-drift {
+  animation: drift 7s ease-in-out infinite;
+}
+.animate-agent-pulse {
+  animation: agent-pulse 2.4s ease-in-out infinite;
+}
+.animate-agent-ring {
+  animation: agent-ring 2.4s ease-out infinite;
+}
+.animate-trace-in {
+  animation: trace-in 0.34s ease-out both;
+}
+.animate-caret {
+  animation: caret-blink 1s step-end infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-agent-pulse,
+  .animate-agent-ring,
+  .animate-trace-in,
+  .animate-caret,
+  .animate-shimmer,
+  .animate-drift,
+  .agent-border::before {
+    animation: none;
+  }
+}
