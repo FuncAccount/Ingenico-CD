@@ -13,6 +13,7 @@ import {
   MERCHANTS,
   PIPELINE,
   portfolioKpis,
+  portfolioOrder,
   statusTone,
   stepById,
   type Merchant,
@@ -106,7 +107,10 @@ export function PortfolioOverview({
   // reflect the decisions actually taken. Previously the KPI, the filter and
   // the row badges each read the frozen fixture, so a merchant you had just
   // signed off went on being counted and labelled as awaiting you.
-  const merchants = useMemo(() => applyDecisions(MERCHANTS, decisions), [decisions])
+  const merchants = useMemo(
+    () => portfolioOrder(applyDecisions(MERCHANTS, decisions)),
+    [decisions],
+  )
   const kpis = portfolioKpis(merchants)
 
   const rows = onlySignoff
