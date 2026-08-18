@@ -67,8 +67,15 @@ export interface Warehouse {
   name: string
   city: string
   at: Point
-  /** On-hand units per model. A model absent from this map is not stocked here
-   *  at all, which is different from being stocked at zero. */
+  /**
+   * AVAILABLE TO PROMISE this week, not total inventory: units already
+   * committed to other deployments cannot be shipped again, so planning
+   * against the warehouse's full on-hand figure would let every order be met
+   * from the biggest depot and make the sourcing search decorative.
+   *
+   * A model absent from this map is not stocked here at all, which is
+   * different from being stocked at zero.
+   */
   stock: Partial<Record<ModelId, number>>
   cutoff: string
 }
@@ -79,7 +86,7 @@ export const WAREHOUSES: Warehouse[] = [
     name: "Rotterdam DC",
     city: "Rotterdam, NL",
     at: { lat: 51.92, lon: 4.48 },
-    stock: { A920: 340, "Move 5000": 180, "Desk 5000": 260 },
+    stock: { A920: 22, "Move 5000": 14, "Desk 5000": 9 },
     cutoff: "16:00 CET",
   },
   {
@@ -87,7 +94,7 @@ export const WAREHOUSES: Warehouse[] = [
     name: "Frankfurt DC",
     city: "Frankfurt, DE",
     at: { lat: 50.11, lon: 8.68 },
-    stock: { A920: 120, "Move 5000": 64, "Desk 5000": 95 },
+    stock: { A920: 15, "Move 5000": 6, "Desk 5000": 7 },
     cutoff: "15:00 CET",
   },
   {
@@ -95,7 +102,7 @@ export const WAREHOUSES: Warehouse[] = [
     name: "Barcelona DC",
     city: "Barcelona, ES",
     at: { lat: 41.39, lon: 2.17 },
-    stock: { A920: 88, "Move 5000": 40, "Desk 5000": 30 },
+    stock: { A920: 9, "Move 5000": 4, "Desk 5000": 3 },
     cutoff: "15:00 CET",
   },
   {
@@ -105,7 +112,7 @@ export const WAREHOUSES: Warehouse[] = [
     at: { lat: 53.35, lon: -6.26 },
     // Deliberately thin on Desk 5000: Brightline's 12-unit order cannot be met
     // from the site on its doorstep, which is the whole point of the screen.
-    stock: { A920: 45, "Move 5000": 22, "Desk 5000": 5 },
+    stock: { A920: 5, "Move 5000": 2, "Desk 5000": 1 },
     cutoff: "14:00 GMT",
   },
   {
@@ -113,7 +120,7 @@ export const WAREHOUSES: Warehouse[] = [
     name: "Milan DC",
     city: "Milan, IT",
     at: { lat: 45.46, lon: 9.19 },
-    stock: { A920: 76, "Move 5000": 35, "Desk 5000": 48 },
+    stock: { A920: 7, "Move 5000": 5, "Desk 5000": 4 },
     cutoff: "15:00 CET",
   },
 ]

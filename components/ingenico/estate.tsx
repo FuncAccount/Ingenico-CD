@@ -1,6 +1,7 @@
 "use client"
 
 import { useMemo, useState } from "react"
+import { ChevronDown } from "lucide-react"
 import { MERCHANTS } from "@/lib/acquirer-data"
 import { ALL_JOURNEYS, acquirerOf } from "@/lib/estate"
 import {
@@ -108,23 +109,22 @@ export function Estate() {
         </section>
 
         <section className="flex flex-col gap-3">
-          {active ? (
-            <SiteDetail
-              site={active}
-              devices={shown.filter((d) => d.merchant === active.merchant)}
-              onClose={() => setSelected(null)}
-            />
-          ) : (
-            <div className="glass rounded-2xl p-4">
-              <h2 className="text-sm font-semibold text-foreground">Sites</h2>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Outages first. Select a site on the map or in this list.
-              </p>
-              <ul className="mt-3 max-h-[600px] divide-y divide-border/60 overflow-y-auto">
-                {sites.map((s) => (
+          <div className="glass rounded-2xl p-4">
+            <h2 className="text-sm font-semibold text-foreground">Sites</h2>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Outages first. Select a site on the map or in this list to open it.
+            </p>
+            {/* The detail expands INSIDE the list rather than replacing it, so
+                the site being read stays in the run of sites it belongs to —
+                a fault is only meaningful next to the ones that are fine. */}
+            <ul className="mt-3 max-h-[600px] divide-y divide-border/60 overflow-y-auto">
+              {sites.map((s) => {
+                const on = active?.merchant === s.merchant && active?.city === s.city
+                return (
                   <li key={`${s.merchant}-${s.city}`}>
                     <button
-                      onClick={() => setSelected(s)}
+                      onClick={() => setSelected(on ? null : s)}
+                      aria-expanded={on}
                       className="flex w-full items-center gap-3 py-2.5 text-left transition-colors hover:bg-secondary/40"
                     >
                       <HealthDot health={s.health} />
@@ -137,33 +137,51 @@ export function Estate() {
                         </span>
                       </span>
                       <span className="shrink-0 text-right">
-                        <span className="block text-[13px] tabular-nums text-foreground">{s.total}</span>
+                        <span className="block text-[13px] tabular-nums text-foreground">
+                          {s.total}
+                        </span>
                         {s.fault && (
                           <span className={cn("block text-[10px]", HEALTH_META[s.health].text)}>
                             {s.fault}
                           </span>
                         )}
                       </span>
+                      <ChevronDown
+                        className={cn(
+                          "h-4 w-4 shrink-0 text-muted-foreground transition-transform",
+                          on && "rotate-180",
+                        )}
+                      />
                     </button>
+
+                    {on && (
+                      <div className="pb-3">
+                        <SiteDetail
+                          site={s}
+                          devices={shown.filter((d) => d.merchant === s.merchant)}
+                        />
+                      </div>
+                    )}
                   </li>
-                ))}
-              </ul>
-            </div>
-          )}
+                )
+              })}
+            </ul>
+          </div>
         </section>
       </div>
     </main>
   )
 }
 
+/** Rendered INSIDE the expanded list row, so it deliberately carries no name,
+ *  city or health dot — the row immediately above already states all three,
+ *  and repeating them would read as a second, possibly disagreeing, record. */
 function SiteDetail({
   site,
   devices,
-  onClose,
 }: {
   site: Site
   devices: ReturnType<typeof fleetDevices>
-  onClose: () => void
 }) {
   const STATE_META: Record<DeviceState, { label: string; cls: string }> = {
     online: { label: "Online", cls: "text-success" },
@@ -173,38 +191,20 @@ function SiteDetail({
   }
 
   return (
-    <div className="glass rounded-2xl p-4">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <HealthDot health={site.health} />
-            <h2 className="truncate text-sm font-semibold text-foreground">{site.merchant}</h2>
-          </div>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            {site.city} · {site.acquirer}
-          </p>
-        </div>
-        <button
-          onClick={onClose}
-          className="shrink-0 rounded-lg px-2 py-1 text-xs text-muted-foreground hover:bg-secondary hover:text-foreground"
-        >
-          Back to list
-        </button>
-      </div>
-
+    <div className="rounded-xl bg-secondary/30 p-3">
       {site.fault ? (
-        <p className="mt-3 rounded-xl bg-destructive/10 px-3 py-2 text-xs font-medium text-destructive">
+        <p className="rounded-lg bg-destructive/10 px-3 py-2 text-xs font-medium text-destructive">
           {site.fault}
         </p>
       ) : (
-        <p className="mt-3 rounded-xl bg-secondary/60 px-3 py-2 text-xs text-muted-foreground">
+        <p className="rounded-lg bg-background/50 px-3 py-2 text-xs text-muted-foreground">
           {site.health === "pending"
             ? "Terminals delivered but not yet switched on."
             : "Nothing outstanding at this site."}
         </p>
       )}
 
-      <ul className="mt-3 max-h-[420px] divide-y divide-border/60 overflow-y-auto">
+      <ul className="mt-2 max-h-[300px] divide-y divide-border/60 overflow-y-auto px-1">
         {devices.map((d) => (
           <li key={d.serial} className="flex items-center gap-3 py-2">
             <span className="min-w-0 flex-1">

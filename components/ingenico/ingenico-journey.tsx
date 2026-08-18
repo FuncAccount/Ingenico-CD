@@ -5,6 +5,7 @@ import { ArrowDownLeft, Check, MapPin, Radio, Wrench } from "lucide-react"
 import { PIPELINE, stepById, type Merchant, type StepId } from "@/lib/acquirer-data"
 import { acquirerOf, estateRows, ingenicoRole, type IngenicoRole } from "@/lib/estate"
 import { useDecisions } from "@/components/acquirer/decisions-provider"
+import { AgentPanel } from "@/components/ingenico/agent-panel"
 import {
   ConfigPane,
   OrderPane,
@@ -32,13 +33,13 @@ export function IngenicoJourney({
 }) {
   const { decisions } = useDecisions()
   const rows = useMemo(() => estateRows(decisions), [decisions])
-  const live = merchant ? rows.find((r) => r.merchant.id === merchant.id)?.merchant : undefined
+  const row = merchant ? rows.find((r) => r.merchant.id === merchant.id) : undefined
   const [step, setStep] = useState<StepId | null>(null)
 
   // A journey is always opened FROM an order, so there is no picker here. One
   // that listed every merchant would be a second copy of the deployments list,
   // making the same records reachable two ways.
-  if (!live) {
+  if (!row) {
     return (
       <main className="mx-auto max-w-7xl px-6 py-8">
         <p className="text-sm text-muted-foreground">
@@ -54,6 +55,9 @@ export function IngenicoJourney({
     )
   }
 
+  // Bound after the guard, so `row` is known present and no step below has to
+  // invent a fallback for a measurement it does not have.
+  const live = row.merchant
   const book = acquirerOf(live)
   const active: StepId = step ?? live.currentStep
 
@@ -118,7 +122,7 @@ export function IngenicoJourney({
         </nav>
 
         <section>
-          <StepPane merchant={live} step={active} book={book} />
+          <StepPane merchant={live} step={active} book={book} daysInStep={row.daysInStep} />
         </section>
       </div>
     </main>
@@ -129,10 +133,12 @@ function StepPane({
   merchant,
   step,
   book,
+  daysInStep,
 }: {
   merchant: Merchant
   step: StepId
   book: string
+  daysInStep: number
 }) {
   const role = ingenicoRole(step)
   const meta = stepById(step)
@@ -170,20 +176,28 @@ function StepPane({
             {stepById(merchant.currentStep).name}.
           </p>
         </div>
-      ) : role === "inbound" ? (
-        <InboundPane merchant={merchant} step={step} book={book} />
-      ) : step === 3 ? (
-        <OrderPane merchant={merchant} />
-      ) : step === 5 ? (
-        <ConfigPane merchant={merchant} />
-      ) : step === 6 ? (
-        <TestPane merchant={merchant} />
-      ) : step === 7 ? (
-        <ShipPane merchant={merchant} />
-      ) : step === 8 ? (
-        <FieldPane merchant={merchant} />
       ) : (
-        <GoLivePane merchant={merchant} />
+        <>
+          {/* The agent's own work comes FIRST on every reached step. Burying it
+              under the records would make it look like commentary on the step
+              rather than the thing that moved it. */}
+          <AgentPanel merchant={merchant} step={step} daysInStep={daysInStep} />
+          {role === "inbound" ? (
+            <InboundPane merchant={merchant} step={step} book={book} />
+          ) : step === 3 ? (
+            <OrderPane merchant={merchant} />
+          ) : step === 5 ? (
+            <ConfigPane merchant={merchant} />
+          ) : step === 6 ? (
+            <TestPane merchant={merchant} />
+          ) : step === 7 ? (
+            <ShipPane merchant={merchant} />
+          ) : step === 8 ? (
+            <FieldPane merchant={merchant} />
+          ) : (
+            <GoLivePane merchant={merchant} />
+          )}
+        </>
       )}
     </div>
   )
