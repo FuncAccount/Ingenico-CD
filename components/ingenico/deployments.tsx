@@ -72,8 +72,11 @@ export function Deployments({ onOpenOrder }: { onOpenOrder: (m: Merchant) => voi
                   order{b.orders.length === 1 ? "" : "s"}
                 </span>
               </span>
+              {/* "0 with us" is a real state — every order sitting with the
+                  acquirer or the merchant — not an empty figure, so it is
+                  worded rather than printed as a bare zero. */}
               <span className="mt-1 block text-[11px] text-muted-foreground">
-                {b.onUs} with us
+                {b.onUs === 0 ? "Nothing waiting on us" : `${b.onUs} with us`}
                 {b.breached > 0 && (
                   <span className="font-medium text-destructive"> · {b.breached} past target</span>
                 )}
