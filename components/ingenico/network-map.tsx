@@ -94,27 +94,40 @@ export function NetworkMap({
           const on = hoveredLeg === leg.warehouse.id
           const air = leg.service.mode === "air"
           const units = leg.units.reduce((a, u) => a + u.qty, 0)
-          return (
-            <Line
-              key={leg.warehouse.id}
-              from={coordsFor(leg.warehouse.city)}
-              to={dest}
-              stroke={air ? "var(--color-destructive)" : "var(--color-primary)"}
-              // Stroke width carries UNITS, so the lane doing most of the work
-              // reads as the heavier one.
-              strokeWidth={on ? 4 : 1.4 + Math.min(units, 12) * 0.22}
-              strokeLinecap="round"
-              // Air is dashed: mode is a different KIND of fact from volume,
-              // so it cannot be encoded by the same channel as weight.
-              strokeDasharray={air ? "6 4" : undefined}
-              opacity={hoveredLeg && !on ? 0.25 : 0.9}
-            />
-          )
+          const stroke = air ? "var(--color-destructive)" : "var(--color-primary)"
+          // Stroke width carries UNITS, so the lane doing most of the work
+          // reads as the heavier one. Air is dashed: mode is a different KIND
+          // of fact from volume and cannot share the weight channel.
+          const w = on ? 4 : 1.4 + Math.min(units, 12) * 0.22
+          const shared = {
+            stroke,
+            strokeWidth: w,
+            strokeLinecap: "round" as const,
+            strokeDasharray: air ? "6 4" : undefined,
+            opacity: hoveredLeg && !on ? 0.25 : 0.9,
+          }
+          // A keyed leg is TWO drawn segments, not one line to the merchant:
+          // the units physically stop at a certified facility on the way. One
+          // straight lane would hide a stop the plan is actually paying for.
+          if (leg.via) {
+            return (
+              <g key={leg.warehouse.id}>
+                <Line from={coordsFor(leg.warehouse.city)} to={coordsFor(leg.via.city)} {...shared} />
+                <Line from={coordsFor(leg.via.city)} to={dest} {...shared} />
+              </g>
+            )
+          }
+          return <Line key={leg.warehouse.id} from={coordsFor(leg.warehouse.city)} to={dest} {...shared} />
         })}
 
         {WAREHOUSES.map((w) => {
           const leg = used.get(w.id)
           const on = hoveredLeg === w.id
+          // A facility this plan routes THROUGH is in use even though it is
+          // not a source. Drawn hollow it would read as a rejected depot while
+          // two lanes visibly met at it.
+          const isVia = routing.legs.some((l) => l.via?.id === w.id)
+          const inPlan = Boolean(leg) || isVia
           return (
             <Marker
               key={w.id}
@@ -129,19 +142,32 @@ export function NetworkMap({
                 width={10}
                 height={10}
                 transform="rotate(45)"
-                fill={leg ? "var(--color-primary)" : "var(--color-background)"}
-                stroke={leg ? "var(--color-primary)" : "var(--color-muted-foreground)"}
+                fill={inPlan ? "var(--color-primary)" : "var(--color-background)"}
+                stroke={inPlan ? "var(--color-primary)" : "var(--color-muted-foreground)"}
                 strokeWidth={on ? 2.5 : 1.4}
-                opacity={leg ? 1 : 0.55}
+                opacity={inPlan ? 1 : 0.55}
               />
+              {/* A ring marks a certified key injection facility. Capability is
+                  a standing property of the site, so it is drawn on every one
+                  that has it — not only the site this plan happens to use. */}
+              {w.keyInjection && (
+                <circle
+                  r={9}
+                  fill="none"
+                  stroke={inPlan ? "var(--color-primary)" : "var(--color-muted-foreground)"}
+                  strokeWidth={1}
+                  strokeDasharray="2 2"
+                  opacity={inPlan ? 0.9 : 0.45}
+                />
+              )}
               <text
-                y={-11}
+                y={-13}
                 textAnchor="middle"
                 className="pointer-events-none"
                 style={{
                   fontSize: 9,
-                  fontWeight: leg ? 600 : 400,
-                  fill: leg ? "var(--color-foreground)" : "var(--color-muted-foreground)",
+                  fontWeight: inPlan ? 600 : 400,
+                  fill: inPlan ? "var(--color-foreground)" : "var(--color-muted-foreground)",
                 }}
               >
                 {w.name.replace(" DC", "")}
@@ -183,6 +209,15 @@ export function NetworkMap({
             <span className="h-2 w-2 rotate-45 border border-muted-foreground/70 bg-background" />
           }
           label="Depot not used"
+        />
+        {/* Shown whenever a certified site is on the map, not only when this
+            plan routes through one: the ring is drawn either way, and a mark
+            with no key beside it is unreadable. */}
+        <Key
+          swatch={
+            <span className="h-3 w-3 rounded-full border border-dashed border-muted-foreground/70" />
+          }
+          label="Key injection facility"
         />
         <span className="text-muted-foreground/70">Line weight = units on that lane</span>
       </div>
@@ -234,9 +269,25 @@ function LegRow({
       )}
     >
       <span className="text-muted-foreground">
-        <span className="font-medium text-foreground">{leg.warehouse.name}</span> —{" "}
-        {leg.units.map((u) => `${u.qty}× ${u.model}`).join(", ")} ·{" "}
-        {distanceLabel(leg.distanceKm)} · {leg.service.service}, {leg.service.days}d ·{" "}
+        <span className="font-medium text-foreground">{leg.warehouse.name}</span>
+        {/* The stop is named inline, because the map shows two segments and an
+            unexplained bend reads as a drawing error rather than a step the
+            plan is paying for. */}
+        {leg.via && (
+          <>
+            {" "}
+            via <span className="font-medium text-foreground">{leg.via.name}</span>
+            <span className="text-muted-foreground/80"> (key injection)</span>
+          </>
+        )}{" "}
+        — {leg.units.map((u) => `${u.qty}× ${u.model}`).join(", ")} ·{" "}
+        {distanceLabel(leg.distanceKm)}
+        {leg.via ? " both hops" : ""} · {leg.service.service},{" "}
+        {/* The carrier's own figure excludes the day spent being keyed, so the
+            total is shown and the split named rather than quoting freight
+            time as if it were delivery time. */}
+        {leg.totalDays}d
+        {leg.via ? ` (${leg.service.days}d freight + ${leg.totalDays - leg.service.days}d keying)` : ""} ·{" "}
         <span className="tabular-nums">
           €{leg.service.cost} service + €{leg.lineHaul} freight = €{leg.total}
         </span>{" "}

@@ -4,6 +4,7 @@ import { useMemo, useState } from "react"
 import { ArrowDownLeft, Check, MapPin, Radio, Wrench } from "lucide-react"
 import { PIPELINE, stepById, type Merchant, type StepId } from "@/lib/acquirer-data"
 import { acquirerOf, estateRows, ingenicoRole, type IngenicoRole } from "@/lib/estate"
+import { needsPhysicalKeying } from "@/lib/devices"
 import { useDecisions } from "@/components/acquirer/decisions-provider"
 import { AgentPanel } from "@/components/ingenico/agent-panel"
 import {
@@ -181,19 +182,19 @@ function StepPane({
           {/* The agent's own work comes FIRST on every reached step. Burying it
               under the records would make it look like commentary on the step
               rather than the thing that moved it. */}
-          <AgentPanel merchant={merchant} step={step} daysInStep={daysInStep} />
+          <AgentPanel merchant={merchant} step={step} daysInStep={daysInStep} acquirer={book} />
           {role === "inbound" ? (
             <InboundPane merchant={merchant} step={step} book={book} />
           ) : step === 3 ? (
             <OrderPane merchant={merchant} />
           ) : step === 5 ? (
-            <ConfigPane merchant={merchant} />
+            <ConfigPane merchant={merchant} acquirer={book} />
           ) : step === 6 ? (
             <TestPane merchant={merchant} />
           ) : step === 7 ? (
             <ShipPane merchant={merchant} />
           ) : step === 8 ? (
-            <FieldPane merchant={merchant} />
+            <FieldPane merchant={merchant} acquirer={book} />
           ) : (
             <GoLivePane merchant={merchant} />
           )}
@@ -249,7 +250,12 @@ function InboundPane({
   )
 }
 
-function FieldPane({ merchant }: { merchant: Merchant }) {
+function FieldPane({ merchant, acquirer }: { merchant: Merchant; acquirer: string }) {
+  // Derived, never asserted: this pane claimed keys inject at first connection
+  // for every merchant, which is false for an acquirer whose terminals were
+  // keyed at a facility before despatch — and would have contradicted the
+  // routing the Order step just showed.
+  const keyed = needsPhysicalKeying(acquirer)
   return (
     <div className="glass rounded-2xl p-4">
       <div className="flex items-center gap-2">
@@ -258,9 +264,12 @@ function FieldPane({ merchant }: { merchant: Merchant }) {
       </div>
       <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
         {merchant.terminalCount} unit{merchant.terminalCount === 1 ? "" : "s"} delivered to{" "}
-        {merchant.location}. The merchant powers them on; keys inject at first
-        connection. Nothing reports here until a device calls home — until then
-        it has no uptime to show, which is different from being offline.
+        {merchant.location}. The merchant powers them on;{" "}
+        {keyed
+          ? `these arrived already keyed at a certified facility, so they need no key step here`
+          : `keys inject at first connection`}
+        . Nothing reports here until a device calls home — until then it has no
+        uptime to show, which is different from being offline.
       </p>
     </div>
   )

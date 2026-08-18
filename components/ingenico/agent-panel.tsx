@@ -18,14 +18,18 @@ export function AgentPanel({
   merchant,
   step,
   daysInStep,
+  acquirer,
 }: {
   merchant: Merchant
   step: StepId
   daysInStep: number
+  /** The acquirer's key policy decides whether terminals must be keyed at a
+   *  certified facility before delivery, which reshapes the whole routing. */
+  acquirer: string
 }) {
-  const activity = agentActivity(merchant, step)
-  const tasks = agentTasks(merchant, step, daysInStep)
-  const choice = step === 3 ? chooseRouting(merchant) : null
+  const activity = agentActivity(merchant, step, acquirer)
+  const tasks = agentTasks(merchant, step, acquirer, daysInStep)
+  const choice = step === 3 ? chooseRouting(merchant, acquirer) : null
 
   // Which routing is on display. Starts on the agent's own recommendation;
   // asking for a different objective genuinely re-plans rather than just

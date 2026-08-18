@@ -15,12 +15,17 @@
 import type { Merchant, StepId } from "@/lib/acquirer-data"
 import { ingenicoRole } from "@/lib/estate"
 import {
+  cityPoint,
   deliveryOptions,
   hardwareLines,
+  haversineKm,
+  injectionSites,
+  needsPhysicalKeying,
   planLine,
   WAREHOUSES,
   type DeliveryOption,
   type OrderLine,
+  type Point,
   type Warehouse,
 } from "@/lib/devices"
 
@@ -41,6 +46,26 @@ export interface RoutingLeg {
   total: number
   /** kg CO2e for this leg, from its distance, units and mode. */
   co2Kg: number
+  /**
+   * Working days from despatch to the merchant having these units.
+   *
+   * NOT `service.days`: air freight is quoted at one day whatever the lane, so
+   * reading the carrier's figure alone silently swallowed the day the units
+   * spend inside the injection facility, and every keyed plan claimed to
+   * arrive as fast as a direct one.
+   */
+  totalDays: number
+  /**
+   * Certified facility these units are keyed at before delivery, when the
+   * acquirer does not permit remote injection AND the source depot cannot
+   * inject. Undefined means the units go straight to the merchant — which is
+   * the normal case, not a missing value.
+   *
+   * When set, `distanceKm`, `transitDays`, `lineHaul` and `co2Kg` all describe
+   * the FULL two-hop path, so a keyed leg can never look cheaper than the
+   * direct one it replaced.
+   */
+  via?: Warehouse
 }
 
 /**
@@ -188,7 +213,12 @@ function drawFewestSites(m: Merchant, lines: OrderLine[]): { draws: Draw[]; shor
   return { draws, shortfall }
 }
 
-function legsFrom(draws: Draw[], pick: (opts: DeliveryOption[]) => DeliveryOption): RoutingLeg[] {
+function legsFrom(
+  draws: Draw[],
+  pick: (opts: DeliveryOption[]) => DeliveryOption,
+  needsKeying: boolean,
+  dest: Point | undefined,
+): RoutingLeg[] {
   const bySite = new Map<string, RoutingLeg>()
   for (const d of draws) {
     const leg = bySite.get(d.warehouse.id)
@@ -206,6 +236,7 @@ function legsFrom(draws: Draw[], pick: (opts: DeliveryOption[]) => DeliveryOptio
         lineHaul: 0,
         total: 0,
         co2Kg: 0,
+        totalDays: 0,
       })
     }
   }
@@ -214,11 +245,56 @@ function legsFrom(draws: Draw[], pick: (opts: DeliveryOption[]) => DeliveryOptio
   const legs = [...bySite.values()]
   for (const l of legs) {
     const units = l.units.reduce((a, u) => a + u.qty, 0)
+
+    // A depot that cannot key the terminals must send them through one that
+    // can. The detour is priced as the FULL path — depot to facility, then
+    // facility to merchant — so a keyed leg can never appear cheaper or
+    // shorter than the direct lane it replaced.
+    if (needsKeying && !l.warehouse.keyInjection) {
+      const kif = nearestInjectionSite(l.warehouse, dest)
+      if (kif) {
+        l.via = kif.site
+        l.distanceKm = kif.toSite + kif.toDest
+        // TRAVEL ONLY. The keying day is added once, in `totalDays` — folding
+        // it in here too would inflate the carrier's own quoted transit and
+        // then count the same day again.
+        l.transitDays = transitDaysFor(kif.toSite) + transitDaysFor(kif.toDest)
+        l.service = pick(deliveryOptions(l.transitDays))
+      }
+    }
+
     l.lineHaul = lineHaulCost(l.distanceKm, units)
     l.total = l.service.cost + l.lineHaul
     l.co2Kg = emissionsKg(l.distanceKm, units, l.service.mode)
+    // The facility day is added ON TOP of the carrier's transit, because the
+    // units are stationary while they are keyed no matter how fast they fly.
+    l.totalDays = l.service.days + (l.via ? KEYING_DAYS : 0)
   }
   return legs.sort((a, b) => a.distanceKm - b.distanceKm)
+}
+
+/** Working days the units spend inside the facility being keyed and re-boxed.
+ *  Not travel time — it is why a keyed rollout is slower even between two
+ *  depots that are close together. */
+export const KEYING_DAYS = 1
+
+function transitDaysFor(km: number): number {
+  if (km < 400) return 1
+  if (km < 1100) return 2
+  if (km < 2000) return 3
+  return 4
+}
+
+/** The facility that makes the WHOLE detour shortest, not the one nearest the
+ *  depot: a close facility on the wrong side of the merchant is a longer trip. */
+function nearestInjectionSite(from: Warehouse, dest: Point | undefined) {
+  let best: { site: Warehouse; toSite: number; toDest: number } | null = null
+  for (const site of injectionSites()) {
+    const toSite = haversineKm(from.at, site.at)
+    const toDest = dest ? haversineKm(site.at, dest) : 0
+    if (!best || toSite + toDest < best.toSite + best.toDest) best = { site, toSite, toDest }
+  }
+  return best
 }
 
 const cheapestService = (o: DeliveryOption[]) => o.reduce((a, b) => (b.cost < a.cost ? b : a))
@@ -232,8 +308,10 @@ function assemble(
   draws: Draw[],
   shortfall: number,
   pick: (o: DeliveryOption[]) => DeliveryOption,
+  needsKeying: boolean,
+  dest: Point | undefined,
 ): Routing {
-  const legs = legsFrom(draws, pick)
+  const legs = legsFrom(draws, pick, needsKeying, dest)
   return {
     id,
     label,
@@ -242,7 +320,7 @@ function assemble(
     legs,
     shipments: legs.length,
     // Max, not sum: the order is complete when the LAST leg lands.
-    days: legs.reduce((a, l) => Math.max(a, l.service.days), 0),
+    days: legs.reduce((a, l) => Math.max(a, l.totalDays), 0),
     cost: legs.reduce((a, l) => a + l.total, 0),
     co2Kg: Math.round(legs.reduce((a, l) => a + l.co2Kg, 0) * 10) / 10,
     shortfall,
@@ -252,22 +330,24 @@ function assemble(
 /** Every plan the agent evaluates: two ways of assigning depots × two service
  *  levels. The count is what the "compared N routings" claim is counted from,
  *  so the claim cannot drift from the search. */
-function candidatePlans(m: Merchant): Routing[] {
+function candidatePlans(m: Merchant, acquirer: string): Routing[] {
   const lines = hardwareLines(m)
   if (lines.length === 0) return []
   const assignments = [drawNearestFirst(m, lines), drawFewestSites(m, lines)]
+  const needsKeying = needsPhysicalKeying(acquirer)
+  const dest = cityPoint(m.location)
   const services = [cheapestService, quickestService]
   const out: Routing[] = []
   for (const a of assignments) {
     for (const s of services) {
-      out.push(assemble("cheapest", "", "", "", a.draws, a.shortfall, s))
+      out.push(assemble("cheapest", "", "", "", a.draws, a.shortfall, s, needsKeying, dest))
     }
   }
   return out
 }
 
-export function planCount(m: Merchant): number {
-  return candidatePlans(m).length
+export function planCount(m: Merchant, acquirer: string): number {
+  return candidatePlans(m, acquirer).length
 }
 
 const LABELS: Record<RoutingId, { label: string; optimises: string; concedes: string }> = {
@@ -298,8 +378,8 @@ const LABELS: Record<RoutingId, { label: string; optimises: string; concedes: st
  * real argmin, so two objectives landing on one plan means they genuinely
  * agree rather than the code having been told they do.
  */
-export function routings(m: Merchant): Routing[] {
-  const plans = candidatePlans(m)
+export function routings(m: Merchant, acquirer: string): Routing[] {
+  const plans = candidatePlans(m, acquirer)
   if (plans.length === 0) return []
 
   const pick = (id: RoutingId, better: (a: Routing, b: Routing) => boolean) => {
@@ -342,8 +422,26 @@ export interface RoutingChoice {
  * Recommend on cost, then state the delay it buys. Cost is the objective the
  * user named; speed is the thing it trades against, so both print.
  */
-export function chooseRouting(m: Merchant): RoutingChoice | null {
-  const all = routings(m)
+/**
+ * What the key-policy check concluded for a given plan.
+ *
+ * Three genuinely different outcomes, kept apart: units routed through a
+ * facility, units that did not need to be because their depot is certified,
+ * and no plan to check at all. Collapsing the middle case into the first would
+ * claim a detour that never happened.
+ */
+function keyingNote(r: Routing | undefined): string {
+  if (!r) return "No hardware to key"
+  const via = r.legs.filter((l) => l.via)
+  if (via.length === 0) return "Physical keying required — sourced only from certified depots"
+  const names = [...new Set(via.map((l) => l.via!.name))].join(", ")
+  return `Physical keying required — ${via.length} of ${r.legs.length} shipment${
+    r.legs.length === 1 ? "" : "s"
+  } routed via ${names}, adding ${KEYING_DAYS} day`
+}
+
+export function chooseRouting(m: Merchant, acquirer: string): RoutingChoice | null {
+  const all = routings(m, acquirer)
   if (all.length === 0) return null
   const cheapest = all.reduce((a, b) => (b.cost < a.cost ? b : a))
   const quickest = all.reduce((a, b) => (b.days < a.days ? b : a))
@@ -390,7 +488,7 @@ export interface AgentActivity {
   ranAt: string
 }
 
-export function agentActivity(m: Merchant, step: StepId): AgentActivity {
+export function agentActivity(m: Merchant, step: StepId, acquirer: string): AgentActivity {
   const role = ingenicoRole(step)
   const countries = depotCountries()
   const lines = hardwareLines(m)
@@ -411,7 +509,7 @@ export function agentActivity(m: Merchant, step: StepId): AgentActivity {
   }
 
   if (step === 3) {
-    const choice = chooseRouting(m)
+    const choice = chooseRouting(m, acquirer)
     return {
       watching: false,
       headline: `Searched ${WAREHOUSES.length} facilities for ${units} units`,
@@ -423,12 +521,21 @@ export function agentActivity(m: Merchant, step: StepId): AgentActivity {
             : "No hardware on this order",
         },
         {
-          did: `Evaluated ${planCount(m)} depot-and-service plans on cost, transit and shipment count`,
+          did: `Evaluated ${planCount(m, acquirer)} depot-and-service plans on cost, transit and shipment count`,
           found: choice
             ? choice.against
               ? `Cheapest saves €${choice.savingEur} and costs ${choice.extraDays} day${choice.extraDays === 1 ? "" : "s"}`
               : "Cheapest and fastest are the same plan"
             : "Nothing to route",
+        },
+        // The key check is reported on BOTH outcomes. Shown only when it
+        // forces a detour, a rollout that ships direct would look like one
+        // where the check was never made.
+        {
+          did: `Checked ${acquirer}'s key policy against each depot's certification`,
+          found: needsPhysicalKeying(acquirer)
+            ? keyingNote(choice?.recommended)
+            : "Remote injection permitted — every depot can ship direct",
         },
       ],
       ranAt: "12 minutes ago",
@@ -499,6 +606,9 @@ export interface AgentTask {
 export function agentTasks(
   m: Merchant,
   step: StepId,
+  /** Required: the acquirer's key policy decides whether terminals must pass
+   *  through a certified facility, which changes the whole routing. */
+  acquirer: string,
   /** Days the journey has sat on its CURRENT step. Passed in because it is a
    *  property of the estate row, not of the merchant record. */
   daysInStep: number,
@@ -527,7 +637,7 @@ export function agentTasks(
   }
 
   if (step === 3) {
-    const choice = chooseRouting(m)
+    const choice = chooseRouting(m, acquirer)
     const short = choice ? choice.recommended.shortfall : 0
     return [
       {
