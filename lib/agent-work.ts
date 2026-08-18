@@ -39,6 +39,8 @@ export interface RoutingLeg {
   lineHaul: number
   /** service.cost + lineHaul. */
   total: number
+  /** kg CO2e for this leg, from its distance, units and mode. */
+  co2Kg: number
 }
 
 /**
@@ -51,7 +53,27 @@ export function lineHaulCost(distanceKm: number, units: number): number {
   return Math.round(distanceKm * 0.035 + units * 1.4)
 }
 
-export type RoutingId = "fastest" | "cheapest" | "fewest"
+/**
+ * Freight emissions, kg CO2e, from tonne-kilometres.
+ *
+ * A terminal is boxed at roughly 1.5 kg, so units convert to tonnes. Intensity
+ * is per MODE, not per service name: air freight is roughly twenty times road
+ * per tonne-km, which is exactly why the fastest plan is so rarely the
+ * greenest, and why the two must be offered as separate objectives rather than
+ * bundled into one "best" recommendation.
+ *
+ * Coarse, and labelled an estimate wherever it is shown. It is a planning
+ * comparison BETWEEN plans on identical assumptions, not a reportable figure.
+ */
+export const UNIT_WEIGHT_KG = 1.5
+const INTENSITY: Record<"road" | "air", number> = { road: 0.11, air: 2.1 }
+
+export function emissionsKg(distanceKm: number, units: number, mode: "road" | "air"): number {
+  const tonnes = (units * UNIT_WEIGHT_KG) / 1000
+  return Math.round(tonnes * distanceKm * INTENSITY[mode] * 10) / 10
+}
+
+export type RoutingId = "fastest" | "cheapest" | "fewest" | "greenest"
 
 export interface Routing {
   id: RoutingId
@@ -67,6 +89,9 @@ export interface Routing {
    *  not the fastest, because a partial delivery does not open a till. */
   days: number
   cost: number
+  /** Sum of every leg's emissions, kg CO2e. Unlike days this DOES sum: each
+   *  shipment burns its own fuel whether or not they travel in parallel. */
+  co2Kg: number
   /** Units no depot can supply. Non-zero means this routing cannot complete. */
   shortfall: number
 }
@@ -180,6 +205,7 @@ function legsFrom(draws: Draw[], pick: (opts: DeliveryOption[]) => DeliveryOptio
         service: pick(deliveryOptions(d.transitDays)),
         lineHaul: 0,
         total: 0,
+        co2Kg: 0,
       })
     }
   }
@@ -190,6 +216,7 @@ function legsFrom(draws: Draw[], pick: (opts: DeliveryOption[]) => DeliveryOptio
     const units = l.units.reduce((a, u) => a + u.qty, 0)
     l.lineHaul = lineHaulCost(l.distanceKm, units)
     l.total = l.service.cost + l.lineHaul
+    l.co2Kg = emissionsKg(l.distanceKm, units, l.service.mode)
   }
   return legs.sort((a, b) => a.distanceKm - b.distanceKm)
 }
@@ -217,6 +244,7 @@ function assemble(
     // Max, not sum: the order is complete when the LAST leg lands.
     days: legs.reduce((a, l) => Math.max(a, l.service.days), 0),
     cost: legs.reduce((a, l) => a + l.total, 0),
+    co2Kg: Math.round(legs.reduce((a, l) => a + l.co2Kg, 0) * 10) / 10,
     shortfall,
   }
 }
@@ -258,6 +286,11 @@ const LABELS: Record<RoutingId, { label: string; optimises: string; concedes: st
     optimises: "Simplest to receive and install",
     concedes: "One depot must carry the whole order",
   },
+  greenest: {
+    label: "Lowest emissions",
+    optimises: "Least CO2e — short road lanes, never air",
+    concedes: "Road is slower, and a near depot may be short on stock",
+  },
 }
 
 /**
@@ -281,6 +314,7 @@ export function routings(m: Merchant): Routing[] {
       "fewest",
       (b, a) => b.shipments < a.shipments || (b.shipments === a.shipments && b.cost < a.cost),
     ),
+    pick("greenest", (b, a) => b.co2Kg < a.co2Kg || (b.co2Kg === a.co2Kg && b.cost < a.cost)),
   ]
 }
 
@@ -507,6 +541,12 @@ export function agentTasks(
         label: "Re-plan for earliest delivery",
         optimises: "Soonest the merchant can trade",
         concedes: "More shipments, higher freight",
+      },
+      {
+        id: "greenest",
+        label: "Re-plan for lowest emissions",
+        optimises: "Shortest road lanes, no air freight",
+        concedes: "Road is slower than air on a long lane",
       },
       {
         id: "consolidate",

@@ -249,6 +249,13 @@ export interface DeliveryOption {
   days: number
   /** Per-shipment cost in EUR. */
   cost: number
+  /**
+   * How the freight actually travels. Carried explicitly rather than inferred
+   * from `id`, because emissions are a property of the MODE — a future express
+   * AIR product would otherwise be silently costed as a road lane, which is
+   * the one error a carbon figure must not make.
+   */
+  mode: "road" | "air"
   note?: string
 }
 
@@ -262,6 +269,7 @@ export function deliveryOptions(transitDays: number): DeliveryOption[] {
       service: "Standard road",
       days: transitDays + 1,
       cost: 42,
+      mode: "road",
     },
     {
       id: "exp",
@@ -269,6 +277,7 @@ export function deliveryOptions(transitDays: number): DeliveryOption[] {
       service: "Express road",
       days: transitDays,
       cost: 88,
+      mode: "road",
     },
   ]
   if (transitDays >= 2) {
@@ -278,6 +287,7 @@ export function deliveryOptions(transitDays: number): DeliveryOption[] {
       service: "Air freight",
       days: 1,
       cost: 265,
+      mode: "air",
       note: "Bypasses the road lane entirely.",
     })
   }

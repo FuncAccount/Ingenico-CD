@@ -1,9 +1,9 @@
 "use client"
 
 import { useEffect, useRef, useState } from "react"
-import { Ban, Check, Sparkles, Truck } from "lucide-react"
+import { Ban, Check, Sparkles } from "lucide-react"
 import type { Merchant, StepId } from "@/lib/acquirer-data"
-import { distanceLabel } from "@/lib/devices"
+import { NetworkMap } from "@/components/ingenico/network-map"
 import {
   agentActivity,
   agentTasks,
@@ -96,7 +96,9 @@ export function AgentPanel({
         ))}
       </ol>
 
-      {choice && shown && <RoutingCompare choice={choice} shown={shown} onPick={setPicked} />}
+      {choice && shown && (
+        <RoutingCompare choice={choice} shown={shown} onPick={setPicked} merchant={merchant} />
+      )}
 
       <div className="border-t border-border/60 px-5 py-3.5">
         <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
@@ -157,11 +159,17 @@ function RoutingCompare({
   choice,
   shown,
   onPick,
+  merchant,
 }: {
   choice: NonNullable<ReturnType<typeof chooseRouting>>
   shown: Routing
   onPick: (id: RoutingId) => void
+  merchant: Merchant
 }) {
+  // Which lane the reader is pointing at, shared by the map and the leg list
+  // so the picture and the record highlight together.
+  const [hoveredLeg, setHoveredLeg] = useState<string | null>(null)
+
   // Two objectives can land on an identical plan. Showing it twice under
   // different names would invent a choice that does not exist — but silently
   // dropping the second name makes the agent look like it skipped an
@@ -224,6 +232,11 @@ function RoutingCompare({
                   {r.days}d · {r.shipments} shipment{r.shipments === 1 ? "" : "s"}
                 </span>
               </span>
+              {/* Every objective's own measure is on every card, or a plan can
+                  only be compared on the axis it happens to win. */}
+              <span className="mt-0.5 block text-[10.5px] tabular-nums text-muted-foreground">
+                {r.co2Kg} kg CO2e
+              </span>
               {r.shortfall > 0 && (
                 <span className="mt-1 block text-[10.5px] font-medium text-destructive">
                   {r.shortfall} units unsourced
@@ -238,29 +251,24 @@ function RoutingCompare({
         <p className="text-[11px] font-medium text-foreground">
           {shown.label} — how it is made up
         </p>
-        <ul className="mt-1.5 space-y-1">
-          {shown.legs.map((l) => (
-            <li key={l.warehouse.id} className="flex items-start gap-2 text-[11px]">
-              <Truck className="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground" />
-              <span className="text-muted-foreground">
-                <span className="text-foreground">{l.warehouse.name}</span> —{" "}
-                {l.units.map((u) => `${u.qty}× ${u.model}`).join(", ")} ·{" "}
-                {distanceLabel(l.distanceKm)} · {l.service.service}, {l.service.days}d ·{" "}
-                <span className="tabular-nums">
-                  €{l.service.cost} service + €{l.lineHaul} freight = €{l.total}
-                </span>
-              </span>
-            </li>
-          ))}
-        </ul>
-        {/* The arithmetic is printed so the headline figure can be checked
+        <div className="mt-2">
+          <NetworkMap
+            routing={shown}
+            destinationCity={merchant.location}
+            merchantName={merchant.name}
+            hoveredLeg={hoveredLeg}
+            onHoverLeg={setHoveredLeg}
+          />
+        </div>
+        {/* The arithmetic is printed so the headline figures can be checked
             against the legs rather than taken on trust. */}
         <p className="mt-2 text-[10.5px] tabular-nums text-muted-foreground">
           {shown.legs.map((l) => `€${l.total}`).join(" + ")} = €{shown.cost} ·{" "}
+          {shown.legs.map((l) => `${l.co2Kg}`).join(" + ")} = {shown.co2Kg} kg CO2e ·{" "}
           {shown.legs.length === 1
             ? `${shown.days} days`
             : `slowest leg ${shown.days} days sets the completion date`}
-          . Freight is a planning estimate, not a carrier quote.
+          . Freight and emissions are planning estimates, not carrier quotes.
         </p>
       </div>
     </div>
