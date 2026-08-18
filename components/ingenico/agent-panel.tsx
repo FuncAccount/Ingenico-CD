@@ -206,7 +206,14 @@ function RoutingCompare({
       <div
         className={cn(
           "mt-2.5 grid gap-2",
-          distinct.length === 1 ? "sm:grid-cols-1" : distinct.length === 2 ? "sm:grid-cols-2" : "sm:grid-cols-3",
+          // Four objectives can produce four distinct plans; three columns
+          // would strand the fourth alone on a second row, so an even count
+          // pairs off instead.
+          distinct.length === 1
+            ? "sm:grid-cols-1"
+            : distinct.length === 3
+              ? "sm:grid-cols-3"
+              : "sm:grid-cols-2",
         )}
       >
         {distinct.map(({ plan: r, answers }) => {
@@ -221,15 +228,22 @@ function RoutingCompare({
               )}
             >
               <span className="flex items-center justify-between gap-2">
-                <span className="text-[12px] font-medium text-foreground">
-                  {answers.join(" & ")}
-                </span>
+                {/* One plan can win several objectives at once. Chaining them
+                    with "&" made a three-way win an unreadable mouthful, so the
+                    first leads and the rest sit under it — the fact that they
+                    collapsed onto one plan is kept, not the run-on sentence. */}
+                <span className="text-[12px] font-medium text-foreground">{answers[0]}</span>
                 {r.id === choice.recommended.id && (
-                  <span className="rounded-full bg-primary/15 px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-wide text-primary">
+                  <span className="shrink-0 rounded-full bg-primary/15 px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-wide text-primary">
                     Agent pick
                   </span>
                 )}
               </span>
+              {answers.length > 1 && (
+                <span className="mt-0.5 block text-[10.5px] text-muted-foreground">
+                  also {answers.slice(1).map((a) => a.toLowerCase()).join(", ")}
+                </span>
+              )}
               <span className="mt-1.5 flex items-baseline gap-2 tabular-nums">
                 <span className="text-base font-semibold text-foreground">€{r.cost}</span>
                 <span className="text-[11px] text-muted-foreground">
