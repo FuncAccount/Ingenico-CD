@@ -462,6 +462,18 @@ export interface FleetSummary {
   licences: number
 }
 
+/**
+ * Share of ACTIVATED terminals currently online.
+ *
+ * Returns null when nothing has been activated: with no denominator there is
+ * no availability to report, and rendering 0% would claim a total outage at a
+ * site whose terminals are simply still in their boxes.
+ */
+export function availabilityPct(s: FleetSummary): number | null {
+  if (s.activated === 0) return null
+  return Math.round((s.online / s.activated) * 100)
+}
+
 export function fleetSummary(devices: FleetDevice[], licences: number): FleetSummary {
   const by = (s: DeviceState) => devices.filter((d) => d.state === s).length
   const notActivated = by("not-activated")

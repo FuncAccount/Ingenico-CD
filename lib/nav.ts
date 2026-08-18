@@ -5,7 +5,6 @@ import {
   Route,
   Boxes,
   PackageCheck,
-  Radio,
 } from "lucide-react"
 import type { Persona } from "./persona"
 
@@ -23,7 +22,18 @@ import type { Persona } from "./persona"
  * merchant-submission form for the party that never submits merchants.
  */
 export type AcquirerScreen = "portfolio" | "submit" | "signoff" | "journey"
-export type IngenicoScreen = "estate" | "deploy" | "journey" | "fleet"
+
+/**
+ * Ingenico has THREE screens, not four.
+ *
+ * The merchant journey is not a destination you navigate to — it is what an
+ * order opens into, reached by drilling acquirer → order. A top-level tab for
+ * it forced a second merchant picker that duplicated the deployments list and
+ * made the same records reachable two ways, which is what made the earlier
+ * build confusing. Fleet folded into Estate for the same reason: a map of
+ * sites and a table of terminals are one subject, not two.
+ */
+export type IngenicoScreen = "dashboard" | "deploy" | "estate"
 export type AnyScreen = AcquirerScreen | IngenicoScreen
 
 export type NavItem = {
@@ -43,12 +53,11 @@ export const ACQUIRER_NAV: { id: AcquirerScreen; label: string; icon: typeof Lay
 ]
 
 export const INGENICO_NAV: { id: IngenicoScreen; label: string; icon: typeof LayoutGrid; badge?: NavItem["badge"] }[] = [
-  { id: "estate", label: "Estate", icon: Boxes },
+  { id: "dashboard", label: "Dashboard", icon: LayoutGrid },
   { id: "deploy", label: "Deployments", icon: PackageCheck, badge: "deploy" },
-  { id: "journey", label: "Merchant journey", icon: Route },
-  { id: "fleet", label: "Fleet", icon: Radio, badge: "fleet" },
+  { id: "estate", label: "Estate", icon: Boxes, badge: "fleet" },
 ]
 
 export function homeScreen(p: Persona): AnyScreen {
-  return p === "acquirer" ? "portfolio" : "estate"
+  return p === "acquirer" ? "portfolio" : "dashboard"
 }

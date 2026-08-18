@@ -20,9 +20,11 @@ export function EstateMap({
     <div className="relative">
       <ComposableMap
         projection="geoAzimuthalEqualArea"
-        projectionConfig={{ rotate: [-11, -52.5, 0], scale: 1250 }}
+        // Framed on the estate's own footprint (Faro to Bergen, Bristol to
+        // Riga) rather than on Europe, so the panel is not mostly empty sea.
+        projectionConfig={{ rotate: [-11, -51, 0], scale: 1500 }}
         width={820}
-        height={560}
+        height={520}
         style={{ width: "100%", height: "auto" }}
       >
         <Geographies geography={GEO_URL}>
@@ -75,7 +77,9 @@ export function EstateMap({
           })}
       </ComposableMap>
 
-      <div className="pointer-events-none absolute bottom-2 left-2 flex flex-wrap gap-x-4 gap-y-1 rounded-lg bg-background/80 px-3 py-2 backdrop-blur">
+      {/* Sits BELOW the map rather than over it: overlaid at the bottom edge
+          it was clipped by the panel and read as a rendering fault. */}
+      <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 px-2 pb-1">
         {(Object.keys(HEALTH_META) as (keyof typeof HEALTH_META)[])
           // Only caption states actually on the map. A legend entry for a
           // colour that is not shown describes an estate that does not exist.

@@ -35,31 +35,21 @@ export function IngenicoJourney({
   const live = merchant ? rows.find((r) => r.merchant.id === merchant.id)?.merchant : undefined
   const [step, setStep] = useState<StepId | null>(null)
 
+  // A journey is always opened FROM an order, so there is no picker here. One
+  // that listed every merchant would be a second copy of the deployments list,
+  // making the same records reachable two ways.
   if (!live) {
     return (
       <main className="mx-auto max-w-7xl px-6 py-8">
-        <h1 className="text-2xl font-semibold tracking-tight text-foreground">
-          Merchant journey
-        </h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Pick a journey from any book to see it from the deployment side.
+        <p className="text-sm text-muted-foreground">
+          That order is no longer in flight.{" "}
+          <button
+            onClick={() => onSelectMerchant(undefined)}
+            className="font-medium text-primary hover:underline"
+          >
+            Back to orders
+          </button>
         </p>
-        <div className="mt-5 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-          {rows.map((r) => (
-            <button
-              key={r.merchant.id}
-              onClick={() => onSelectMerchant(r.merchant)}
-              className="glass glass-hover rounded-2xl p-3.5 text-left"
-            >
-              <span className="block text-[13px] font-medium text-foreground">
-                {r.merchant.name}
-              </span>
-              <span className="block text-[11px] text-muted-foreground">
-                {r.acquirer} · step {r.merchant.currentStep}
-              </span>
-            </button>
-          ))}
-        </div>
       </main>
     )
   }
@@ -74,7 +64,7 @@ export function IngenicoJourney({
           onClick={() => onSelectMerchant(undefined)}
           className="text-[11px] font-medium text-primary hover:underline"
         >
-          All journeys
+          ← Back to {book} orders
         </button>
         <h1 className="mt-1 text-2xl font-semibold tracking-tight text-foreground">
           {live.name}
