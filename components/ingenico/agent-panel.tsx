@@ -162,11 +162,15 @@ function RoutingCompare({
   shown: Routing
   onPick: (id: RoutingId) => void
 }) {
-  // Two strategies can land on an identical plan. Showing it twice under
-  // different names would invent a choice that does not exist.
-  const distinct: Routing[] = []
+  // Two objectives can land on an identical plan. Showing it twice under
+  // different names would invent a choice that does not exist — but silently
+  // dropping the second name makes the agent look like it skipped an
+  // objective, so each surviving card CARRIES the names it answers.
+  const distinct: { plan: Routing; answers: string[] }[] = []
   for (const r of choice.all) {
-    if (!distinct.some((d) => sameRouting(d, r))) distinct.push(r)
+    const hit = distinct.find((d) => sameRouting(d.plan, r))
+    if (hit) hit.answers.push(r.label)
+    else distinct.push({ plan: r, answers: [r.label] })
   }
 
   return (
@@ -175,15 +179,25 @@ function RoutingCompare({
         <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
           Routings compared
         </p>
+        {/* The agent's recommendation does not change when the user overrides
+            it, so once they have chosen otherwise this must be worded as a
+            standing recommendation — not as a description of the live plan. */}
         <p className="text-[11px] text-muted-foreground">
-          {choice.against
-            ? `Recommending lowest cost: saves €${choice.savingEur} for ${choice.extraDays} extra day${choice.extraDays === 1 ? "" : "s"}.`
-            : "Cheapest and fastest are the same plan — nothing is traded away."}
+          {!choice.against
+            ? "Cheapest and fastest are the same plan — nothing is traded away."
+            : shown.id === choice.recommended.id
+              ? `Agent recommends lowest cost: saves €${choice.savingEur} for ${choice.extraDays} extra day${choice.extraDays === 1 ? "" : "s"}.`
+              : `You have overridden the agent, which still recommends lowest cost (saves €${choice.savingEur} for ${choice.extraDays} extra day${choice.extraDays === 1 ? "" : "s"}).`}
         </p>
       </div>
 
-      <div className="mt-2.5 grid gap-2 sm:grid-cols-3">
-        {distinct.map((r) => {
+      <div
+        className={cn(
+          "mt-2.5 grid gap-2",
+          distinct.length === 1 ? "sm:grid-cols-1" : distinct.length === 2 ? "sm:grid-cols-2" : "sm:grid-cols-3",
+        )}
+      >
+        {distinct.map(({ plan: r, answers }) => {
           const on = r.id === shown.id
           return (
             <button
@@ -195,7 +209,9 @@ function RoutingCompare({
               )}
             >
               <span className="flex items-center justify-between gap-2">
-                <span className="text-[12px] font-medium text-foreground">{r.label}</span>
+                <span className="text-[12px] font-medium text-foreground">
+                  {answers.join(" & ")}
+                </span>
                 {r.id === choice.recommended.id && (
                   <span className="rounded-full bg-primary/15 px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-wide text-primary">
                     Agent pick

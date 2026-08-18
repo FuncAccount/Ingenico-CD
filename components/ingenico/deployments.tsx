@@ -159,7 +159,7 @@ export function Deployments({ onOpenOrder }: { onOpenOrder: (m: Merchant) => voi
                       <OrderRow
                         key={r.merchant.id}
                         row={r}
-                        showBook={book === ALL}
+
                         onOpen={() => onOpenOrder(r.merchant)}
                       />
                     ))}
@@ -180,11 +180,11 @@ export function Deployments({ onOpenOrder }: { onOpenOrder: (m: Merchant) => voi
 
 function OrderRow({
   row,
-  showBook,
+
   onOpen,
 }: {
   row: EstateRow
-  showBook: boolean
+
   onOpen: () => void
 }) {
   const step = stepById(row.merchant.currentStep)
@@ -201,10 +201,9 @@ function OrderRow({
           <span className="block truncate text-sm font-medium text-foreground">
             {row.merchant.name}
           </span>
+          {/* The acquirer is NOT repeated here: every row sits under a group
+              header that names it, so restating it on each line is noise. */}
           <span className="block truncate text-[11px] text-muted-foreground">
-            {/* In the all-acquirers view every merchant names its acquirer, or
-                a flat list of shops says nothing about who they belong to. */}
-            {showBook && <span className="text-foreground/70">{row.acquirer} · </span>}
             {row.merchant.location} · {row.merchant.terminals}
           </span>
         </span>
