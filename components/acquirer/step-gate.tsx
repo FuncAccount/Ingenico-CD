@@ -104,6 +104,9 @@ interface Props {
   /** A named, step-specific reason the acquirer's own decision cannot be taken
    *  yet — an unresolved escalation, a failing brand check. Null means ready. */
   precondition?: string | null
+  /** The stage was reset by hand, so it is being driven live rather than read
+   *  back as history — see `isPast` below. */
+  wasReset?: boolean
 }
 
 export function StepGate({
@@ -113,6 +116,7 @@ export function StepGate({
   states,
   onStates,
   precondition = null,
+  wasReset = false,
 }: Props) {
   // Keyed by step AND by what was ordered: steps 7 and 8 otherwise promise a
   // consignment and a boxed terminal to a merchant who bought only software.
@@ -124,7 +128,15 @@ export function StepGate({
   // A step the journey has already passed is settled by fact, so its handoffs
   // default to done. Without this, completed history renders as an outstanding
   // request and offers to chase a merchant who responded weeks ago.
-  const isPast = step < merchant.currentStep
+  //
+  // Unless the stage was reset by hand. This fallback ignores `states`
+  // entirely, so clearing the handoff map left a reset stage still reporting
+  // "Step clear · Returned by Ingenico" — the reset silently did nothing to
+  // the one panel it was aimed at. Reset means "show me this running for the
+  // first time", which is a claim about the VIEW, not about the merchant's
+  // real position, so only this default flips: `merchant.currentStep` is
+  // untouched and the pipeline rail still shows the step as passed.
+  const isPast = step < merchant.currentStep && !wasReset
 
   // The acquirer's own decision is held in the shared record, not in this
   // component's handoff state — otherwise signing off here and signing off on

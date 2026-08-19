@@ -354,6 +354,23 @@ function StepCockpit({
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const logRef = useRef<HTMLDivElement | null>(null)
 
+  /** Steps reset by hand, and so driven live from here rather than read back
+   *  as history.
+   *
+   *  Two things consult it. This component is rendered ONCE with no `key`, so
+   *  it survives step navigation while the effect below re-derives progress
+   *  from the pipeline — without the flag a reset stage came back reading
+   *  "Complete" while its handoffs and output stayed cleared, the badge
+   *  asserting a run whose results were gone. And `StepGate` falls back to
+   *  `settledState` for any step behind the merchant's position, so the gate
+   *  reported "Step clear · Returned by Ingenico" no matter what the reset
+   *  did to the handoff map.
+   *
+   *  Never auto-cleared. A reset stage stays live for the rest of the session,
+   *  which is what lets you run it AND then work its handoffs by hand — the
+   *  behaviour the button exists to expose. */
+  const resetSteps = useRef<Set<StepId>>(new Set())
+
   // Which task's artefact is open in the inspector.
   const [selected, setSelected] = useState(0)
 
@@ -404,12 +421,22 @@ function StepCockpit({
 
   const stagePrefix = `${merchant.id}:${step.id}:`
 
+  // Read during render rather than held in state: every mutation of the set is
+  // paired with a state update in the same handler, so the render that follows
+  // always sees the current value — and as a dependency it would re-trigger
+  // the navigation effect below.
+  const stageReset = resetSteps.current.has(step.id)
+
   // Is there anything to reset? Derived by comparing against the pristine
   // values rather than tracked with a "touched" flag, which would have to be
   // cleared in every path that resets and goes wrong the first time one is
   // missed. Nothing to undo means the control does not offer itself.
+  // `completed > 0`, not "differs from the pipeline baseline": now that a
+  // reset lands at zero, comparing against a done step's baseline of 4/4 left
+  // the control on screen forever, offering to clean a stage already clean.
+  // Any progress showing is progress that can be cleared.
   const stageDirty =
-    completed !== initialProgress ||
+    completed > 0 ||
     Object.keys(handoffs).some((k) => k.startsWith(stagePrefix)) ||
     (stageWrites.edge && edge !== undefined) ||
     (stageWrites.theme &&
@@ -425,9 +452,12 @@ function StepCockpit({
   // Reset the run whenever the focused step (or merchant) changes.
   useEffect(() => {
     if (timer.current) clearTimeout(timer.current)
-    const init = state === "done" ? step.tasks.length : 0
-    setCompleted(init)
-    setStatus(state === "done" ? "done" : "idle")
+    // A hand-reset step stays reset until it is run again, rather than being
+    // re-derived back to "done" from the merchant's pipeline position.
+    const wasReset = resetSteps.current.has(step.id)
+    const showDone = state === "done" && !wasReset
+    setCompleted(showDone ? step.tasks.length : 0)
+    setStatus(showDone ? "done" : "idle")
     setSelected(0)
     return () => {
       if (timer.current) clearTimeout(timer.current)
@@ -498,13 +528,19 @@ function StepCockpit({
    *  survived, so a second run showed the leftovers of the first rather than
    *  the real first-run behaviour.
    *
-   *  Lands IDLE rather than running: the point is to get back to the state
-   *  you can press Play from, and auto-running would immediately spend the
-   *  clean state it just restored. */
+   *  Lands PENDING — zero tasks run, status idle — even on a step the
+   *  merchant has already moved past. Restoring a completed step to
+   *  "Complete" was the same defect one level up: the button cleared the
+   *  handoffs and the saved output, then put the badge back to a verdict
+   *  nothing on screen still supported, and the first-run behaviour it exists
+   *  to expose stayed invisible. Idle rather than running, because the point
+   *  is to reach the state you can press Play from — auto-running would
+   *  immediately spend the clean state it just restored. */
   function restart() {
     if (timer.current) clearTimeout(timer.current)
-    setCompleted(initialProgress)
-    setStatus(state === "done" ? "done" : "idle")
+    resetSteps.current.add(step.id)
+    setCompleted(0)
+    setStatus("idle")
     setSelected(0)
 
     // Only THIS stage's handoffs. The map is shared across every step, so
@@ -996,6 +1032,7 @@ function StepCockpit({
         states={handoffs}
         onStates={setHandoffs}
         precondition={precondition}
+        wasReset={stageReset}
       />
 
       {/* Agent trace — the same ink as the rest of the page, so it reads as
