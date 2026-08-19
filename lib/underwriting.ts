@@ -26,6 +26,9 @@ function pastUnderwriting(merchant: Merchant): boolean {
  *  where it exists, otherwise from the sign-off line in its own timeline. Read
  *  rather than re-derived, so the breakdown and the timeline cannot disagree. */
 export function recordedScore(merchant: Merchant): number | null {
+  // An unscoreable file has no recorded score, and must not acquire one by
+  // regex from a timeline entry written before the gap was found.
+  if ((merchant.underwriting?.documentsOutstanding?.length ?? 0) > 0) return null
   if (typeof merchant.underwriting?.riskScore === "number") return merchant.underwriting.riskScore
   for (const e of merchant.events) {
     const m = /risk score\s+(\d+)/i.exec(e.text)
@@ -101,11 +104,48 @@ export interface RiskAssessment {
    *  rather than silently presented as the arithmetic result. */
   clamped: boolean
   rawTotal: number
+  /**
+   * When set, the file COULD NOT be scored and `score`/`band` are meaningless.
+   * A risk model weighs the evidence it has against the evidence it needs, and
+   * a missing mandatory document is not a low signal — it is the absence of
+   * one, so the honest output is a refusal, not a number. Callers must branch
+   * on this before showing a score.
+   */
+  blocked?: {
+    missing: string[]
+    reason: string
+  }
+}
+
+/** The documents that must be on file before a score can exist at all. Read
+ *  from the merchant, so the same list drives the refusal, the stop banner and
+ *  the chase — one source, so they cannot disagree about what is missing. */
+export function outstandingDocuments(merchant: Merchant): string[] {
+  return merchant.underwriting?.documentsOutstanding ?? []
 }
 
 export function riskAssessment(merchant: Merchant): RiskAssessment {
   const factors: RiskFactor[] = []
   const uw = merchant.underwriting
+
+  // The stop. Assembling factors and clamping a total would manufacture a
+  // number the file does not support — the very thing that let an incomplete
+  // application read as "Low". Refuse before scoring, and say what is missing.
+  const missing = outstandingDocuments(merchant)
+  if (missing.length > 0) {
+    return {
+      factors: [],
+      score: 0,
+      band: "Elevated",
+      clamped: false,
+      rawTotal: 0,
+      blocked: {
+        missing,
+        reason:
+          "Risk cannot be scored until every mandatory document is on file. The agent has parsed what was supplied and is chasing the rest — scoring now would put a number on evidence that does not exist yet.",
+      },
+    }
+  }
 
   const sector = SECTOR_BASE[merchant.sector] ?? {
     points: 12,

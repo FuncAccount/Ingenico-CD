@@ -262,6 +262,10 @@ function AgentRow({
 function UnderwritingBody({ merchant }: { merchant: Merchant }) {
   const uw = merchant.underwriting
   if (!uw) return null
+  // Derived from the documents, not from the absence of the number — a score
+  // could be missing for other reasons, and "not scored yet" and "cannot be
+  // scored" are different sentences.
+  const scoreWithheld = (uw.documentsOutstanding?.length ?? 0) > 0
   const riskTone =
     uw.riskBand === "Low"
       ? "text-success"
@@ -276,22 +280,43 @@ function UnderwritingBody({ merchant }: { merchant: Merchant }) {
       <div className="mt-3 grid gap-3 sm:grid-cols-2">
         <AgentRow icon={Fingerprint} label="Identity" value={uw.identity} />
         <AgentRow icon={FileText} label="Documents" value={uw.documents} />
-        <div className="flex items-start gap-3 rounded-lg border border-border p-4">
-          <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-success/12 text-success">
+        {/* A score that could not be produced renders as a NAMED refusal.
+            Left as `{uw.riskScore}` it printed an empty space beside a green
+            icon — indistinguishable from a render fault, and reassuring in a
+            place that should be stopping the reader. */}
+        <div
+          className={cn(
+            "flex items-start gap-3 rounded-lg border p-4",
+            scoreWithheld ? "border-destructive/40 bg-destructive/[0.06]" : "border-border",
+          )}
+        >
+          <span
+            className={cn(
+              "mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg",
+              scoreWithheld ? "bg-destructive/12 text-destructive" : "bg-success/12 text-success",
+            )}
+          >
             <Gauge className="h-4 w-4" />
           </span>
           <div>
-            <p className="text-xs font-medium text-muted-foreground">
-              Risk score
-            </p>
-            <p className="mt-0.5 flex items-baseline gap-2">
-              <span className="font-mono text-lg font-semibold text-foreground tabular-nums">
-                {uw.riskScore}
-              </span>
-              <span className={cn("text-sm font-semibold", riskTone)}>
-                {uw.riskBand}
-              </span>
-            </p>
+            <p className="text-xs font-medium text-muted-foreground">Risk score</p>
+            {scoreWithheld ? (
+              <>
+                <p className="mt-0.5 text-sm font-semibold text-destructive">Not scored</p>
+                <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                  {`${uw.documentsOutstanding!.length} mandatory document${
+                    uw.documentsOutstanding!.length === 1 ? " is" : "s are"
+                  } outstanding. The file cannot be assessed until they arrive.`}
+                </p>
+              </>
+            ) : (
+              <p className="mt-0.5 flex items-baseline gap-2">
+                <span className="font-mono text-lg font-semibold text-foreground tabular-nums">
+                  {uw.riskScore}
+                </span>
+                <span className={cn("text-sm font-semibold", riskTone)}>{uw.riskBand}</span>
+              </p>
+            )}
           </div>
         </div>
       </div>

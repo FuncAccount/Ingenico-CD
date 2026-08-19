@@ -47,7 +47,7 @@ import {
 import { StepGate } from "@/components/acquirer/step-gate"
 import { ownerOf, waitingOn, type HandoffState } from "@/lib/handoffs"
 import { blockers, checkBrand, defaultTheme, type BrandTheme } from "@/lib/branding"
-import { edgeResolved, type EdgeResolution } from "@/lib/underwriting"
+import { edgeResolved, outstandingDocuments, type EdgeResolution } from "@/lib/underwriting"
 import { exceptionDetailMissing, exceptionOnStep } from "@/lib/exceptions"
 import { ExceptionPanel } from "@/components/acquirer/exception-panel"
 
@@ -461,6 +461,19 @@ function StepCockpit({
   // blocked by different things, so this is computed per step rather than by
   // one shared "is everything fine" flag that could not name its own blocker.
   const precondition = useMemo<string | null>(() => {
+    // Checked BEFORE the edge case. An unscoreable file is not a decision the
+    // acquirer can take at all, so inviting them to resolve the edge case
+    // first would walk them up to a sign-off that must not happen — and the
+    // edge case here is itself a consequence of the missing ownership
+    // statement, so it cannot be determined until that document lands.
+    if (step.id === 2) {
+      const missing = outstandingDocuments(merchant)
+      if (missing.length > 0) {
+        return `Risk is not scored — ${missing.length} mandatory document${
+          missing.length === 1 ? "" : "s"
+        } outstanding. There is no assessment to sign off yet.`
+      }
+    }
     if (step.id === 2 && !edgeResolved(merchant, edge)) {
       return merchant.underwriting?.edgeCase && !edge
         ? "Screening escalated an item to you. Record a determination on it before signing."
@@ -810,7 +823,7 @@ function StepCockpit({
                   </p>
                   {isFailed && (
                     <p className="mt-1 text-xs font-medium leading-relaxed text-destructive">
-                      Failed �� {blocker.summary}
+                      Failed · {blocker.summary}
                     </p>
                   )}
                   {/* Name the artefact on the row, so the claim and the thing

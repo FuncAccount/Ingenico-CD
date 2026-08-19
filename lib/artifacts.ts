@@ -555,6 +555,12 @@ export function traceFor(
     // on saying it regardless of what the factor table underneath computed.
     case "2.3": {
       const a = riskAssessment(merchant)
+      // A refusal is a real result and belongs in the trace as one. Printing
+      // "0 / 100 band=ELEVATED" from the placeholder fields would be the
+      // console inventing the very score the model declined to produce.
+      if (a.blocked) {
+        return `risk.score → HALTED  ${a.blocked.missing.length} mandatory document(s) outstanding`
+      }
       return `risk.score → ${a.score} / 100  band=${a.band.toUpperCase()}  factors=${a.factors.length}`
     }
     case "2.4":
@@ -792,7 +798,22 @@ export function taskDetail(stepId: StepId, taskIndex: number, merchant: Merchant
 export function blockingFinding(
   stepId: StepId,
   merchant: Merchant,
-): { headline: string; detail: string } | null {
+): { headline: string; detail: string; taskIndex?: number } | null {
+  // Underwriting halts at "Score the risk" when a mandatory document is
+  // missing. `taskIndex` is carried so the row that REFUSED shows the halt
+  // rather than a green tick — running a task and producing its output are
+  // different claims, and the tick makes the stronger one.
+  if (stepId === UNDERWRITING_STEP) {
+    const missing = merchant.underwriting?.documentsOutstanding ?? []
+    if (missing.length > 0) {
+      return {
+        headline: `Risk not scored — ${missing.length} document${missing.length === 1 ? "" : "s"} outstanding`,
+        detail:
+          "The agent parsed what was supplied and stopped before scoring. It has drafted the request to the merchant; underwriting resumes when the documents land.",
+        taskIndex: SCORE_THE_RISK_TASK,
+      }
+    }
+  }
   // Task indices are small and contiguous; 8 covers the longest step.
   for (let t = 0; t < 8; t++) {
     const a = artifactFor(stepId, t, merchant)
@@ -957,17 +978,44 @@ export function artifactFor(
           },
         ],
       }
-    case "2.2":
+    case "2.2": {
+      const missing = uw?.documentsOutstanding ?? []
       return {
         kind: "records",
         title: "Documents",
         note: "Collected from the merchant and checked for legibility, consistency and expiry.",
+        outcome: missing.length
+          ? {
+              state: "fail",
+              headline: `${missing.length} mandatory document${missing.length === 1 ? "" : "s"} outstanding`,
+              detail:
+                "Underwriting is halted at Score the risk until these arrive. The agent has drafted the request to the merchant — review it below the run.",
+            }
+          : undefined,
         rows: [
           { label: "Documents received", value: uw?.documents ?? null, source: "merchant upload" },
-          { label: "Cross-field consistency", value: uw ? "No inconsistencies found" : null, source: "document AI" },
+          // Each named on its own row. A count cannot be chased, and a reader
+          // cannot tell from "2 outstanding" whether the gap is clerical or
+          // the reason the ownership chain is unknown.
+          ...missing.map((d) => ({
+            label: "Outstanding",
+            value: null,
+            source: `not supplied — ${d.toLowerCase()}`,
+          })),
+          {
+            label: "Cross-field consistency",
+            // A consistency check across an incomplete set has not been run,
+            // it has been run on a subset — saying "no inconsistencies found"
+            // would claim the whole file agreed with itself.
+            value: !uw ? null : missing.length ? null : "No inconsistencies found",
+            source: missing.length
+              ? "document AI — cannot complete on a partial file"
+              : "document AI",
+          },
           { label: "Expiry", value: "All documents in date", source: "document AI" },
         ],
       }
+    }
     // The score is what the regulated sign-off rests on, so it is decomposed
     // rather than quoted. The old prose memo that restated the score and the
     // edge case is deleted: it was a second copy of both claims, free to drift.

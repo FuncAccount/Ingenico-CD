@@ -455,8 +455,25 @@ export interface Merchant {
   underwriting?: {
     identity: string
     documents: string
-    riskScore: number
-    riskBand: "Low" | "Medium" | "Elevated"
+    /**
+     * Required documents the merchant has not supplied, named individually.
+     *
+     * Named rather than counted because the chase has to ASK for something
+     * specific, and because "2 outstanding" cannot tell you whether the file
+     * is missing a bank statement or an ownership chain — one is an
+     * administrative gap, the other stops underwriting dead.
+     */
+    documentsOutstanding?: string[]
+    /**
+     * OPTIONAL BY DESIGN. A risk score cannot exist for a file that could not
+     * be assessed, so the type must permit its absence — otherwise every
+     * incomplete file is forced to carry a number, which is exactly how
+     * Orchard Lane came to be recorded as "22 / 100 · Low" while its
+     * beneficial-ownership chain was still unknown. An absent score is a
+     * different claim from a low one.
+     */
+    riskScore?: number
+    riskBand?: "Low" | "Medium" | "Elevated"
     edgeCase?: string
   }
   events: MerchantEvent[]
@@ -750,8 +767,14 @@ export const MERCHANTS: Merchant[] = [
       // A partial parse is stated as partial. "4 documents parsed" alone would
       // read as a complete file.
       documents: "4 of 6 documents parsed — 2 outstanding",
-      riskScore: 22,
-      riskBand: "Low",
+      documentsOutstanding: [
+        "Ownership statement for the 30% corporate holder",
+        "Bank statement for the settlement account",
+      ],
+      // No riskScore and no riskBand, deliberately. This file previously read
+      // "22 / 100 · Low" while its own edge case said beneficial ownership
+      // could not be confirmed — a band issued over an unknown owner. The
+      // score is not low here; it is unknown, and the two must not look alike.
       edgeCase:
         "Beneficial ownership cannot be confirmed from the file supplied: a 30% holder is a second company with no ownership statement attached.",
     },
