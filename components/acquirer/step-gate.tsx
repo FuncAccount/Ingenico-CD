@@ -75,9 +75,15 @@ function statusBadge(
       : { label: "pending actions", className: "bg-secondary text-muted-foreground" }
   }
 
+  // An Ingenico request is raised BY the agent run, not by a click, so its
+  // `requestedIso` is only written when someone chases or simulates a reply.
+  // Gating the badge on that field alone made the row contradict itself: the
+  // body already showed a running SLA clock ("Due 20 Aug · 1 working day")
+  // while the badge said nothing, so an active request looked unstarted. The
+  // run completing IS the request going out, and `active` carries that.
   const sent =
     handoff.party === "ingenico"
-      ? (state as IngenicoWaitState).requestedIso !== null
+      ? active || (state as IngenicoWaitState).requestedIso !== null
       : (state as MerchantChaseState).sentIso !== null
 
   // Not yet asked is not "in progress" — nobody is working on it.

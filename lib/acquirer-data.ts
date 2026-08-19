@@ -47,6 +47,15 @@ export interface PipelineStep {
    *  boundary falls, so the integration is a named arrangement rather than an
    *  inference the reader has to make from the chips. */
   integration?: string
+  /** A precondition this step takes as already met.
+   *
+   *  Distinct from `integration`, which says WHERE the work runs. An
+   *  assumption says what must already be TRUE before the step starts, so a
+   *  reader cannot mistake the pipeline's starting position for something the
+   *  agent achieved. Branding is the clear case: the agent themes the assets
+   *  it is given, and saying so keeps "we collected the brand" out of a step
+   *  that never collected anything. */
+  assumes?: string
   // The replayable task trace — the heart of "see how the agent helps".
   tasks: AgentTask[]
   // What lands back with the acquirer when the step is done.
@@ -193,6 +202,8 @@ export const PIPELINE: PipelineStep[] = [
     ],
     integration:
       "The marks and colours come from your brand library. Ingenico renders them onto the device and receipt, and holds the contrast and clearance rules that the hardware imposes.",
+    assumes:
+      "the merchant's brand and digital assets have already been uploaded to, or received by, the acquirer or Ingenico. This step themes what it is given — it does not chase missing artwork.",
     tasks: [
       {
         label: "Pull brand assets",

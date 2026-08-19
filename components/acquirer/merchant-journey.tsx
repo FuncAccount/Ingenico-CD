@@ -20,6 +20,7 @@ import {
   UserCheck,
   Wrench,
   Plug,
+  Info,
 } from "lucide-react"
 import {
   MERCHANTS,
@@ -623,6 +624,19 @@ function StepCockpit({
             <p className="text-xs leading-relaxed text-foreground">
               <span className="font-semibold">Runs inside your systems. </span>
               {step.integration}
+            </p>
+          </div>
+        )}
+
+        {/* A precondition, not an achievement. Kept visually quieter than the
+            integration note above it: that one describes work being done, this
+            one describes work that happened before the step opened. */}
+        {step.assumes && (
+          <div className="mt-2 flex gap-2 rounded-lg border border-border/70 bg-secondary/50 px-3 py-2">
+            <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <p className="text-[11px] leading-relaxed text-muted-foreground">
+              <span className="font-semibold text-foreground">Assumes </span>
+              {step.assumes}
             </p>
           </div>
         )}

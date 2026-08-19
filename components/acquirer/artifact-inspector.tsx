@@ -11,6 +11,8 @@ import {
   CheckCircle2,
   FileText,
   Info,
+  Pencil,
+  Wrench,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { BrandStudio } from "@/components/acquirer/brand-studio"
@@ -542,8 +544,62 @@ function PricingView({ draft, note, title }: Props & { note: string; title: stri
 /* ------------------------------------------------------- generic artefacts */
 
 function RecordsView({ artifact }: { artifact: Extract<Artifact, { kind: "records" }> }) {
+  // Where an edit is the acquirer's to make, the control must say WHERE the
+  // change lands. A bare "Edit" on a panel that cannot write would be a
+  // control that does nothing — worse than no control, because the reader
+  // would believe acceptance had been changed here.
+  const [showEdit, setShowEdit] = useState(false)
   return (
     <Shell title={artifact.title} note={artifact.note}>
+      {artifact.outcome && (
+        <div
+          className={cn(
+            "mb-2.5 flex gap-2.5 rounded-xl border px-3 py-2.5",
+            artifact.outcome.state === "ok" && "border-success/30 bg-success/[0.08]",
+            artifact.outcome.state === "warn" && "border-warning/35 bg-warning/[0.10]",
+            artifact.outcome.state === "fail" && "border-destructive/30 bg-destructive/[0.08]",
+          )}
+        >
+          <span
+            className={cn(
+              "mt-0.5 shrink-0",
+              artifact.outcome.state === "ok" && "text-success",
+              artifact.outcome.state === "warn" && "text-warning",
+              artifact.outcome.state === "fail" && "text-destructive",
+            )}
+          >
+            {artifact.outcome.state === "ok" ? (
+              <CheckCircle2 className="h-4 w-4" />
+            ) : (
+              <AlertTriangle className="h-4 w-4" />
+            )}
+          </span>
+          <div>
+            <p className="text-sm font-semibold text-foreground">{artifact.outcome.headline}</p>
+            <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
+              {artifact.outcome.detail}
+            </p>
+          </div>
+        </div>
+      )}
+      {artifact.editable && (
+        <div className="mb-2.5">
+          <button
+            type="button"
+            onClick={() => setShowEdit((v) => !v)}
+            aria-expanded={showEdit}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-white/70 px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:border-primary/40 hover:text-primary"
+          >
+            <Pencil className="h-3.5 w-3.5" />
+            {artifact.editable.label}
+          </button>
+          {showEdit && (
+            <p className="mt-2 rounded-lg border border-primary/25 bg-primary/[0.06] px-3 py-2 text-[11px] leading-relaxed text-foreground">
+              {artifact.editable.where}
+            </p>
+          )}
+        </div>
+      )}
       <div className="overflow-hidden rounded-xl border border-border/70 bg-white/60">
         {artifact.rows.map((r, i) => (
           <div key={r.label} className={cn("px-3 py-2.5", i > 0 && "border-t border-border/60")}>
@@ -578,6 +634,112 @@ function RecordsView({ artifact }: { artifact: Extract<Artifact, { kind: "record
                   {r.resolution.blocking ? " — needed before this step can clear" : ""}
                 </span>
               </p>
+            )}
+          </div>
+        ))}
+      </div>
+    </Shell>
+  )
+}
+
+/**
+ * The test run, as a ledger of individual authorisations.
+ *
+ * The summary line is COUNTED from the rows rather than written, so a run that
+ * gains or loses a failure cannot leave a stale headline behind. A failed row
+ * is expanded by default: a decline the reader has to click to discover is a
+ * decline the demo has hidden.
+ */
+function TxnsView({ artifact }: { artifact: Extract<Artifact, { kind: "txns" }> }) {
+  const failed = artifact.rows.filter((r) => r.state === "fail")
+  const warned = artifact.rows.filter((r) => r.state === "warn")
+  const passed = artifact.rows.length - failed.length - warned.length
+  const blocking = failed.some((r) => r.fix?.blocking)
+
+  const tone = {
+    pass: { text: "text-success", dot: "bg-success" },
+    warn: { text: "text-warning", dot: "bg-warning" },
+    fail: { text: "text-destructive", dot: "bg-destructive" },
+  } as const
+
+  return (
+    <Shell title={artifact.title} note={artifact.note}>
+      <div
+        className={cn(
+          "mb-2.5 flex gap-2.5 rounded-xl border px-3 py-2.5",
+          failed.length
+            ? "border-destructive/30 bg-destructive/[0.08]"
+            : "border-success/30 bg-success/[0.08]",
+        )}
+      >
+        <span className={cn("mt-0.5 shrink-0", failed.length ? "text-destructive" : "text-success")}>
+          {failed.length ? <AlertTriangle className="h-4 w-4" /> : <CheckCircle2 className="h-4 w-4" />}
+        </span>
+        <div>
+          <p className="text-sm font-semibold text-foreground">
+            {failed.length
+              ? `${failed.length} of ${artifact.rows.length} declined`
+              : `${artifact.rows.length} of ${artifact.rows.length} approved`}
+          </p>
+          <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
+            {`${passed} approved · ${warned.length} above target · ${failed.length} declined.`}
+            {blocking && " Dispatch is held until the declined transaction re-runs clean."}
+          </p>
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        {artifact.rows.map((r) => (
+          <div
+            key={r.ref}
+            className={cn(
+              "rounded-xl border bg-white/60 p-3",
+              r.state === "fail" ? "border-destructive/35" : "border-border/70",
+            )}
+          >
+            {/* Stacked, not a two-column row. A decline reason is a sentence
+                ("58 — transaction not permitted to terminal"), and putting a
+                sentence opposite a title in a ~390px panel made the two
+                overlap and broke the mono reference onto one character per
+                line. The verdict gets its own full-width line. */}
+            <div className="flex items-baseline justify-between gap-3">
+              <p className="flex min-w-0 items-center gap-2 text-sm font-medium text-foreground">
+                <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", tone[r.state].dot)} />
+                {r.kind}
+              </p>
+              {/* Seconds once a figure stops being a round-trip and starts
+                  being a wait — 40200ms reads as noise. */}
+              <p className="shrink-0 font-mono text-[10px] text-muted-foreground">
+                {r.latencyMs >= 10000
+                  ? `${(r.latencyMs / 1000).toFixed(1)}s`
+                  : `${(r.latencyMs / 1000).toFixed(2)}s`}
+              </p>
+            </div>
+            <p className={cn("mt-1 text-xs font-medium", tone[r.state].text)}>{r.result}</p>
+            <p className="mt-0.5 break-words font-mono text-[10px] text-muted-foreground">
+              {r.ref} · {r.unit} · {r.amount}
+            </p>
+
+            {r.cause && (
+              <p className="mt-2 border-t border-border/60 pt-2 text-[11px] leading-relaxed text-muted-foreground">
+                <span className="font-semibold text-foreground">Root cause. </span>
+                {r.cause}
+              </p>
+            )}
+
+            {r.fix && (
+              <div
+                className={cn(
+                  "mt-2 flex gap-2 rounded-lg px-2.5 py-2",
+                  r.fix.blocking ? "bg-warning/15" : "bg-secondary",
+                )}
+              >
+                <Wrench className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning-foreground" />
+                <p className="text-[11px] leading-relaxed text-foreground">
+                  <span className="font-semibold">{r.fix.owner} clears this. </span>
+                  {r.fix.action}
+                </p>
+              </div>
             )}
           </div>
         ))}
@@ -704,6 +866,8 @@ export function ArtifactInspector(props: Props) {
       return <RecordsView artifact={artifact} />
     case "checks":
       return <ChecksView artifact={artifact} />
+    case "txns":
+      return <TxnsView artifact={artifact} />
     case "table":
       return <TableView artifact={artifact} />
     case "document":

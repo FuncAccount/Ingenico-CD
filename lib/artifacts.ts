@@ -432,6 +432,30 @@ export interface RecordRow {
   resolution?: { owner: string; when: string; blocking: boolean }
 }
 
+/**
+ * One simulated test transaction against the certification host.
+ *
+ * A `CheckRow` could not carry this: a failure needs the DECLINE CODE the host
+ * actually returned, the cause that code implies, and who clears it. Collapsing
+ * those into one `evidence` string is how a demo ends up saying "failed" with
+ * no way to tell an operator what to do next — and a red row nobody can act on
+ * reads as a broken build rather than a caught defect.
+ */
+export interface TxnRow {
+  ref: string
+  kind: string
+  unit: string
+  amount: string
+  state: "pass" | "warn" | "fail"
+  /** The host's own verdict — an auth code, or the decline code it returned. */
+  result: string
+  latencyMs: number
+  /** Only on a failure: WHY it declined, distinct from WHAT the host said. */
+  cause?: string
+  /** Only on a failure: who clears it and what clearing it involves. */
+  fix?: { owner: "Ingenico" | "Acquirer" | "Merchant"; action: string; blocking: boolean }
+}
+
 export interface CheckRow {
   label: string
   state: "pass" | "warn" | "fail"
@@ -449,8 +473,32 @@ export type Artifact =
   | { kind: "stock"; title: string; note: string }
   | { kind: "delivery"; title: string; note: string }
   | { kind: "pricing"; title: string; note: string }
-  | { kind: "records"; title: string; note: string; rows: RecordRow[] }
+  | {
+      kind: "records"
+      title: string
+      note: string
+      rows: RecordRow[]
+      /**
+       * A record set the acquirer may still change, and the system that owns
+       * the change. Scheme acceptance is a COMMERCIAL PERMISSION the acquirer
+       * grants — rendering it as a flat read-only list made a decision that is
+       * theirs look like something already settled elsewhere. The label names
+       * where the edit lands rather than implying this screen writes it.
+       */
+      editable?: { label: string; where: string }
+      /**
+       * The verdict the record supports, stated above it.
+       *
+       * A parameter dump answers "what was sent" but not "did it land" —
+       * the two are different claims, and a reader scanning a config list has
+       * no way to tell a successful load from a queued one. `detail` must be
+       * DERIVED from the rows it summarises, never typed, or the headline can
+       * outlive the record beneath it.
+       */
+      outcome?: { state: "ok" | "warn" | "fail"; headline: string; detail: string }
+    }
   | { kind: "checks"; title: string; note: string; rows: CheckRow[] }
+  | { kind: "txns"; title: string; note: string; rows: TxnRow[] }
   | { kind: "table"; title: string; note: string; table: TableArtifact }
   | { kind: "document"; title: string; note: string; filename: string; lines: string[] }
   // The three below are decision surfaces rather than read-outs: the acquirer
@@ -561,10 +609,26 @@ export function traceFor(
       // "0/0 online" reads as a completed check. There was no check.
       return n === 0 ? "test.connect → skipped, no hardware on this order" : `test.connect → ${n}/${n} terminals online`
     }
-    case "6.1":
-      return `test.txn → sale ok, refund ok, reversal ok (×${deviceUnits(merchant).length})`
-    case "6.3":
-      return `cert.issue → ${deviceUnits(merchant).length} certificates written`
+    // Counted off the run, not typed. The old lines said "refund ok" and
+    // "certificates written" — both would now contradict the artefact directly
+    // beneath them, which carries a declined refund and withheld certificates.
+    case "6.1": {
+      const art = artifactFor(6, 1, merchant)
+      if (art?.kind !== "txns") return null
+      const failed = art.rows.filter((r) => r.state === "fail")
+      const warned = art.rows.filter((r) => r.state === "warn").length
+      return failed.length
+        ? `test.txn → ${art.rows.length} run, ${failed.length} declined (${failed[0].ref} code 58), ${warned} above target`
+        : `test.txn → ${art.rows.length} run, all approved, ${warned} above target`
+    }
+    case "6.3": {
+      const txns = artifactFor(6, 1, merchant)
+      const blocked = txns?.kind === "txns" && txns.rows.some((r) => r.state === "fail")
+      const n = deviceUnits(merchant).length
+      return blocked
+        ? `cert.issue → withheld, 0/${n} certified while TXN-0003 is open`
+        : `cert.issue → ${n} certificates written`
+    }
     case "7.0":
     case "7.1":
     case "7.2":
@@ -968,6 +1032,10 @@ export function artifactFor(
         kind: "records",
         title: "Schemes and payment methods",
         note: "What this merchant may accept. Each line names who decided it — an acquirer permission and a scheme mandate are different kinds of claim.",
+        editable: {
+          label: "Edit acceptance",
+          where: `Scheme acceptance is yours to set. Changes are made in ${ACQUIRER.name}'s scheme configuration and reload onto every profile above — the agent does not widen acceptance on its own.`,
+        },
         rows: [
           { label: "Visa / Mastercard", value: "Enabled", source: `${ACQUIRER.name} BIN 452110` },
           { label: "Amex", value: "Enabled", source: "separate Amex agreement on file" },
@@ -980,20 +1048,39 @@ export function artifactFor(
           },
         ],
       }
-    case "5.2":
+    case "5.2": {
       // The same parameter set Ingenico's own deployment workspace renders.
       // Typed a second time here, the two personas would be free to disagree
       // about what was actually loaded onto the merchant's terminals.
+      const params = configProfile(merchant, ACQUIRER.name)
+      const units = deviceUnits(merchant)
+      // Counted, not asserted. A "load successful" banner typed as a literal
+      // would go on claiming success over a record that had lost a parameter.
+      const settled = params.filter((p) => p.value !== null && p.value !== "").length
+      const pending = params.length - settled
       return {
         kind: "records",
         title: "Loaded configuration",
         note: "The parameter set pushed to every profile above. This is the identical record Ingenico works from — not a summary of it.",
-        rows: configProfile(merchant, ACQUIRER.name).map((item) => ({
+        outcome:
+          pending === 0
+            ? {
+                state: "ok",
+                headline: "Load successful",
+                detail: `All ${params.length} parameters accepted on ${units.length} of ${units.length} profiles. No profile is running a partial set.`,
+              }
+            : {
+                state: "warn",
+                headline: "Loaded with gaps",
+                detail: `${settled} of ${params.length} parameters accepted across ${units.length} profiles. ${pending} still unset — named in the record below.`,
+              },
+        rows: params.map((item) => ({
           label: item.label,
           value: item.value,
           source: item.source.toLowerCase(),
         })),
       }
+    }
     case "5.3": {
       const units = deviceUnits(merchant)
       // Derived from the content it signs, so changing the order changes the
@@ -1006,6 +1093,13 @@ export function artifactFor(
         kind: "records",
         title: "Signed build",
         note: "What was sealed, and what would break the seal.",
+        outcome: {
+          state: "ok",
+          headline: "Build sealed",
+          // Counted off the same unit list the rows below report, so the
+          // headline cannot claim a coverage the record does not show.
+          detail: `${units.length} of ${units.length} profiles are inside the bundle and the checksum verifies. Any change to a profile after this point invalidates the signature and forces a rebuild.`,
+        },
         rows: [
           { label: "Bundle", value: `BLD-${merchant.id.replace("m-", "").toUpperCase()}-01`, source: "config store" },
           { label: "Profiles included", value: `${units.length} of ${units.length}`, source: "counted from the profiles above" },
@@ -1038,18 +1132,86 @@ export function artifactFor(
         },
       }
     }
-    case "6.1":
+    case "6.1": {
+      // NOT gated on physical units. Unlike connectivity or peripherals, a
+      // software-only order genuinely transacts — the licence runs on the
+      // merchant's own handset — so falling back to the software-only notice
+      // would claim there was nothing to test when there plainly was.
+      const phys = physicalUnits(merchant)
+      const on = phys.length ? phys : deviceUnits(merchant)
+      if (on.length === 0) return null
+      // Spread across real units, so a failure names a device someone can pick
+      // up rather than an anonymous "terminal 2".
+      const at = (i: number) => on[Math.min(i, on.length - 1)]
+      const u1 = at(0)
+      const u2 = at(1)
+      const u3 = at(2)
+      const name = (u: DeviceUnit) => `Unit ${u.n} · ${u.tid}`
       return {
-        kind: "checks",
+        kind: "txns",
         title: "Test transactions",
-        note: "Run end to end against the acquirer's certification host, not a simulator.",
+        note: "Run end to end against the acquirer's certification host, not a simulator. Every line is a real authorisation attempt with the host's own response.",
         rows: [
-          { label: "Contactless sale", state: "pass", evidence: "EUR 1.00 approved, auth 0X41B9, 1.2s round trip" },
-          { label: "Chip and PIN sale", state: "pass", evidence: "EUR 1.00 approved, auth 0X41C0" },
-          { label: "Refund", state: "pass", evidence: "EUR 1.00 refunded against the original auth" },
-          { label: "Offline / store-and-forward", state: "warn", evidence: "Approved on reconnect after 40s — above the 30s target" },
+          {
+            ref: "TXN-0001",
+            kind: "Contactless sale",
+            unit: name(u1),
+            amount: "EUR 1.00",
+            state: "pass",
+            result: "Approved · auth 0X41B9",
+            latencyMs: 1240,
+          },
+          {
+            ref: "TXN-0002",
+            kind: "Chip and PIN sale",
+            unit: name(u2),
+            amount: "EUR 1.00",
+            state: "pass",
+            result: "Approved · auth 0X41C0",
+            latencyMs: 1580,
+          },
+          {
+            // The deliberate failure. A decline code the reader can look up,
+            // a cause that is NOT a restatement of the code, and an owner.
+            ref: "TXN-0003",
+            kind: "Refund",
+            unit: name(u3),
+            amount: "EUR 1.00",
+            state: "fail",
+            result: "Declined · 58 — transaction not permitted to terminal",
+            latencyMs: 890,
+            cause:
+              "Refund is not in the merchant category profile loaded at step 05. The terminal asked the host for a credit it has no permission to send, so the host rejected it before reaching the card. Nothing is wrong with the device or the card.",
+            fix: {
+              owner: "Ingenico",
+              action:
+                "Deployment adds the refund permission to the acceptance profile and re-signs the bundle, then this transaction is re-run. The re-signed bundle invalidates the existing pass certificates, so step 06 restarts rather than resumes.",
+              blocking: true,
+            },
+          },
+          {
+            ref: "TXN-0004",
+            kind: "Reversal",
+            unit: name(u1),
+            amount: "EUR 1.00",
+            state: "pass",
+            result: "Approved · reversal of 0X41B9",
+            latencyMs: 1110,
+          },
+          {
+            ref: "TXN-0005",
+            kind: "Offline / store-and-forward",
+            unit: name(u2),
+            amount: "EUR 1.00",
+            state: "warn",
+            result: "Approved on reconnect",
+            latencyMs: 40200,
+            cause:
+              "Forwarded 40.2s after the link returned, against a 30s target. Within scheme rules, so this does not block dispatch — but it is the slowest path in the set and worth watching once the merchant is live.",
+          },
         ],
       }
+    }
     case "6.2": {
       const phys = physicalUnits(merchant)
       const battery = phys.filter((u) => MODELS[u.model].battery)
@@ -1077,21 +1239,53 @@ export function artifactFor(
     }
     case "6.3": {
       const units = deviceUnits(merchant)
+      // The refund decline at 6.1 is a PROFILE fault, not a device fault, so
+      // it withholds certification from the whole set rather than from one
+      // unit. Certifying every unit PASS underneath a failed transaction
+      // would be the certificate contradicting the evidence it rests on —
+      // and this document is what the dispatch gate reads.
+      //
+      // Read back off the transaction artefact rather than re-deriving which
+      // unit failed: two independent derivations of the same fact are two
+      // things that can disagree, and this one would disagree silently.
+      const txns = artifactFor(6, 1, merchant)
+      const failedTxn =
+        txns?.kind === "txns" ? txns.rows.find((r) => r.state === "fail") : undefined
       return {
         kind: "document",
         title: "Pass certificates",
-        note: "One certificate per unit. This is what the dispatch gate checks for, so a unit missing here cannot ship.",
+        note: failedTxn
+          ? "One certificate per unit. Withheld while a test transaction is open — this document is what the dispatch gate reads, so it cannot certify ahead of the evidence."
+          : "One certificate per unit. This is what the dispatch gate checks for, so a unit missing here cannot ship.",
         filename: `certificates-${merchant.id.replace("m-", "")}.pdf`,
-        lines: [
-          `PRE-DISPATCH TEST CERTIFICATE`,
-          `Merchant   ${merchant.name}, ${merchant.location}`,
-          `Acquirer   ${ACQUIRER.name}`,
-          ``,
-          ...units.map((u) => `  ${u.tid}  ${MODELS[u.model].label.padEnd(12)}  PASS  (1 observation above target — see Test transactions)`),
-          ``,
-          `${units.length} of ${units.length} units certified. Certificates expire if the`,
-          `configuration bundle is re-signed.`,
-        ],
+        lines: failedTxn
+          ? [
+              `PRE-DISPATCH TEST CERTIFICATE — NOT ISSUED`,
+              `Merchant   ${merchant.name}, ${merchant.location}`,
+              `Acquirer   ${ACQUIRER.name}`,
+              ``,
+              ...units.map(
+                (u) => `  ${u.tid}  ${MODELS[u.model].label.padEnd(12)}  WITHHELD`,
+              ),
+              ``,
+              `0 of ${units.length} units certified.`,
+              ``,
+              `${failedTxn.ref} declined 58 on ${failedTxn.unit} — refund is absent from`,
+              `the acceptance profile. The fault is in the profile, not the`,
+              `hardware, so it is withheld across the set: every unit carries`,
+              `the same bundle. Ingenico deployment re-signs, step 06 re-runs,`,
+              `and certificates issue on a clean pass.`,
+            ]
+          : [
+              `PRE-DISPATCH TEST CERTIFICATE`,
+              `Merchant   ${merchant.name}, ${merchant.location}`,
+              `Acquirer   ${ACQUIRER.name}`,
+              ``,
+              ...units.map((u) => `  ${u.tid}  ${MODELS[u.model].label.padEnd(12)}  PASS`),
+              ``,
+              `${units.length} of ${units.length} units certified. Certificates expire if the`,
+              `configuration bundle is re-signed.`,
+            ],
       }
     }
 
