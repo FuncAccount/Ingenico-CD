@@ -507,6 +507,10 @@ export type Artifact =
   // changes something here, and the change is what the sign-off then rests on.
   | { kind: "risk"; title: string; note: string }
   | { kind: "edge"; title: string; note: string }
+  /** Scheme acceptance. A decision surface, not a read-out: the acquirer
+   *  changes what the merchant may accept, and the change leaves here as an
+   *  instruction to Ingenico rather than as configuration. */
+  | { kind: "acceptance"; title: string; note: string }
   /** `focus` says WHICH part of the brand studio this task produced. Without
    *  it all three branding tasks rendered the identical studio — same
    *  controls, same mockups — so the journey looked like it had stalled on one
@@ -633,8 +637,11 @@ export function traceFor(
     case "5.0":
       return `profile.generate → ${deviceUnits(merchant).length} profiles created`
     case "5.1":
-      return `scheme.enable → Visa, MC, Amex, contactless${
-        licenceUnits(merchant).length ? ", softPOS" : ""
+      // Was `scheme.enable → Visa, MC, Amex…`, which claimed the agent had
+      // switched acceptance on. It reads the current position; widening it is
+      // a commercial decision the acquirer instructs Ingenico to action.
+      return `scheme.read → live acceptance listed, ${
+        licenceUnits(merchant).length ? "softPOS licensed" : "no softPOS licence"
       }`
     case "5.2": {
       const tip = configProfile(merchant, ACQUIRER.name).find((c) => c.label.startsWith("Tipping"))
@@ -1172,25 +1179,14 @@ export function artifactFor(
       }
     }
     case "5.1":
+      // Was a flat "records" list where every line already read "Enabled" and
+      // the only control expanded a sentence. That put the one commercial
+      // decision on this step behind a button that changed nothing, and
+      // presented acceptance as configuration that had already happened.
       return {
-        kind: "records",
+        kind: "acceptance",
         title: "Schemes and payment methods",
         note: "What this merchant may accept. Each line names who decided it — an acquirer permission and a scheme mandate are different kinds of claim.",
-        editable: {
-          label: "Edit acceptance",
-          where: `Scheme acceptance is yours to set. Changes are made in ${ACQUIRER.name}'s scheme configuration and reload onto every profile above — the agent does not widen acceptance on its own.`,
-        },
-        rows: [
-          { label: "Visa / Mastercard", value: "Enabled", source: `${ACQUIRER.name} BIN 452110` },
-          { label: "Amex", value: "Enabled", source: "separate Amex agreement on file" },
-          { label: "Domestic debit", value: vatFor(merchant) ? "Enabled for the merchant's country" : null, source: vatFor(merchant) ? "country scheme table" : "country not in the rules table" },
-          { label: "Contactless", value: "Enabled", source: "scheme mandated" },
-          {
-            label: "softPOS acceptance",
-            value: licenceUnits(merchant).length > 0 ? "Enabled" : null,
-            source: licenceUnits(merchant).length > 0 ? "licence line on this order" : "no softPOS licence on this order",
-          },
-        ],
       }
     case "5.2": {
       // The same parameter set Ingenico's own deployment workspace renders.
@@ -1205,7 +1201,7 @@ export function artifactFor(
       return {
         kind: "records",
         title: "Loaded configuration",
-        note: "The parameter set pushed to every profile above. This is the identical record Ingenico works from — not a summary of it.",
+        note: "The parameter set pushed to every profile above. This is the identical record Ingenico works from �� not a summary of it.",
         outcome:
           pending === 0
             ? {

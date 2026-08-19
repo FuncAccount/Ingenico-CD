@@ -47,6 +47,7 @@ import {
 import { StepGate } from "@/components/acquirer/step-gate"
 import { ownerOf, waitingOn, type HandoffState } from "@/lib/handoffs"
 import { blockers, checkBrand, defaultTheme, type BrandTheme } from "@/lib/branding"
+import { defaultAcceptance, type AcceptanceState } from "@/lib/scheme-acceptance"
 import { edgeResolved, outstandingDocuments, type EdgeResolution } from "@/lib/underwriting"
 import { useLiveMerchant } from "@/components/acquirer/demo-provider"
 import { exceptionDetailMissing, exceptionOnStep } from "@/lib/exceptions"
@@ -390,6 +391,12 @@ function StepCockpit({
   const [theme, setTheme] = useState<BrandTheme>(() => defaultTheme(merchant))
   const [edge, setEdge] = useState<EdgeResolution | undefined>(undefined)
 
+  // Scheme acceptance. Lifted for the same reason: the requested set and the
+  // instructions already sent have to survive stepping away from the panel.
+  const [acceptance, setAcceptance] = useState<AcceptanceState>(() =>
+    defaultAcceptance(merchant),
+  )
+
   // The order draft is shared by the basket, stock, delivery and pricing
   // artefacts, so changing a quantity moves every downstream figure.
   const [draft, setDraft] = useState<OrderDraft>(() => ({
@@ -416,6 +423,7 @@ function StepCockpit({
         kinds.has("pricing"),
       theme: kinds.has("brand"),
       edge: kinds.has("edge"),
+      acceptance: kinds.has("acceptance"),
     }
   }, [step.id, step.tasks, merchant])
 
@@ -441,6 +449,8 @@ function StepCockpit({
     (stageWrites.edge && edge !== undefined) ||
     (stageWrites.theme &&
       JSON.stringify(theme) !== JSON.stringify(defaultTheme(merchant))) ||
+    (stageWrites.acceptance &&
+      JSON.stringify(acceptance) !== JSON.stringify(defaultAcceptance(merchant))) ||
     (stageWrites.draft &&
       JSON.stringify(draft) !==
         JSON.stringify({
@@ -471,6 +481,8 @@ function StepCockpit({
     setDraft({ lines: defaultBasket(merchant), serviceId: "standard", requestedIso: null })
     setTheme(defaultTheme(merchant))
     setEdge(undefined)
+    // An instruction sent about one merchant must never show against another.
+    setAcceptance(defaultAcceptance(merchant))
   }, [merchant])
 
   // Drive the run: advance one task at a time while "running".
@@ -559,6 +571,7 @@ function StepCockpit({
       setDraft({ lines: defaultBasket(merchant), serviceId: "standard", requestedIso: null })
     }
     if (stageWrites.theme) setTheme(defaultTheme(merchant))
+    if (stageWrites.acceptance) setAcceptance(defaultAcceptance(merchant))
     if (stageWrites.edge) setEdge(undefined)
   }
 
@@ -1020,6 +1033,8 @@ function StepCockpit({
               onTheme={setTheme}
               edge={edge}
               onEdge={setEdge}
+              acceptance={acceptance}
+              onAcceptance={setAcceptance}
             />
         </div>
       </div>

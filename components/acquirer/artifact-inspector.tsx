@@ -17,6 +17,8 @@ import {
 import { cn } from "@/lib/utils"
 import { BrandStudio } from "@/components/acquirer/brand-studio"
 import { EdgeCaseDesk, RiskBreakdown } from "@/components/acquirer/risk-desk"
+import { SchemeDesk } from "@/components/acquirer/scheme-desk"
+import type { AcceptanceState } from "@/lib/scheme-acceptance"
 import type { BrandTheme } from "@/lib/branding"
 import type { EdgeResolution } from "@/lib/underwriting"
 import type { Merchant } from "@/lib/acquirer-data"
@@ -74,6 +76,11 @@ interface Props {
   /** The escalated underwriting item, and the acquirer's determination on it. */
   edge: EdgeResolution | undefined
   onEdge: (r: EdgeResolution) => void
+  /** Scheme acceptance: what is live, what the acquirer has asked for, and the
+   *  instructions already sent. Lifted like `theme` because the requested set
+   *  outlives the panel and has to survive stepping away and back. */
+  acceptance: AcceptanceState
+  onAcceptance: (s: AcceptanceState) => void
 }
 
 /* ------------------------------------------------------------ small parts */
@@ -876,6 +883,16 @@ export function ArtifactInspector(props: Props) {
       return <TableView artifact={artifact} />
     case "document":
       return <DocumentView artifact={artifact} />
+    case "acceptance":
+      return (
+        <Shell title={artifact.title} note={artifact.note}>
+          <SchemeDesk
+            merchant={props.merchant}
+            state={props.acceptance}
+            onState={props.onAcceptance}
+          />
+        </Shell>
+      )
     case "risk":
       return (
         <Shell title={artifact.title} note={artifact.note}>

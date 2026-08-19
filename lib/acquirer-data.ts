@@ -248,9 +248,13 @@ export const PIPELINE: PipelineStep[] = [
         output: "profile.generate → 4 profiles created",
       },
       {
-        label: "Enable schemes",
-        detail: "Switches on the card schemes and payment methods for the merchant.",
-        output: "scheme.enable → Visa, MC, Amex, contactless, softPOS",
+        // Named for what it does. "Enable schemes" promised the agent widens
+        // acceptance by itself; acceptance is the acquirer's commercial call,
+        // and Ingenico actions it.
+        label: "Read scheme acceptance",
+        detail:
+          "Lists what the merchant may accept today. Changing it is yours to instruct — Ingenico applies it.",
+        output: "scheme.read → live acceptance listed",
       },
       {
         label: "Load configuration",
