@@ -113,6 +113,55 @@ const EXCEPTIONS: Record<string, MerchantException> = {
       },
     ],
   },
+
+  // The counterpart to m-tavo, and deliberately a DIFFERENT SHAPE: this one is
+  // owned by Ingenico, not the merchant, and there are no candidates because
+  // nothing here is ambiguous. The failing permission is known exactly — what
+  // the agent will not do is widen acceptance on its own authority.
+  "m-summit": {
+    step: 6,
+    taskIndex: 1, // "Test transactions"
+    summary: "The refund test declined: the terminals cannot send a credit.",
+    attempted:
+      "Run the full pre-dispatch suite — sale, refund, reversal and offline — against the certification host, so every unit can be certified and released for dispatch.",
+    found:
+      "TXN-0003 declined with code 58, transaction not permitted to terminal. The acceptance profile loaded at step 05 carries no refund permission, so the host rejected the credit before it reached the card. Sale, reversal and offline all passed.",
+    source: "Certification host · scheme response code 58",
+    consequence:
+      "No unit can be certified, so all 6 are held before dispatch. The hardware is built and configured — this is a permission on the profile, not a fault on the devices, so nothing needs remaking.",
+    agentMoves: [
+      {
+        label: "Isolated the failing permission",
+        done: true,
+        detail:
+          "Ran the remaining suite to completion rather than stopping at the decline, so the profile is the only open item. 3 of 5 passed within target, 1 above.",
+      },
+      {
+        label: "Withheld the certificates",
+        done: true,
+        detail:
+          "0 of 6 issued. Certifying the units that happened not to run the refund would have passed the fleet on an untested permission.",
+      },
+      {
+        label: "Raised the profile correction with Ingenico",
+        done: true,
+        detail:
+          "Deployment holds the acceptance profile, so the change and the re-signing are theirs to make.",
+      },
+      {
+        label: "Re-run the suite on the re-signed bundle",
+        done: false,
+        detail:
+          "Re-signing invalidates the passes already recorded, so step 06 restarts rather than resumes — the agent re-runs all five and re-issues certificates on a clean pass.",
+      },
+    ],
+    needsHuman: {
+      limit: "The agent will not add the refund permission to the profile itself.",
+      owner: "acquirer",
+      why:
+        "Refund acceptance is a commercial permission you grant, not a configuration defect to be patched — it decides whether this merchant can move money back to a cardholder. The agent can see that the profile omits it, but not whether the omission was an error or your deliberate decision for this merchant category.",
+    },
+  },
 }
 
 export function exceptionFor(merchant: Merchant): MerchantException | null {

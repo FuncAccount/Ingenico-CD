@@ -32,7 +32,14 @@ import {
   type StepId,
 } from "@/lib/acquirer-data"
 import { cn } from "@/lib/utils"
-import { artifactFor, defaultBasket, taskDetail, taskSkipped, traceFor } from "@/lib/artifacts"
+import {
+  artifactFor,
+  blockingFinding,
+  defaultBasket,
+  taskDetail,
+  taskSkipped,
+  traceFor,
+} from "@/lib/artifacts"
 import {
   ArtifactInspector,
   type OrderDraft,
@@ -446,6 +453,10 @@ function StepCockpit({
   const skippedCount = step.tasks.filter((_, i) => taskSkipped(step.id, i, merchant)).length
   const runnableCount = step.tasks.length - skippedCount
 
+  // Read out of this step's own artefacts. A step can finish every task and
+  // still not have passed — the run is what turns the finding up.
+  const finding = useMemo(() => blockingFinding(step.id, merchant), [step.id, merchant])
+
   // What stops the acquirer's own decision on THIS step. Different steps are
   // blocked by different things, so this is computed per step rather than by
   // one shared "is everything fine" flag that could not name its own blocker.
@@ -539,7 +550,9 @@ function StepCockpit({
                 : // A step where nothing applied is not a success. Green here
                   // would read as work delivered on an order that had none.
                   status === "done" && runnableCount > 0
-                  ? "border-success/30 bg-success/10 text-success"
+                  ? finding
+                    ? "border-warning/40 bg-warning/15 text-warning-foreground"
+                    : "border-success/30 bg-success/10 text-success"
                   : "border-border bg-secondary text-muted-foreground",
             )}
           >
@@ -553,7 +566,9 @@ function StepCockpit({
                 className={cn(
                   "h-2 w-2 rounded-full",
                   status === "done" && runnableCount > 0
-                    ? "bg-success"
+                    ? finding
+                      ? "bg-warning"
+                      : "bg-success"
                     : blocker
                       ? "bg-destructive"
                       : "bg-muted-foreground/60",
@@ -565,7 +580,12 @@ function StepCockpit({
               : status === "done"
                 ? runnableCount === 0
                   ? "Not applicable"
-                  : "Complete"
+                  : // Every task ran, but the run turned something up. Saying
+                    // "Complete" over a held dispatch would be the badge
+                    // contradicting the record directly beneath it.
+                    finding
+                    ? "Finding"
+                    : "Complete"
                 : // "Ready" on a blocked step is a false all-clear: this is the
                   // one step that cannot be run to completion.
                   blocker
@@ -790,7 +810,7 @@ function StepCockpit({
                   </p>
                   {isFailed && (
                     <p className="mt-1 text-xs font-medium leading-relaxed text-destructive">
-                      Failed — {blocker.summary}
+                      Failed �� {blocker.summary}
                     </p>
                   )}
                   {/* Name the artefact on the row, so the claim and the thing

@@ -682,7 +682,11 @@ function TxnsView({ artifact }: { artifact: Extract<Artifact, { kind: "txns" }> 
               : `${artifact.rows.length} of ${artifact.rows.length} approved`}
           </p>
           <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
-            {`${passed} approved · ${warned.length} above target · ${failed.length} declined.`}
+            {/* "approved" here would double-count against the headline: the
+                above-target row WAS approved, just slowly, so the detail read
+                "4 approved" under a headline reading "5 of 5 approved".
+                Latency and outcome are different axes and are counted as such. */}
+            {`${passed} within target · ${warned.length} above target · ${failed.length} declined.`}
             {blocking && " Dispatch is held until the declined transaction re-runs clean."}
           </p>
         </div>

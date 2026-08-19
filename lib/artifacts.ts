@@ -12,6 +12,7 @@
 import { MERCHANTS, type Merchant, type StepId } from "@/lib/acquirer-data"
 import { ACQUIRER } from "@/lib/branding"
 import { MODELS, configProfile, orderLines, type ModelId } from "@/lib/devices"
+import { exceptionOnStep } from "@/lib/exceptions"
 import { countryOf, distanceKm } from "@/lib/geo"
 import { riskAssessment } from "@/lib/underwriting"
 
@@ -778,6 +779,35 @@ export function taskDetail(stepId: StepId, taskIndex: number, merchant: Merchant
   return SOFTWARE_ONLY_DETAIL[`${stepId}.${taskIndex}`] ?? fallback
 }
 
+/**
+ * A finding in a step's own artefacts that stops the step being complete.
+ *
+ * Running every task is not the same claim as passing. Without this, the Test
+ * step reported "Complete · 4/4" directly above a record reading "1 of 5
+ * declined — dispatch is held": the badge asserted an outcome its own evidence
+ * denied, which is the failure this whole product is meant to prevent. Derived
+ * from the artefacts rather than flagged by hand, so a step cannot be marked
+ * clean while carrying a blocking decline.
+ */
+export function blockingFinding(
+  stepId: StepId,
+  merchant: Merchant,
+): { headline: string; detail: string } | null {
+  // Task indices are small and contiguous; 8 covers the longest step.
+  for (let t = 0; t < 8; t++) {
+    const a = artifactFor(stepId, t, merchant)
+    if (a?.kind !== "txns") continue
+    const blocking = a.rows.filter((r) => r.state === "fail" && r.fix?.blocking)
+    if (blocking.length === 0) continue
+    const first = blocking[0]
+    return {
+      headline: `${blocking.length} of ${a.rows.length} declined`,
+      detail: `${first.ref} on ${first.unit} — ${first.result}. ${first.fix!.owner} clears it before this step can pass.`,
+    }
+  }
+  return null
+}
+
 /** Resolve the artefact a given task produced. Returning null is a real
  *  answer — some tasks only write to the trace — and the UI says so rather
  *  than rendering an empty panel that looks broken. */
@@ -1147,6 +1177,15 @@ export function artifactFor(
       const u2 = at(1)
       const u3 = at(2)
       const name = (u: DeviceUnit) => `Unit ${u.n} · ${u.tid}`
+
+      // A blocking decline holds dispatch, so only a merchant whose exception
+      // IS this decline may carry one. Showing it on an order already at Ship
+      // would have the record claiming dispatch is held while the pipeline
+      // shows it shipped. Read off the exception register rather than
+      // re-deriving "stuck at Test": two independent derivations of the same
+      // fact can drift apart, and the register is what the rest of the app
+      // already narrates from.
+      const stuckHere = exceptionOnStep(merchant, 6) !== null
       return {
         kind: "txns",
         title: "Test transactions",
@@ -1177,17 +1216,25 @@ export function artifactFor(
             kind: "Refund",
             unit: name(u3),
             amount: "EUR 1.00",
-            state: "fail",
-            result: "Declined · 58 — transaction not permitted to terminal",
-            latencyMs: 890,
-            cause:
-              "Refund is not in the merchant category profile loaded at step 05. The terminal asked the host for a credit it has no permission to send, so the host rejected it before reaching the card. Nothing is wrong with the device or the card.",
-            fix: {
-              owner: "Ingenico",
-              action:
-                "Deployment adds the refund permission to the acceptance profile and re-signs the bundle, then this transaction is re-run. The re-signed bundle invalidates the existing pass certificates, so step 06 restarts rather than resumes.",
-              blocking: true,
-            },
+            ...(stuckHere
+              ? {
+                  state: "fail" as const,
+                  result: "Declined · 58 — transaction not permitted to terminal",
+                  latencyMs: 890,
+                  cause:
+                    "Refund is not in the merchant category profile loaded at step 05. The terminal asked the host for a credit it has no permission to send, so the host rejected it before reaching the card. Nothing is wrong with the device or the card.",
+                  fix: {
+                    owner: "Ingenico" as const,
+                    action:
+                      "Deployment adds the refund permission to the acceptance profile and re-signs the bundle, then this transaction is re-run. The re-signed bundle invalidates the existing pass certificates, so step 06 restarts rather than resumes.",
+                    blocking: true,
+                  },
+                }
+              : {
+                  state: "pass" as const,
+                  result: "Approved · refund of 0X41B9",
+                  latencyMs: 1320,
+                }),
           },
           {
             ref: "TXN-0004",
