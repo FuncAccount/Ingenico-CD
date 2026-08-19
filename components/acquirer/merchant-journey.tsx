@@ -34,6 +34,7 @@ import {
 import { cn } from "@/lib/utils"
 import {
   artifactFor,
+  artifactOutcome,
   blockingFinding,
   defaultBasket,
   taskDetail,
@@ -929,6 +930,7 @@ function StepCockpit({
             const isHalted = finding?.taskIndex === i && !isRunning
             const isPending = i >= completed && !isRunning && !isFailed && !isHalted
             const art = artifactFor(step.id, i, merchant)
+            const outcome = artifactOutcome(art)
             return (
               <button
                 key={task.label}
@@ -990,6 +992,26 @@ function StepCockpit({
                   {isHalted && !isFailed && (
                     <p className="mt-1 text-xs font-medium leading-relaxed text-destructive">
                       Halted · {finding!.headline}
+                    </p>
+                  )}
+                  {/* The verdict, on the row. Naming the artefact told you
+                      where to look but not what it found, so "did the load
+                      work?" needed a click. GATED ON `isDone`: a headline like
+                      "Load successful" on a task that has not run yet would
+                      report a result for work nobody has done — and it is
+                      withheld when the task failed, halted or was skipped,
+                      each of which already states its own outcome above and
+                      would otherwise be contradicted by the artefact's. */}
+                  {isDone && !isSkipped && !isFailed && !isHalted && outcome && (
+                    <p
+                      className={cn(
+                        "mt-1 text-xs font-medium leading-relaxed",
+                        outcome.state === "ok" && "text-success",
+                        outcome.state === "warn" && "text-warning",
+                        outcome.state === "fail" && "text-destructive",
+                      )}
+                    >
+                      {outcome.headline}
                     </p>
                   )}
                   {/* Name the artefact on the row, so the claim and the thing

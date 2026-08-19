@@ -169,6 +169,24 @@ export function defaultAcceptance(merchant: Merchant): AcceptanceState {
 }
 
 /**
+ * The schemes actually live, as one line of prose.
+ *
+ * The loaded-configuration record used to carry the LITERAL string
+ * "Visa, Mastercard, Amex, domestic debit". That put two artefacts on the same
+ * step in direct contradiction: the acceptance desk showed Amex as a separate
+ * agreement that is not enabled, while the config record one task below listed
+ * Amex as loaded onto the terminals. Derived here so they cannot disagree.
+ */
+export function liveSchemeLabel(merchant: Merchant, state: AcceptanceState): string {
+  const on = schemeLines(merchant).filter((l) => state.live[l.id])
+  // Never "None": an empty acceptance set is not a thing a live merchant has,
+  // so if it ever happens it is a fault to be named rather than a value.
+  return on.length
+    ? on.map((l) => l.label).join(", ")
+    : "No schemes enabled — check the acceptance record"
+}
+
+/**
  * Lines the acquirer wants changed and has NOT yet told Ingenico about.
  *
  * Measured against the last instruction sent, not against `live`. Comparing

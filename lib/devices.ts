@@ -357,7 +357,13 @@ export interface ConfigItem {
   source: "Derived by agent" | "From acquirer" | "Scheme mandated"
 }
 
-export function configProfile(m: Merchant, acquirer: string): ConfigItem[] {
+/**
+ * @param schemes The live acceptance set, as prose. Passed in rather than
+ *   imported: `liveSchemeLabel` lives in `scheme-acceptance`, which imports
+ *   `artifacts`, which imports this module — reaching for it here would close
+ *   a cycle. Callers derive it and hand it over.
+ */
+export function configProfile(m: Merchant, acquirer: string, schemes: string): ConfigItem[] {
   const contactless = m.sector === "Transport" ? "£100 / €50 with transit exemption" : "£100 / €50"
   // Derived from the acquirer's key policy, never asserted: this line stating
   // "Remote" while the shipment is routed through an injection facility would
@@ -367,7 +373,7 @@ export function configProfile(m: Merchant, acquirer: string): ConfigItem[] {
     : "Remote, at first connection"
   return [
     { label: "Acceptance profile", value: `${m.sector} — standard EMV`, source: "Derived by agent" },
-    { label: "Schemes enabled", value: "Visa, Mastercard, Amex, domestic debit", source: "From acquirer" },
+    { label: "Schemes enabled", value: schemes, source: "From acquirer" },
     { label: "Contactless limit", value: contactless, source: "Scheme mandated" },
     { label: "Tipping / gratuity", value: m.sector === "Hospitality" ? "Enabled, prompt after amount" : "Disabled", source: "Derived by agent" },
     { label: "Receipt branding", value: "Merchant logo, acquirer footer", source: "From acquirer" },

@@ -13,6 +13,11 @@ import { MERCHANTS, type Merchant, type StepId } from "@/lib/acquirer-data"
 import { bookPeersByDistance } from "@/lib/comparables"
 import { ACQUIRER } from "@/lib/branding"
 import { MODELS, configProfile, orderLines, type ModelId } from "@/lib/devices"
+// Cyclic with `scheme-acceptance` (it imports `vatFor`/`licenceUnits` from
+// here), but only ever used inside function bodies, so both modules are fully
+// initialised by the time either call runs. Keep it that way: a top-level
+// constant derived from these would evaluate mid-cycle and read `undefined`.
+import { defaultAcceptance, liveSchemeLabel } from "@/lib/scheme-acceptance"
 import { exceptionOnStep } from "@/lib/exceptions"
 import { countryOf, distanceKm } from "@/lib/geo"
 import { riskAssessment, SCORE_THE_RISK_TASK, UNDERWRITING_STEP } from "@/lib/underwriting"
@@ -644,8 +649,22 @@ export function traceFor(
         licenceUnits(merchant).length ? "softPOS licensed" : "no softPOS licence"
       }`
     case "5.2": {
-      const tip = configProfile(merchant, ACQUIRER.name).find((c) => c.label.startsWith("Tipping"))
-      return `config.load → MID/TID bound, tipping=${tip?.value.startsWith("Enabled") ? "on" : "off"}`
+      const art = artifactFor(5, 2, merchant)
+      if (art?.kind !== "records") return null
+      // Quote the artefact's own verdict. A trace that says "loaded" while the
+      // record beneath it reports gaps is the contradiction this step is most
+      // prone to, since the trace is what scrolls past during the run.
+      const settled = art.rows.filter((r) => r.value !== null && r.value !== "").length
+      return `config.load → ${settled}/${art.rows.length} parameters accepted on ${deviceUnits(merchant).length} profiles`
+    }
+    case "5.3": {
+      // Was the literal `build.sign → bundle signed, checksum verified ok`,
+      // which attested to a checksum it never named — and would have gone on
+      // saying "ok" whatever the bundle contained. Quote the real digest.
+      const art = artifactFor(5, 3, merchant)
+      if (art?.kind !== "records") return null
+      const sum = art.rows.find((r) => r.label === "Checksum")?.value
+      return `build.sign → ${deviceUnits(merchant).length} profiles sealed, ${sum ?? "checksum not recorded"}`
     }
     case "6.0": {
       const n = physicalUnits(merchant).length
@@ -733,6 +752,22 @@ const COUNTRY_RULES: Record<string, { locale: string; vat: string }> = {
 
 export function localeFor(merchant: Merchant): string | null {
   return COUNTRY_RULES[countryOf(merchant.location)]?.locale ?? null
+}
+
+/**
+ * The verdict an artefact reached, if it reached one.
+ *
+ * Exists so the task row and the open panel read the SAME sentence: the row
+ * used to name the artefact and nothing else, so "did the load work?" could
+ * only be answered by opening it — which is what prompted this. Centralised
+ * because "which artefact kinds carry a verdict" is one fact, and a second
+ * copy of that list in the row renderer would drift the first time a kind
+ * gained an outcome.
+ */
+export function artifactOutcome(
+  a: Artifact | null | undefined,
+): { state: "ok" | "warn" | "fail"; headline: string; detail: string } | undefined {
+  return a?.kind === "records" ? a.outcome : undefined
 }
 
 export function vatFor(merchant: Merchant): string | null {
@@ -1192,7 +1227,11 @@ export function artifactFor(
       // The same parameter set Ingenico's own deployment workspace renders.
       // Typed a second time here, the two personas would be free to disagree
       // about what was actually loaded onto the merchant's terminals.
-      const params = configProfile(merchant, ACQUIRER.name)
+      const params = configProfile(
+        merchant,
+        ACQUIRER.name,
+        liveSchemeLabel(merchant, defaultAcceptance(merchant)),
+      )
       const units = deviceUnits(merchant)
       // Counted, not asserted. A "load successful" banner typed as a literal
       // would go on claiming success over a record that had lost a parameter.
@@ -1201,7 +1240,7 @@ export function artifactFor(
       return {
         kind: "records",
         title: "Loaded configuration",
-        note: "The parameter set pushed to every profile above. This is the identical record Ingenico works from �� not a summary of it.",
+        note: "The parameter set pushed to every profile above. This is the identical record Ingenico works from — not a summary of it.",
         outcome:
           pending === 0
             ? {

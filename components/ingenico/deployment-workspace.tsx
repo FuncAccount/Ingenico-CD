@@ -23,6 +23,7 @@ import {
   type LinePlan,
   type SourceCandidate,
 } from "@/lib/devices"
+import { defaultAcceptance, liveSchemeLabel } from "@/lib/scheme-acceptance"
 import type { Merchant } from "@/lib/acquirer-data"
 import { cn } from "@/lib/utils"
 
@@ -238,7 +239,13 @@ function DeliveryPicker({ transitDays, cutoff }: { transitDays: number; cutoff: 
 /* -------------------------------------------------------- 5. Configure */
 
 export function ConfigPane({ merchant, acquirer }: { merchant: Merchant; acquirer: string }) {
-  const items = configProfile(merchant, acquirer)
+  // Same derivation the acquirer's own config record uses, so the two personas
+  // cannot report different schemes as loaded onto the same terminals.
+  const items = configProfile(
+    merchant,
+    acquirer,
+    liveSchemeLabel(merchant, defaultAcceptance(merchant)),
+  )
   return (
     <div className="flex flex-col gap-4">
       <Intro
