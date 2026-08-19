@@ -880,36 +880,70 @@ export function artifactFor(
      * Sector-only matching surfaced Málaga and Milan as the closest
      * comparators for a Manchester applicant — same trade, but nothing an
      * underwriter can read across, because acquiring economics, scheme mix
-     * and regulator all track the country. Home market first, then true
-     * distance, and the distance is PRINTED so the ranking can be checked
-     * rather than taken on trust. */
+     * and regulator all track the country.
+     *
+     * Sorting home-first was NOT enough on its own. A fixed `.slice(0, 5)` is
+     * a target COUNT, so once the two UK peers were listed it kept taking the
+     * next-nearest merchant regardless of country and padded the table out
+     * with Galway, Bergen and Innsbruck — 1,390 km from an Edinburgh
+     * applicant. The note then rationalised that as "your book holds no
+     * closer match", which was false: the closer matches were sitting in the
+     * rows above. Cross-border is a FALLBACK for an empty home market, never
+     * filler to reach a row count. Same rule as `comparablesFor` in
+     * lib/comparables.ts, which the submit screen uses. */
     case "1.1": {
       const home = countryOf(merchant.location)
-      const peers = MERCHANTS.filter((m) => m.sector === merchant.sector && m.id !== merchant.id)
-        .map((m) => ({ m, km: distanceKm(merchant.location, m.location) }))
-        .sort((a, b) => {
-          const aHome = countryOf(a.m.location) === home
-          const bHome = countryOf(b.m.location) === home
-          if (aHome !== bHome) return aHome ? -1 : 1
-          return a.km - b.km
-        })
-        .slice(0, 5)
-      const homeCount = peers.filter((p) => countryOf(p.m.location) === home).length
+      const sameSector = MERCHANTS.filter(
+        (m) => m.sector === merchant.sector && m.id !== merchant.id,
+      ).map((m) => ({ m, km: distanceKm(merchant.location, m.location) }))
+
+      const local = sameSector
+        .filter((p) => countryOf(p.m.location) === home)
+        .sort((a, b) => a.km - b.km)
+      const crossBorderOnly = local.length === 0
+      const ranked = crossBorderOnly
+        ? [...sameSector].sort((a, b) => a.km - b.km)
+        : local
+      const peers = ranked.slice(0, 5)
+
+      /* Three merchants are the only one of their sector in the whole book
+       * (Health & Fitness, Leisure, Automotive). They used to render an EMPTY
+       * table under a note asserting "every comparator here is cross-border" —
+       * a description of rows that do not exist. An absence is not a result:
+       * name it instead of drawing an empty frame. */
+      if (peers.length === 0) {
+        return {
+          kind: "records",
+          title: "Look-alike merchants in your book",
+          note: `Nothing to compare against — this is the only ${merchant.sector.toLowerCase()} merchant in your book. Size the kit from the site survey rather than from a comparator.`,
+          rows: [
+            {
+              label: `Other ${merchant.sector.toLowerCase()} merchants`,
+              value: null,
+              source: `none in ${home} or any other market you hold`,
+            },
+          ],
+        }
+      }
+
       return {
         kind: "table",
         title: `Look-alike merchants in your book (${peers.length})`,
-        note:
-          homeCount === peers.length
-            ? `Same sector, ranked by distance from ${merchant.location}. Every comparator is in your home market (${home}).`
-            : homeCount === 0
-              ? `Same sector, ranked by distance from ${merchant.location}. Your book holds no ${merchant.sector.toLowerCase()} merchant in ${home}, so every comparator here is cross-border — read the figures with that in mind.`
-              : `Same sector, ranked by distance from ${merchant.location}. ${homeCount} of ${peers.length} ${homeCount === 1 ? "is" : "are"} in your home market (${home}); the rest are cross-border and are shown because your book holds no closer match.`,
+        note: crossBorderOnly
+          ? `Same sector, ranked by distance from ${merchant.location}. Your book holds no ${merchant.sector.toLowerCase()} merchant in ${home}, so every comparator here is cross-border — read the figures with that in mind.`
+          : // State the size of the home-market pool, so a short list reads as
+            // "this is all your book holds" rather than a broken filter.
+            `Same sector in your home market (${home}), ranked by distance from ${merchant.location}. ${
+              local.length > peers.length
+                ? `Closest ${peers.length} of ${local.length}.`
+                : `Your book holds ${local.length}.`
+            } Cross-border merchants are excluded — interchange, scheme mix and regulator all differ, so they do not read across.`,
         table: {
           columns: ["Merchant", "Location", "Distance", "Volume", "Devices"],
           rows: peers.map(({ m, km }) => [
             m.name,
             m.location,
-            countryOf(m.location) === home ? `${km} km` : `${km} km · cross-border`,
+            crossBorderOnly ? `${km} km · cross-border` : `${km} km`,
             m.size,
             m.terminals,
           ]),

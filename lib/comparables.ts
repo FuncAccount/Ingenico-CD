@@ -1,4 +1,5 @@
 import { MERCHANTS, type Merchant } from "./acquirer-data"
+import { countryOf } from "./geo"
 
 /**
  * Lookalike merchants for the submit screen.
@@ -92,12 +93,6 @@ export function volumeBandsFor(market: string): string[] {
     if (hi === Infinity) return `Over ${c}${unit(lo)} / yr`
     return `${c}${unit(lo)} – ${c}${unit(hi)} / yr`
   })
-}
-
-/** "Manchester, UK" → "UK". */
-export function countryOf(location: string): string {
-  const parts = location.split(",")
-  return (parts[parts.length - 1] ?? "").trim()
 }
 
 /** "£2.4m / yr" → 2.4 ; "£680k / yr" → 0.68 ; "kr 22m / yr" → 22 */
