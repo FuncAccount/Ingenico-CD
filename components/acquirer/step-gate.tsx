@@ -14,6 +14,7 @@ import {
   Store,
 } from "lucide-react"
 import type { Merchant, StepId } from "@/lib/acquirer-data"
+import { physicalUnits } from "@/lib/artifacts"
 import { decisionAtStep } from "@/lib/decisions"
 import { useDecisions } from "@/components/acquirer/decisions-provider"
 import {
@@ -22,11 +23,11 @@ import {
   type HandoffState,
   type IngenicoWaitState,
   type MerchantChaseState,
-  STEP_HANDOFFS,
   addWorkingDays,
   blockingIndex,
   settledState,
   draftEmail,
+  handoffsFor,
   fmtDate,
   fmtDateTime,
   handoffKey,
@@ -62,7 +63,9 @@ export function StepGate({
   onStates,
   precondition = null,
 }: Props) {
-  const list = STEP_HANDOFFS[step]
+  // Keyed by step AND by what was ordered: steps 7 and 8 otherwise promise a
+  // consignment and a boxed terminal to a merchant who bought only software.
+  const list = handoffsFor(step, physicalUnits(merchant).length === 0)
 
   // A step the journey has already passed is settled by fact, so its handoffs
   // default to done. Without this, completed history renders as an outstanding

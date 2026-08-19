@@ -31,7 +31,7 @@ import {
   type StepId,
 } from "@/lib/acquirer-data"
 import { cn } from "@/lib/utils"
-import { artifactFor, defaultBasket, taskSkipped, traceFor } from "@/lib/artifacts"
+import { artifactFor, defaultBasket, taskDetail, taskSkipped, traceFor } from "@/lib/artifacts"
 import {
   ArtifactInspector,
   type OrderDraft,
@@ -440,6 +440,11 @@ function StepCockpit({
 
   const runningTaskIndex = status === "running" ? completed : -1
 
+  // Counted from the same predicate the task rows render, so the header and
+  // the list cannot disagree about how many tasks this order actually has.
+  const skippedCount = step.tasks.filter((_, i) => taskSkipped(step.id, i, merchant)).length
+  const runnableCount = step.tasks.length - skippedCount
+
   // What stops the acquirer's own decision on THIS step. Different steps are
   // blocked by different things, so this is computed per step rather than by
   // one shared "is everything fine" flag that could not name its own blocker.
@@ -530,7 +535,9 @@ function StepCockpit({
               "inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium",
               status === "running"
                 ? "border-primary/40 bg-primary/10 text-primary"
-                : status === "done"
+                : // A step where nothing applied is not a success. Green here
+                  // would read as work delivered on an order that had none.
+                  status === "done" && runnableCount > 0
                   ? "border-success/30 bg-success/10 text-success"
                   : "border-border bg-secondary text-muted-foreground",
             )}
@@ -544,7 +551,7 @@ function StepCockpit({
               <span
                 className={cn(
                   "h-2 w-2 rounded-full",
-                  status === "done"
+                  status === "done" && runnableCount > 0
                     ? "bg-success"
                     : blocker
                       ? "bg-destructive"
@@ -555,7 +562,9 @@ function StepCockpit({
             {status === "running"
               ? "Agent working"
               : status === "done"
-                ? "Complete"
+                ? runnableCount === 0
+                  ? "Not applicable"
+                  : "Complete"
                 : // "Ready" on a blocked step is a false all-clear: this is the
                   // one step that cannot be run to completion.
                   blocker
@@ -677,8 +686,25 @@ function StepCockpit({
             </button>
           )}
         </div>
+        {/* The denominator counts tasks that CAN run here. On a software-only
+            order the ship step has four tasks and none of them apply, so a
+            plain 4/4 would report a completed step that never happened —
+            the skipped ones are named separately rather than absorbed. */}
         <span className="font-mono text-[11px] text-muted-foreground tabular-nums">
-          {Math.min(completed, step.tasks.length)}/{step.tasks.length} tasks
+          {skippedCount > 0 ? (
+            runnableCount === 0 ? (
+              <>0 tasks apply · {skippedCount} skipped</>
+            ) : (
+              <>
+                {Math.min(completed, step.tasks.length) - skippedCount}/{runnableCount} tasks ·{" "}
+                {skippedCount} skipped
+              </>
+            )
+          ) : (
+            <>
+              {Math.min(completed, step.tasks.length)}/{step.tasks.length} tasks
+            </>
+          )}
         </span>
       </div>
 
@@ -746,7 +772,7 @@ function StepCockpit({
                     {task.label}
                   </p>
                   <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
-                    {task.detail}
+                    {taskDetail(step.id, i, merchant, task.detail)}
                   </p>
                   {isFailed && (
                     <p className="mt-1 text-xs font-medium leading-relaxed text-destructive">

@@ -19,7 +19,8 @@ import {
   type Merchant,
   type StepId,
 } from "./acquirer-data"
-import { ownerOf, statusPossibleAt, STEP_HANDOFFS, type Party } from "./handoffs"
+import { handoffsFor, ownerOf, statusPossibleAt, STEP_HANDOFFS, type Party } from "./handoffs"
+import { physicalUnits } from "./artifacts"
 import { applyDecisions, decisionAtStep, type Decisions } from "./decisions"
 
 // ---------------------------------------------------------------------------
@@ -393,7 +394,9 @@ function askFor(m: Merchant, party: Party | null): string {
       ? "Live and reconciled. Nothing outstanding."
       : "Signed off. The agent is progressing to the next step."
   }
-  const h = STEP_HANDOFFS[m.currentStep].find((x) => x.party === party)
+  // Order-aware, so Ingenico's own lane does not read "Logistics packs the
+  // estate" for a merchant whose entire order is a softPOS licence.
+  const h = handoffsFor(m.currentStep, physicalUnits(m).length === 0).find((x) => x.party === party)
   return h?.ask ?? stepById(m.currentStep).blurb
 }
 

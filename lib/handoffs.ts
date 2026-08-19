@@ -160,6 +160,51 @@ export const STEP_HANDOFFS: Record<StepId, Handoff[]> = {
   9: [],
 }
 
+/**
+ * The step-7 and step-8 handoffs for an order with no hardware.
+ *
+ * `STEP_HANDOFFS` is keyed by step alone, which is right for eight of the nine
+ * steps but wrong for the two that assume a parcel: a software-only merchant
+ * was told "Logistics packs the estate and books the carrier" and "Plug in the
+ * terminals", neither of which will ever happen. The party does not change —
+ * Ingenico still issues the licence, the merchant still activates — so this
+ * substitutes the ASK, leaving `ownerOf` and `statusPossibleAt` untouched.
+ */
+const SOFTWARE_ONLY_HANDOFFS: Partial<Record<StepId, Handoff[]>> = {
+  7: [
+    {
+      party: "ingenico",
+      ask: "Licensing issues the softPOS entitlement to the merchant's account.",
+      team: "Ingenico licensing",
+      slaDays: 1,
+      returns: "An entitlement reference; there is no consignment to track",
+    },
+  ],
+  8: [
+    {
+      party: "merchant",
+      ask: "Install the app and complete activation.",
+      subject: "Your softPOS licence is ready — how to start taking payments",
+      items: [
+        "Install the payment app on a supported phone",
+        "Sign in with the activation code emailed to you",
+        "Run the £0.01 test payment when prompted",
+      ],
+      chaseAfterDays: 2,
+      portalAction: "completes activation in the app",
+    },
+  ],
+}
+
+/**
+ * The handoffs for a step ON A GIVEN ORDER. Prefer this over reading
+ * `STEP_HANDOFFS` directly anywhere a merchant is in hand.
+ */
+export function handoffsFor(step: StepId, softwareOnly: boolean): Handoff[] {
+  if (softwareOnly) return SOFTWARE_ONLY_HANDOFFS[step] ?? STEP_HANDOFFS[step]
+  return STEP_HANDOFFS[step]
+}
+
 /** The party a step is waiting on, before anyone has done anything.
  *
  *  Deliberately NOT just the first handoff: step 3 opens with an Ingenico

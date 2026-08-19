@@ -551,6 +551,12 @@ export function traceFor(
       if (taskIndex === 2) return `dispatch.confirm → ${n} parcels in transit`
       return `track.notify → merchant emailed tracking for ${n} parcel(s)`
     }
+    case "8.0":
+      // "delivery confirmed" is a carrier event, and no carrier was involved
+      // on a software-only order. The trigger has to be named for what it was.
+      return physicalUnits(merchant).length === 0
+        ? "install.detect → licence issued, guide sent"
+        : "install.detect → delivery confirmed, guide sent"
     case "8.1":
       return `guide.run → locale=${localeFor(merchant) ?? "not in the rules table"}, ${
         deviceUnits(merchant).length
@@ -662,6 +668,29 @@ export function taskSkipped(stepId: StepId, taskIndex: number, merchant: Merchan
   // and the certificate are not, and a softPOS licence takes both.
   if (stepId === 6) return taskIndex === 0 || taskIndex === 2
   return false
+}
+
+/**
+ * The step-08 task descriptions for an order with no hardware.
+ *
+ * The pipeline copy is written for the common case and says "terminals" three
+ * times. On a software-only order those sentences describe work on objects the
+ * merchant never received — and unlike the ship step these tasks DO run, so
+ * they cannot simply be skipped. Only the wording is wrong, so only the
+ * wording is replaced.
+ */
+const SOFTWARE_ONLY_DETAIL: Partial<Record<string, string>> = {
+  "8.0": "Notices the licence issued and reaches out to the merchant.",
+  "8.1": "Walks the merchant through install and sign-in step by step.",
+  "8.2": "Activates the licence against the live host.",
+  "8.3": "Runs a €0.01 auth to prove the merchant's phone can transact.",
+}
+
+/** The task description for a task ON A GIVEN ORDER. Falls back to the
+ *  pipeline's own copy, which is right for every hardware order. */
+export function taskDetail(stepId: StepId, taskIndex: number, merchant: Merchant, fallback: string): string {
+  if (physicalUnits(merchant).length > 0) return fallback
+  return SOFTWARE_ONLY_DETAIL[`${stepId}.${taskIndex}`] ?? fallback
 }
 
 /** Resolve the artefact a given task produced. Returning null is a real
