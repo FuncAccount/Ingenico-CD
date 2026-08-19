@@ -10,6 +10,7 @@
 // every downstream figure moves, because none of them are typed by hand.
 
 import { MERCHANTS, type Merchant, type StepId } from "@/lib/acquirer-data"
+import { bookPeersByDistance } from "@/lib/comparables"
 import { ACQUIRER } from "@/lib/branding"
 import { MODELS, configProfile, orderLines, type ModelId } from "@/lib/devices"
 import { exceptionOnStep } from "@/lib/exceptions"
@@ -540,14 +541,31 @@ export function traceFor(
     case "1.0":
       return `intake.parse → sector=${merchant.sector} region=${merchant.location.split(", ").pop()} volume_band=${merchant.size}`
     case "1.1": {
-      const peers = MERCHANTS.filter((m) => m.sector === merchant.sector && m.id !== merchant.id)
-      const counts = peers.map((m) => m.terminalCount).sort((a, b) => a - b)
+      // Reads the SAME selection the table renders. Counting every merchant of
+      // this sector in any country made the trace contradict the table above
+      // it — and a trace line exists to let someone check the result, so a
+      // trace that disagrees with its own artifact is worse than none.
+      const { peers, home, crossBorderOnly } = bookPeersByDistance(
+        merchant.location,
+        merchant.sector,
+        distanceKm,
+      )
+      const counts = peers.map((p) => p.m.terminalCount).sort((a, b) => a - b)
       const median = counts.length
         ? counts.length % 2
           ? counts[(counts.length - 1) / 2]
           : (counts[counts.length / 2 - 1] + counts[counts.length / 2]) / 2
         : null
-      return `match.similar → ${peers.length} ${merchant.sector.toLowerCase()} merchants${
+      // `crossBorderOnly` is also true when there are no peers AT ALL, so
+      // reading it directly printed "0 merchants, cross-border" — naming a
+      // scope for rows that do not exist. No peers is its own state.
+      const scope =
+        peers.length === 0
+          ? "no comparator in any market"
+          : crossBorderOnly
+            ? "cross-border"
+            : `geo=${home}`
+      return `match.similar → ${peers.length} live ${merchant.sector.toLowerCase()} merchants, ${scope}${
         median === null ? ", no median available" : `, median ${median} terminals`
       }`
     }
@@ -778,7 +796,7 @@ export function taskSkipped(stepId: StepId, taskIndex: number, merchant: Merchan
  *
  * The pipeline copy is written for the common case and says "terminals" three
  * times. On a software-only order those sentences describe work on objects the
- * merchant never received — and unlike the ship step these tasks DO run, so
+ * merchant never received �� and unlike the ship step these tasks DO run, so
  * they cannot simply be skipped. Only the wording is wrong, so only the
  * wording is replaced.
  */
@@ -890,21 +908,21 @@ export function artifactFor(
      * closer match", which was false: the closer matches were sitting in the
      * rows above. Cross-border is a FALLBACK for an empty home market, never
      * filler to reach a row count. Same rule as `comparablesFor` in
-     * lib/comparables.ts, which the submit screen uses. */
+     * lib/comparables.ts, which the submit screen uses.
+     *
+     * And the ranking still could not save it while the POPULATION was wrong.
+     * This searched `MERCHANTS` — the 19 in-flight applications — where 14 of
+     * the 19 were the only merchant of their sector in their country, so a
+     * Bergen retailer had no Norwegian peer to find. It now searches
+     * `LIVE_BOOK`, the acquirer's live estate, which is both deep enough to
+     * answer locally and the population actually being described: merchants
+     * running this kit TODAY, which an unapproved application is not. */
     case "1.1": {
-      const home = countryOf(merchant.location)
-      const sameSector = MERCHANTS.filter(
-        (m) => m.sector === merchant.sector && m.id !== merchant.id,
-      ).map((m) => ({ m, km: distanceKm(merchant.location, m.location) }))
-
-      const local = sameSector
-        .filter((p) => countryOf(p.m.location) === home)
-        .sort((a, b) => a.km - b.km)
-      const crossBorderOnly = local.length === 0
-      const ranked = crossBorderOnly
-        ? [...sameSector].sort((a, b) => a.km - b.km)
-        : local
-      const peers = ranked.slice(0, 5)
+      const { home, local, peers, crossBorderOnly } = bookPeersByDistance(
+        merchant.location,
+        merchant.sector,
+        distanceKm,
+      )
 
       /* Three merchants are the only one of their sector in the whole book
        * (Health & Fitness, Leisure, Automotive). They used to render an EMPTY
@@ -930,10 +948,10 @@ export function artifactFor(
         kind: "table",
         title: `Look-alike merchants in your book (${peers.length})`,
         note: crossBorderOnly
-          ? `Same sector, ranked by distance from ${merchant.location}. Your book holds no ${merchant.sector.toLowerCase()} merchant in ${home}, so every comparator here is cross-border — read the figures with that in mind.`
+          ? `Live ${merchant.sector.toLowerCase()} merchants, ranked by distance from ${merchant.location}. Your book holds none in ${home}, so every comparator here is cross-border — read the figures with that in mind.`
           : // State the size of the home-market pool, so a short list reads as
             // "this is all your book holds" rather than a broken filter.
-            `Same sector in your home market (${home}), ranked by distance from ${merchant.location}. ${
+            `Live ${merchant.sector.toLowerCase()} merchants in ${home}, ranked by distance from ${merchant.location}. ${
               local.length > peers.length
                 ? `Closest ${peers.length} of ${local.length}.`
                 : `Your book holds ${local.length}.`

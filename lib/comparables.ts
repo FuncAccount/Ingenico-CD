@@ -1,4 +1,4 @@
-import { MERCHANTS, type Merchant } from "./acquirer-data"
+import { LIVE_BOOK, type BookMerchant } from "./book"
 import { countryOf } from "./geo"
 
 /**
@@ -116,7 +116,7 @@ function bandMidpoint(band: string): number {
 
 export interface ComparableSet {
   /** Same country AND same sector — what the acquirer actually asked for. */
-  matches: Merchant[]
+  matches: BookMerchant[]
   /**
    * True when `matches` came from outside the requested market because the
    * book holds no local merchant in that sector. Never silently true: the UI
@@ -141,7 +141,7 @@ export function comparablesFor(
   sector: string,
   country: string,
   volumeBand?: string,
-  book: Merchant[] = MERCHANTS,
+  book: BookMerchant[] = LIVE_BOOK,
 ): ComparableSet {
   if (!sector || !country) {
     return { matches: [], foreign: false, country, foreignCountries: [] }
@@ -151,7 +151,7 @@ export function comparablesFor(
   const local = inSector.filter((m) => countryOf(m.location) === country)
 
   const target = volumeBand ? bandMidpoint(volumeBand) : NaN
-  const rank = (list: Merchant[]) =>
+  const rank = (list: BookMerchant[]) =>
     Number.isFinite(target)
       ? [...list].sort(
           (a, b) =>
@@ -191,4 +191,59 @@ export function comparablesFor(
 export function recommendedKit(set: ComparableSet): string | null {
   const top = set.matches[0]
   return top ? top.terminals : null
+}
+
+// ---------------------------------------------------------------------------
+// Distance-ranked peers (the journey view)
+// ---------------------------------------------------------------------------
+
+export interface DistancePeer {
+  m: BookMerchant
+  km: number
+}
+
+export interface BookPeers {
+  /** Country code of the applicant. */
+  home: string
+  /** Every same-sector live merchant in the applicant's own country. */
+  local: DistancePeer[]
+  /** The list to show, capped. Local when there is one, else the fallback. */
+  peers: DistancePeer[]
+  /** True only when the home market holds nothing in this sector. */
+  crossBorderOnly: boolean
+}
+
+/**
+ * Same rule as `comparablesFor`, ranked by real distance instead of volume
+ * band — the journey view knows the applicant's actual address, the submit
+ * form only knows a country and a band.
+ *
+ * Shared rather than reimplemented because the look-alike TABLE and the
+ * `match.similar` TRACE LINE printed beneath it are two statements about one
+ * selection. The trace used to count every merchant of that sector in any
+ * country, so it announced "2 retail merchants" under a table headed "your
+ * book holds 3". One selector, one set of numbers.
+ */
+export function bookPeersByDistance(
+  location: string,
+  sector: string,
+  distanceKm: (a: string, b: string) => number,
+  limit = 5,
+  book: BookMerchant[] = LIVE_BOOK,
+): BookPeers {
+  const home = countryOf(location)
+  const sameSector = book
+    .filter((m) => m.sector === sector)
+    .map((m) => ({ m, km: distanceKm(location, m.location) }))
+
+  const local = sameSector
+    .filter((p) => countryOf(p.m.location) === home)
+    .sort((a, b) => a.km - b.km)
+
+  const crossBorderOnly = local.length === 0
+  const ranked = crossBorderOnly
+    ? [...sameSector].sort((a, b) => a.km - b.km)
+    : local
+
+  return { home, local, peers: ranked.slice(0, limit), crossBorderOnly }
 }
