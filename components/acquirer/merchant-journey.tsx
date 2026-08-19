@@ -381,6 +381,47 @@ function StepCockpit({
     requestedIso: null,
   }))
 
+  // What this stage can WRITE, derived from the artefacts it actually
+  // produces rather than a hardcoded step number. `theme`, `edge` and `draft`
+  // are hoisted here so later steps can read them, which means a reset has to
+  // know which stage OWNS each one — and a hardcoded map would quietly go
+  // stale the moment an artefact moved to a different step, leaving state
+  // behind that the button claimed to have cleared.
+  const stageWrites = useMemo(() => {
+    const kinds = new Set(
+      step.tasks.map((_, i) => artifactFor(step.id, i, merchant)?.kind).filter(Boolean),
+    )
+    return {
+      draft:
+        kinds.has("basket") ||
+        kinds.has("stock") ||
+        kinds.has("delivery") ||
+        kinds.has("pricing"),
+      theme: kinds.has("brand"),
+      edge: kinds.has("edge"),
+    }
+  }, [step.id, step.tasks, merchant])
+
+  const stagePrefix = `${merchant.id}:${step.id}:`
+
+  // Is there anything to reset? Derived by comparing against the pristine
+  // values rather than tracked with a "touched" flag, which would have to be
+  // cleared in every path that resets and goes wrong the first time one is
+  // missed. Nothing to undo means the control does not offer itself.
+  const stageDirty =
+    completed !== initialProgress ||
+    Object.keys(handoffs).some((k) => k.startsWith(stagePrefix)) ||
+    (stageWrites.edge && edge !== undefined) ||
+    (stageWrites.theme &&
+      JSON.stringify(theme) !== JSON.stringify(defaultTheme(merchant))) ||
+    (stageWrites.draft &&
+      JSON.stringify(draft) !==
+        JSON.stringify({
+          lines: defaultBasket(merchant),
+          serviceId: "standard",
+          requestedIso: null,
+        }))
+
   // Reset the run whenever the focused step (or merchant) changes.
   useEffect(() => {
     if (timer.current) clearTimeout(timer.current)
@@ -440,10 +481,49 @@ function StepCockpit({
   function pause() {
     setStatus("idle")
   }
+  /** Re-run the trace from the first task. PROGRESS ONLY — a chase already
+   *  sent, a palette already chosen and a basket already edited all stand,
+   *  because watching the agent work again is not the same as undoing it. */
   function replay() {
     if (timer.current) clearTimeout(timer.current)
     setCompleted(0)
     setStatus("running")
+  }
+
+  /** Put the stage back to how it was before anyone touched it.
+   *
+   *  This used to be the SAME CALL as `replay`, so the two buttons did one
+   *  thing under two names and the stage could never be returned to a clean
+   *  state — handoffs, the determination, the palette and the basket all
+   *  survived, so a second run showed the leftovers of the first rather than
+   *  the real first-run behaviour.
+   *
+   *  Lands IDLE rather than running: the point is to get back to the state
+   *  you can press Play from, and auto-running would immediately spend the
+   *  clean state it just restored. */
+  function restart() {
+    if (timer.current) clearTimeout(timer.current)
+    setCompleted(initialProgress)
+    setStatus(state === "done" ? "done" : "idle")
+    setSelected(0)
+
+    // Only THIS stage's handoffs. The map is shared across every step, so
+    // clearing all of it would silently undo a chase raised on another one.
+    setHandoffs((prev) => {
+      const next: Record<string, HandoffState> = {}
+      for (const [k, v] of Object.entries(prev)) {
+        if (!k.startsWith(stagePrefix)) next[k] = v
+      }
+      return next
+    })
+
+    // Only the outputs this stage owns — resetting the determination from the
+    // Order stage would discard an underwriting decision made two steps back.
+    if (stageWrites.draft) {
+      setDraft({ lines: defaultBasket(merchant), serviceId: "standard", requestedIso: null })
+    }
+    if (stageWrites.theme) setTheme(defaultTheme(merchant))
+    if (stageWrites.edge) setEdge(undefined)
   }
 
   const acquirerActionable =
@@ -740,13 +820,17 @@ function StepCockpit({
                   : "Play agent run"}
             </button>
           )}
-          {completed > 0 && status !== "running" && (
+          {/* Gated on "is there anything to undo", not on progress alone: a
+              chase raised before the run was played is still a change to the
+              stage, and the control has to be reachable to clear it. */}
+          {stageDirty && status !== "running" && (
             <button
-              onClick={replay}
+              onClick={restart}
+              title="Clear this stage's progress, handoffs and saved output, back to its untouched state"
               className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
             >
               <RotateCcw className="h-3.5 w-3.5" />
-              Restart
+              Reset stage
             </button>
           )}
         </div>
