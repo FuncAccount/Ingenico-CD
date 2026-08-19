@@ -70,12 +70,17 @@ export function useLiveMerchant(merchant: Merchant): Merchant {
     const uw = merchant.underwriting
     if (!uw?.documentsOutstanding?.length) return merchant
     const supplied = uw.documentsOutstanding.length
-    const total = 6
+    // Read off the merchant's own summary ("4 of 6 documents parsed") rather
+    // than written as 6, so the sentence cannot end up claiming a total the
+    // file never had.
+    const total = Number(uw.documents.match(/of (\d+)/)?.[1] ?? NaN)
     return {
       ...merchant,
       underwriting: {
         ...uw,
-        documents: `${total} of ${total} documents parsed — none outstanding`,
+        documents: Number.isFinite(total)
+          ? `${total} of ${total} documents parsed — none outstanding`
+          : "All documents parsed — none outstanding",
         documentsOutstanding: [],
         // The score appears only now, because only now is there a complete
         // file to score. It is NOT the 22 the record used to assert: the

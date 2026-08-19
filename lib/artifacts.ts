@@ -551,6 +551,17 @@ export function traceFor(
         median === null ? ", no median available" : `, median ${median} terminals`
       }`
     }
+    // Derived for the same reason as the risk line below: the pipeline default
+    // reads "6 docs, 18 fields, 0 inconsistencies ok" — a clean bill of health
+    // for a file that is two documents short, printed one line above the halt.
+    case "2.2": {
+      const missing = merchant.underwriting?.documentsOutstanding?.length ?? 0
+      if (missing === 0) return null
+      const parsed = Number(merchant.underwriting?.documents.match(/^(\d+)/)?.[1] ?? NaN)
+      const total = Number(merchant.underwriting?.documents.match(/of (\d+)/)?.[1] ?? NaN)
+      const counts = Number.isFinite(parsed) && Number.isFinite(total) ? `${parsed}/${total}` : "partial"
+      return `docai.parse → ${counts} docs parsed, ${missing} missing — set incomplete`
+    }
     // Derived, not typed. The static line said "18 / 100" and would have gone
     // on saying it regardless of what the factor table underneath computed.
     case "2.3": {

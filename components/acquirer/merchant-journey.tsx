@@ -48,6 +48,7 @@ import { StepGate } from "@/components/acquirer/step-gate"
 import { ownerOf, waitingOn, type HandoffState } from "@/lib/handoffs"
 import { blockers, checkBrand, defaultTheme, type BrandTheme } from "@/lib/branding"
 import { edgeResolved, outstandingDocuments, type EdgeResolution } from "@/lib/underwriting"
+import { useLiveMerchant } from "@/components/acquirer/demo-provider"
 import { exceptionDetailMissing, exceptionOnStep } from "@/lib/exceptions"
 import { ExceptionPanel } from "@/components/acquirer/exception-panel"
 
@@ -62,7 +63,11 @@ export function MerchantJourney({
   onSelectMerchant: (m: Merchant) => void
   onOpenSignoff: (m: Merchant) => void
 }) {
-  const current = merchant ?? MERCHANTS[3]
+  // One choke point. Every child of this screen reads `current`, so applying
+  // the simulated arrival here means the risk panel, the sign-off gate, the
+  // trace and the timeline all move together — none of them can be left
+  // asserting the file is still incomplete after the documents land.
+  const current = useLiveMerchant(merchant ?? MERCHANTS[3])
   const [pickerOpen, setPickerOpen] = useState(false)
   const [focusStep, setFocusStep] = useState<StepId>(current.currentStep)
 
@@ -456,6 +461,9 @@ function StepCockpit({
   // Read out of this step's own artefacts. A step can finish every task and
   // still not have passed — the run is what turns the finding up.
   const finding = useMemo(() => blockingFinding(step.id, merchant), [step.id, merchant])
+  // A halted task ran and produced nothing. Counting it as complete gave
+  // "5/5 tasks" directly above a panel saying the run had stopped.
+  const haltedCount = finding?.taskIndex !== undefined ? 1 : 0
 
   // What stops the acquirer's own decision on THIS step. Different steps are
   // blocked by different things, so this is computed per step rather than by
@@ -758,7 +766,8 @@ function StepCockpit({
             )
           ) : (
             <>
-              {Math.min(completed, step.tasks.length)}/{step.tasks.length} tasks
+              {Math.min(completed, step.tasks.length) - haltedCount}/{step.tasks.length} tasks
+              {haltedCount > 0 && " · 1 halted"}
             </>
           )}
         </span>

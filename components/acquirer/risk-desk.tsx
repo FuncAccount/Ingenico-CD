@@ -8,6 +8,7 @@
 // paragraph of text.
 
 import { AlertTriangle, Minus, Plus } from "lucide-react"
+import { DemoSupplyDocuments } from "@/components/acquirer/demo-control"
 import { cn } from "@/lib/utils"
 import type { Merchant } from "@/lib/acquirer-data"
 import {
@@ -72,6 +73,8 @@ export function RiskBreakdown({ merchant }: { merchant: Merchant }) {
           combined into a score here, because a total assembled from a partial file would read as a
           measurement of the whole one.
         </p>
+
+        <DemoSupplyDocuments merchant={merchant} />
       </div>
     )
   }
@@ -186,6 +189,11 @@ export function RiskBreakdown({ merchant }: { merchant: Merchant }) {
           </p>
         )}
       </div>
+
+      {/* Present here too. A score reached via the simulation must keep saying
+          so, and the presenter needs a way back to the stop — without this the
+          lever is one-way and the walkthrough cannot be run twice. */}
+      <DemoSupplyDocuments merchant={merchant} />
     </div>
   )
 }

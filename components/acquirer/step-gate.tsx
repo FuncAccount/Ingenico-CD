@@ -35,6 +35,7 @@ import {
   isResolved,
   workingDaysBetween,
 } from "@/lib/handoffs"
+import { DemoInbound } from "@/components/acquirer/demo-control"
 import { cn } from "@/lib/utils"
 
 const PARTY_META = {
@@ -616,14 +617,16 @@ function MerchantPanel({
       )}
 
       {/* Inbound half of the loop: the merchant answers in the portal, and it
-          lands here without anyone re-keying it. */}
-      <button
-        onClick={() => onChange({ ...state, receivedIso: new Date().toISOString() })}
-        className="inline-flex items-center gap-2 rounded-lg border border-dashed border-border bg-transparent px-3 py-1.5 text-[11px] font-medium text-muted-foreground transition-colors hover:border-foreground/30 hover:text-foreground"
-      >
-        <Inbox className="h-3.5 w-3.5" />
-        Simulate inbound: merchant {handoff.portalAction}
-      </button>
+          lands here without anyone re-keying it.
+
+          Styled as a demo control rather than a product one. It fabricates an
+          event that never happened, and previously wore the same dashed
+          border as the interface around it — which made a conjured reply look
+          like a received one. */}
+      <DemoInbound
+        label={`Simulate inbound: merchant ${handoff.portalAction}`}
+        onTrigger={() => onChange({ ...state, receivedIso: new Date().toISOString() })}
+      />
     </div>
   )
 }
