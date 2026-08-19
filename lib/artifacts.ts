@@ -417,6 +417,18 @@ export function traceFor(
       return merchant.underwriting?.edgeCase
         ? "policy.flag → 1 item escalated, awaiting your determination"
         : "policy.flag → no items outside policy"
+    /* Counted off the artefact this task actually produces. The typed line
+     * said "14/14 fields populated, 0 gaps" while the record beneath it
+     * carried two deliberate gaps — the trace was contradicting its own
+     * artefact, and claiming completeness is the worst thing to be wrong
+     * about on a form somebody is about to sign. */
+    case "1.3": {
+      const art = artifactFor(1, 3, merchant)
+      if (art?.kind !== "records") return null
+      const filled = art.rows.filter((r) => r.value !== null).length
+      const gaps = art.rows.length - filled
+      return `application.draft → ${filled}/${art.rows.length} fields populated, ${gaps} awaiting downstream`
+    }
     case "1.2":
     case "3.0":
       return `order.build → ${active.map((l) => `${l.qty}× ${l.name}`).join(", ")}`
@@ -442,14 +454,24 @@ export function traceFor(
 /* Localisation follows the merchant's country, so it is derived from the
  * address rather than typed per merchant — a hard-coded "de-DE, VAT 19%" was
  * being shown for merchants in Ireland and Norway. */
+/* Keyed on the ISO code the addresses actually end in ("Berlin, DE"), not on
+ * full country names. The table was written against "Germany" and every
+ * merchant location ends in a code, so EVERY lookup missed and all 24
+ * merchants silently rendered a blank locale and VAT treatment. A missing
+ * entry is meant to be the rare honest gap, not the universal case. */
 const COUNTRY_RULES: Record<string, { locale: string; vat: string }> = {
-  Germany: { locale: "de-DE", vat: "VAT 19% (USt.)" },
-  Ireland: { locale: "en-IE", vat: "VAT 23%" },
-  Spain: { locale: "es-ES", vat: "IVA 21%" },
-  Norway: { locale: "nb-NO", vat: "MVA 25%" },
-  Netherlands: { locale: "nl-NL", vat: "BTW 21%" },
-  Italy: { locale: "it-IT", vat: "IVA 22%" },
-  France: { locale: "fr-FR", vat: "TVA 20%" },
+  UK: { locale: "en-GB", vat: "VAT 20%" },
+  IE: { locale: "en-IE", vat: "VAT 23%" },
+  DE: { locale: "de-DE", vat: "VAT 19% (USt.)" },
+  FR: { locale: "fr-FR", vat: "TVA 20%" },
+  ES: { locale: "es-ES", vat: "IVA 21%" },
+  IT: { locale: "it-IT", vat: "IVA 22%" },
+  PT: { locale: "pt-PT", vat: "IVA 23%" },
+  NL: { locale: "nl-NL", vat: "BTW 21%" },
+  NO: { locale: "nb-NO", vat: "MVA 25%" },
+  AT: { locale: "de-AT", vat: "USt. 20%" },
+  EE: { locale: "et-EE", vat: "KM 22%" },
+  CZ: { locale: "cs-CZ", vat: "DPH 21%" },
 }
 
 function countryOf(merchant: Merchant): string {
@@ -507,6 +529,31 @@ export function artifactFor(
     }
     case "1.2":
       return { kind: "basket", title: "Recommended kit", note: "The proposed device mix, priced. Adjust it before it becomes an order." }
+    /* The drafted application record. This task used to produce nothing, and
+     * the panel said so — but "wrote to the trace" is exactly the claim an
+     * acquirer cannot check, on the one task whose whole point is that the
+     * agent filled your form for you. Each row names WHERE the value came
+     * from, so pre-filled is distinguishable from asserted, and the two fields
+     * the agent could not source are carried as named gaps rather than left
+     * out (an omission reads as a complete form). */
+    case "1.3": {
+      const vat = vatFor(merchant)
+      return {
+        kind: "records",
+        title: "Drafted application",
+        note: "Written into your CRM, ready for underwriting. Every field is editable — the agent fills it in, it does not commit it.",
+        rows: [
+          { label: "Legal name", value: merchant.name, source: "your submission" },
+          { label: "Trading sector", value: merchant.sector, source: "normalised from free text" },
+          { label: "Registered address", value: merchant.location, source: "your submission" },
+          { label: "Expected annual volume", value: merchant.size, source: "banded from your submission" },
+          { label: "Device count", value: `${merchant.terminalCount}`, source: "derived from the recommended kit" },
+          { label: "Tax treatment", value: vat, source: vat ? "derived from country" : "country not in the rules table" },
+          { label: "Company number", value: null, source: "retrieved at underwriting, not at intake" },
+          { label: "Settlement account", value: null, source: "collected from the merchant with the KYB documents" },
+        ],
+      }
+    }
 
     /* 02 Underwrite */
     case "2.0":

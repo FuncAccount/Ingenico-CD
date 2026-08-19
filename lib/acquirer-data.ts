@@ -15,6 +15,22 @@ export interface AgentTask {
   output: string
 }
 
+/** Who owns the system the agent is driving. This is the whole product claim
+ *  on the regulated steps: Ingenico does not replace the acquirer's KYC, risk
+ *  or ledger stack — those stay the system of record, and the agent operates
+ *  them. An untagged tool list flattened that into "Ingenico does KYC", which
+ *  is the one thing an acquirer will not accept. */
+export type ToolOwner = "acquirer" | "ingenico" | "external"
+
+export interface Tool {
+  name: string
+  owner: ToolOwner
+}
+
+const acquirerTool = (name: string): Tool => ({ name, owner: "acquirer" })
+const ingenicoTool = (name: string): Tool => ({ name, owner: "ingenico" })
+const externalTool = (name: string): Tool => ({ name, owner: "external" })
+
 export interface PipelineStep {
   id: StepId
   code: string // "01".."09"
@@ -26,7 +42,11 @@ export interface PipelineStep {
   // What the agent is doing, in one line, for the cockpit header.
   agentMission: string
   // The tools / systems the agent reaches for at this step.
-  tools: string[]
+  tools: Tool[]
+  /** Only on steps that touch the acquirer's OWN systems. States where the
+   *  boundary falls, so the integration is a named arrangement rather than an
+   *  inference the reader has to make from the chips. */
+  integration?: string
   // The replayable task trace — the heart of "see how the agent helps".
   tasks: AgentTask[]
   // What lands back with the acquirer when the step is done.
@@ -40,9 +60,15 @@ export const PIPELINE: PipelineStep[] = [
     name: "Submit",
     band: "Augment",
     acquirerRole: "owns",
-    blurb: "Acquirer owns the customer and makes the final call to onboard.",
+    blurb: "Acquirer owns the customer and decides whether the application goes forward.",
     agentMission: "Turn a few merchant details into a shaped application and a kit recommendation.",
-    tools: ["Merchant CRM", "Terminal catalog", "Sector benchmarks"],
+    tools: [
+      acquirerTool("Merchant CRM"),
+      ingenicoTool("Terminal catalog"),
+      ingenicoTool("Sector benchmarks"),
+    ],
+    integration:
+      "The agent reads and writes your CRM through Ingenico's integration. The merchant record stays in your system — nothing is re-keyed into a second one.",
     tasks: [
       {
         label: "Read the intake",
@@ -61,11 +87,11 @@ export const PIPELINE: PipelineStep[] = [
       },
       {
         label: "Draft the application",
-        detail: "Pre-fills the onboarding record so nothing has to be re-typed downstream.",
-        output: "application.draft → 14/14 fields populated, 0 gaps",
+        detail: "Writes the onboarding record into your CRM so nothing has to be re-typed downstream.",
+        output: "application.draft → fields populated, gaps named",
       },
     ],
-    handback: "You make the final call to onboard. Submitting hands the application to underwriting.",
+    handback: "The decision is yours. Confirming hands the application to underwriting.",
   },
   {
     id: 2,
@@ -75,7 +101,15 @@ export const PIPELINE: PipelineStep[] = [
     acquirerRole: "signs-off",
     blurb: "Agent verifies identity, parses documents and scores risk. Acquirer signs the regulated decision.",
     agentMission: "Do the full underwriting analysis and surface anything a human must weigh in on.",
-    tools: ["Companies House", "KYC / KYB", "Sanctions & PEP", "Document AI", "Risk model"],
+    tools: [
+      externalTool("Companies House"),
+      acquirerTool("KYC / KYB platform"),
+      acquirerTool("Sanctions & PEP screening"),
+      ingenicoTool("Document AI"),
+      acquirerTool("Risk model"),
+    ],
+    integration:
+      "Your KYC, screening and risk model remain the system of record — every check below runs inside them, against your policy and your thresholds. Ingenico supplies the agent that drives them and assembles the result, not the verdict.",
     tasks: [
       {
         label: "Verify the business",
@@ -113,7 +147,11 @@ export const PIPELINE: PipelineStep[] = [
     acquirerRole: "approves",
     blurb: "Agent proposes the terminal order. Acquirer approves and confirms.",
     agentMission: "Assemble a ready-to-place terminal order with stock and delivery confirmed.",
-    tools: ["Ingenico order desk", "Pricing", "Logistics validation"],
+    tools: [
+      ingenicoTool("Ingenico order desk"),
+      ingenicoTool("Pricing"),
+      ingenicoTool("Logistics validation"),
+    ],
     tasks: [
       {
         label: "Build the basket",
@@ -148,7 +186,13 @@ export const PIPELINE: PipelineStep[] = [
     acquirerRole: "approves",
     blurb: "Agent prepares receipts and on-device branding. Acquirer approves the look.",
     agentMission: "Prepare the merchant's on-device look and localised receipts for your approval.",
-    tools: ["Brand assets", "Receipt templates", "Localisation"],
+    tools: [
+      acquirerTool("Brand assets"),
+      ingenicoTool("Receipt templates"),
+      ingenicoTool("Localisation"),
+    ],
+    integration:
+      "The marks and colours come from your brand library. Ingenico renders them onto the device and receipt, and holds the contrast and clearance rules that the hardware imposes.",
     tasks: [
       {
         label: "Pull brand assets",
@@ -181,7 +225,11 @@ export const PIPELINE: PipelineStep[] = [
     acquirerRole: "watch",
     blurb: "Agent builds the device profile and loads the merchant configuration.",
     agentMission: "Build each device's profile and load the merchant configuration end to end.",
-    tools: ["Device profiles", "Payment schemes", "Config store"],
+    tools: [
+      ingenicoTool("Device profiles"),
+      externalTool("Payment schemes"),
+      ingenicoTool("Config store"),
+    ],
     tasks: [
       {
         label: "Generate profiles",
@@ -214,7 +262,11 @@ export const PIPELINE: PipelineStep[] = [
     acquirerRole: "watch",
     blurb: "Agent runs the full test suite on each terminal before dispatch.",
     agentMission: "Run the full pre-dispatch test suite on every terminal.",
-    tools: ["Test harness", "Scheme certification", "Print / connectivity"],
+    tools: [
+      ingenicoTool("Test harness"),
+      externalTool("Scheme certification"),
+      ingenicoTool("Print / connectivity"),
+    ],
     tasks: [
       {
         label: "Connectivity",
@@ -247,7 +299,11 @@ export const PIPELINE: PipelineStep[] = [
     acquirerRole: "watch",
     blurb: "Agent books logistics and tracks delivery to the merchant.",
     agentMission: "Book logistics and track every parcel to the merchant's door.",
-    tools: ["Carrier API", "Label printing", "Tracking"],
+    tools: [
+      externalTool("Carrier API"),
+      ingenicoTool("Label printing"),
+      ingenicoTool("Tracking"),
+    ],
     tasks: [
       {
         label: "Book the carrier",
@@ -280,7 +336,11 @@ export const PIPELINE: PipelineStep[] = [
     acquirerRole: "watch",
     blurb: "Agent guides the merchant through install and activation in their language.",
     agentMission: "Guide the merchant through install and activation, in their own language.",
-    tools: ["In-app guide", "Activation service", "Localisation"],
+    tools: [
+      ingenicoTool("In-app guide"),
+      ingenicoTool("Activation service"),
+      ingenicoTool("Localisation"),
+    ],
     tasks: [
       {
         label: "Detect arrival",
@@ -313,7 +373,13 @@ export const PIPELINE: PipelineStep[] = [
     acquirerRole: "watch",
     blurb: "Agent detects the first live payment and writes records back to the acquirer.",
     agentMission: "Confirm the merchant is live and reconcile everything back to your systems.",
-    tools: ["Transaction stream", "Acquirer ledger", "Notifications"],
+    tools: [
+      ingenicoTool("Transaction stream"),
+      acquirerTool("Acquirer ledger"),
+      ingenicoTool("Notifications"),
+    ],
+    integration:
+      "First settlement is confirmed against your own ledger, not Ingenico's view of it. The agent reconciles the two and tells you when they agree.",
     tasks: [
       {
         label: "Watch for first payment",

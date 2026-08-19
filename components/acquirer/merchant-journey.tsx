@@ -18,6 +18,7 @@ import {
   Terminal,
   UserCheck,
   Wrench,
+  Plug,
 } from "lucide-react"
 import {
   MERCHANTS,
@@ -562,18 +563,59 @@ function StepCockpit({
           </span>
         </div>
 
-        {/* Tools */}
+        {/* Tools. Each chip says WHOSE system it is, because the product claim
+            on the regulated steps is that the agent operates the acquirer's own
+            stack rather than replacing it. An untagged list read as "Ingenico
+            does your KYC", which is the one reading to avoid. */}
         <div className="relative mt-4 flex flex-wrap items-center gap-1.5">
           <Wrench className="mr-0.5 h-3.5 w-3.5 text-muted-foreground" />
           {step.tools.map((t) => (
             <span
-              key={t}
-              className="rounded-md border border-border bg-secondary/60 px-2 py-0.5 font-mono text-[11px] text-muted-foreground"
+              key={t.name}
+              className={cn(
+                "inline-flex items-center gap-1.5 rounded-md border px-2 py-0.5 font-mono text-[11px]",
+                t.owner === "acquirer"
+                  ? "border-primary/35 bg-primary/8 text-foreground"
+                  : "border-border bg-secondary/60 text-muted-foreground",
+              )}
             >
-              {t}
+              <span
+                aria-hidden
+                className={cn(
+                  "h-1.5 w-1.5 rounded-full",
+                  t.owner === "acquirer"
+                    ? "bg-primary"
+                    : t.owner === "ingenico"
+                      ? "bg-muted-foreground/50"
+                      : "bg-muted-foreground/25",
+                )}
+              />
+              {t.name}
+              <span className="sr-only">
+                {t.owner === "acquirer"
+                  ? " — your system"
+                  : t.owner === "ingenico"
+                    ? " — Ingenico system"
+                    : " — external service"}
+              </span>
             </span>
           ))}
+          <span className="ml-1 text-[11px] text-muted-foreground">
+            <span className="font-medium text-foreground">Yours</span> · Ingenico · external
+          </span>
         </div>
+
+        {/* Where the boundary falls, stated rather than left to be inferred
+            from the chips. Only present on steps that touch your systems. */}
+        {step.integration && (
+          <div className="relative mt-3 flex gap-2 rounded-lg border border-primary/25 bg-primary/[0.06] px-3 py-2.5">
+            <Plug className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" />
+            <p className="text-xs leading-relaxed text-foreground">
+              <span className="font-semibold">Runs inside your systems. </span>
+              {step.integration}
+            </p>
+          </div>
+        )}
       </div>
 
       {/* The blocker leads the step. Placed above the controls because playing

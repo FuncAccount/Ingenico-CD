@@ -59,7 +59,7 @@ export const STEP_HANDOFFS: Record<StepId, Handoff[]> = {
     {
       party: "acquirer",
       ask: "Confirm the recommended setup before it becomes an application.",
-      action: "Confirm setup and onboard",
+      action: "Confirm setup",
       commits:
         "You are accepting this merchant as your customer and the recommended device mix as the basis of the order.",
     },

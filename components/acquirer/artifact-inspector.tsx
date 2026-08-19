@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo } from "react"
+import { useEffect, useMemo, useState } from "react"
 import dynamic from "next/dynamic"
 import {
   Minus,
@@ -21,6 +21,8 @@ import type { Merchant } from "@/lib/acquirer-data"
 import {
   type Artifact,
   type BasketLine,
+  type Sku,
+  CATALOGUE,
   SERVICE_LEVELS,
   RATE_CARD,
   checkStock,
@@ -78,25 +80,33 @@ function Shell({
   title,
   note,
   editable,
+  action,
   children,
 }: {
   title: string
   note: string
   editable?: boolean
+  /** Sits on the title row, top right — for panels that can be added to. */
+  action?: React.ReactNode
   children: React.ReactNode
 }) {
   return (
     <div className="flex h-full flex-col">
       <div className="border-b border-border/70 px-4 py-3">
-        <div className="flex items-center gap-2">
-          <h4 className="text-sm font-semibold text-foreground">{title}</h4>
-          {editable && (
-            <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-primary">
-              Yours to change
-            </span>
-          )}
+        <div className="flex items-start gap-2">
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <h4 className="text-sm font-semibold text-foreground">{title}</h4>
+              {editable && (
+                <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-primary">
+                  Yours to change
+                </span>
+              )}
+            </div>
+            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{note}</p>
+          </div>
+          {action}
         </div>
-        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{note}</p>
       </div>
       <div className="flex-1 overflow-y-auto p-4">{children}</div>
     </div>
@@ -119,12 +129,21 @@ function Absent({ children }: { children: React.ReactNode }) {
 /* ---------------------------------------------------------------- basket */
 
 function BasketView({ draft, onDraft, note, title }: Props & { note: string; title: string }) {
+  const [adding, setAdding] = useState(false)
   const pricing = useMemo(
     () => priceOrder(draft.lines, SERVICE_LEVELS.find((s) => s.id === draft.serviceId)!),
     [draft.lines, draft.serviceId],
   )
   const units = draft.lines.reduce((s, l) => s + l.qty, 0)
   const active = draft.lines.filter((l) => l.qty > 0).length
+
+  /* Only catalogue items not already on the order. A line the agent proposed
+     and the acquirer then zeroed still exists in the draft, so it is offered
+     back through its own "+" rather than duplicated here. */
+  const addable = useMemo(
+    () => Object.values(CATALOGUE).filter((s) => !draft.lines.some((l) => l.sku === s.sku)),
+    [draft.lines],
+  )
 
   function bumpQty(sku: string, by: number) {
     onDraft((d) => ({
@@ -133,8 +152,59 @@ function BasketView({ draft, onDraft, note, title }: Props & { note: string; tit
     }))
   }
 
+  function addLine(sku: Sku) {
+    onDraft((d) => ({
+      ...d,
+      lines: [...d.lines, { sku: sku.sku, name: sku.name, kind: sku.kind, unit: sku.unit, qty: 1 }],
+    }))
+    setAdding(false)
+  }
+
   return (
-    <Shell title={title} note={note} editable>
+    <Shell
+      title={title}
+      note={note}
+      editable
+      action={
+        addable.length > 0 ? (
+          <button
+            onClick={() => setAdding((v) => !v)}
+            aria-expanded={adding}
+            className="flex shrink-0 items-center gap-1 rounded-lg border border-border bg-white/80 px-2 py-1 text-[11px] font-medium text-foreground transition-colors hover:bg-secondary"
+          >
+            <Plus className="h-3 w-3" />
+            Add item
+          </button>
+        ) : null
+      }
+    >
+      {adding && (
+        <div className="mb-3 overflow-hidden rounded-xl border border-primary/30 bg-primary/[0.04]">
+          <p className="border-b border-primary/20 px-3 py-2 text-[11px] text-muted-foreground">
+            Catalogue items not on this order. Adding one puts it on the order at your rate card —
+            it does not change what the agent recommended.
+          </p>
+          {addable.map((s, i) => (
+            <button
+              key={s.sku}
+              onClick={() => addLine(s)}
+              className={cn(
+                "flex w-full items-center gap-3 px-3 py-2 text-left transition-colors hover:bg-primary/8",
+                i > 0 && "border-t border-primary/15",
+              )}
+            >
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-medium text-foreground">{s.name}</p>
+                <p className="font-mono text-[11px] text-muted-foreground">
+                  {s.sku} · {eur(s.unit)} each
+                </p>
+              </div>
+              <Plus className="h-3.5 w-3.5 shrink-0 text-primary" />
+            </button>
+          ))}
+        </div>
+      )}
+
       <div className="overflow-hidden rounded-xl border border-border/70 bg-white/60">
         {pricing.lines.map((line, i) => (
           <div
