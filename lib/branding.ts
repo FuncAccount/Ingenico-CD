@@ -67,11 +67,18 @@ export interface BrandTheme {
   receiptFooter: string
 }
 
-/** The acquirer's own identity, fixed. This is the co-brand's other half. */
+/** The acquirer's own identity, fixed. This is the co-brand's other half.
+ *
+ *  The name MUST match `PERSONAS.acquirer.org`, `HOME_ACQUIRER` and the key
+ *  in `REMOTE_KEY_INJECTION`. It used to read "Northgate Payments" here and
+ *  "Northgate Acquiring" everywhere else — one organisation under two names,
+ *  which put a different company on the receipt proof from the one in the
+ *  nav, and made `needsPhysicalKeying()` miss its own row and fall through to
+ *  the physical-injection default. */
 export const ACQUIRER = {
-  name: "Northgate Payments",
+  name: "Northgate Acquiring",
   /** Printed on every receipt under licence. Not editable — it is a legal line. */
-  legalLine: "Processed by Northgate Payments Ltd · FCA 784412",
+  legalLine: "Processed by Northgate Acquiring Ltd · FCA 784412",
   mark: "#0A1E3C",
   /** The authorised reversed variant, for dark grounds. Using it is not a
    *  recolour: both variants are part of the supplied brand asset set. */
@@ -210,7 +217,7 @@ export function checkBrand(theme: BrandTheme): BrandRule[] {
     state: nearest.d < IDENTITY_CLEARANCE ? "fail" : "pass",
     detail:
       nearest.d < IDENTITY_CLEARANCE
-        ? `The band is within ${nearest.d.toFixed(0)} of your own ${nearest.c}, against a ${IDENTITY_CLEARANCE} clearance. The terminal would read as a Northgate device, not the merchant's.`
+        ? `The band is within ${nearest.d.toFixed(0)} of your own ${nearest.c}, against a ${IDENTITY_CLEARANCE} clearance. The terminal would read as a ${ACQUIRER.name} device, not the merchant's.`
         : `${nearest.d.toFixed(0)} clear of the nearest identity colour (${nearest.c}), against a ${IDENTITY_CLEARANCE} minimum.`,
     source: "Acquirer brand standard",
     blocking: true,

@@ -9,6 +9,7 @@ import {
   Cpu,
   FileSearch,
   Lock,
+  Minus,
   Store,
   Pause,
   PartyPopper,
@@ -30,7 +31,7 @@ import {
   type StepId,
 } from "@/lib/acquirer-data"
 import { cn } from "@/lib/utils"
-import { artifactFor, defaultBasket, traceFor } from "@/lib/artifacts"
+import { artifactFor, defaultBasket, taskSkipped, traceFor } from "@/lib/artifacts"
 import {
   ArtifactInspector,
   type OrderDraft,
@@ -692,6 +693,10 @@ function StepCockpit({
             // Without this the blocking line looks exactly like the ones the
             // agent simply hasn't reached.
             const isFailed = blocker?.taskIndex === i && !isRunning
+            // A task that cannot run on this order is neither done nor
+            // pending. It takes precedence over both, or a green tick ends up
+            // asserting work the artefact beside it says never happened.
+            const isSkipped = taskSkipped(step.id, i, merchant)
             const isPending = i >= completed && !isRunning && !isFailed
             const art = artifactFor(step.id, i, merchant)
             return (
@@ -708,16 +713,20 @@ function StepCockpit({
                 <span
                   className={cn(
                     "mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-[11px] font-semibold transition-colors",
-                    isFailed
-                      ? "border-destructive/45 bg-destructive/15 text-destructive"
-                      : isDone
-                        ? "border-success/40 bg-success/15 text-success"
-                        : isRunning
-                          ? "border-primary bg-primary/15 text-primary"
-                          : "border-border bg-secondary text-muted-foreground",
+                    isSkipped
+                      ? "border-dashed border-border bg-transparent text-muted-foreground"
+                      : isFailed
+                        ? "border-destructive/45 bg-destructive/15 text-destructive"
+                        : isDone
+                          ? "border-success/40 bg-success/15 text-success"
+                          : isRunning
+                            ? "border-primary bg-primary/15 text-primary"
+                            : "border-border bg-secondary text-muted-foreground",
                   )}
                 >
-                  {isFailed ? (
+                  {isSkipped ? (
+                    <Minus className="h-3.5 w-3.5" />
+                  ) : isFailed ? (
                     <AlertTriangle className="h-3.5 w-3.5" />
                   ) : isDone ? (
                     <Check className="h-3.5 w-3.5" />
@@ -749,12 +758,16 @@ function StepCockpit({
                   <span
                     className={cn(
                       "mt-1.5 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium",
-                      art
-                        ? "bg-primary/10 text-primary"
-                        : "bg-secondary text-muted-foreground",
+                      isSkipped
+                        ? "bg-secondary text-muted-foreground"
+                        : art
+                          ? "bg-primary/10 text-primary"
+                          : "bg-secondary text-muted-foreground",
                     )}
                   >
-                    {art ? (
+                    {isSkipped ? (
+                      "Skipped — no hardware on this order"
+                    ) : art ? (
                       <>
                         <FileSearch className="h-3 w-3" />
                         {art.title}

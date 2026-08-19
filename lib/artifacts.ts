@@ -10,6 +10,8 @@
 // every downstream figure moves, because none of them are typed by hand.
 
 import { MERCHANTS, type Merchant, type StepId } from "@/lib/acquirer-data"
+import { ACQUIRER } from "@/lib/branding"
+import { MODELS, configProfile, orderLines, type ModelId } from "@/lib/devices"
 import { riskAssessment } from "@/lib/underwriting"
 
 /* ------------------------------------------------------------------ money */
@@ -341,6 +343,74 @@ export function priceOrder(lines: BasketLine[], service: ServiceLevel): Pricing 
   }
 }
 
+/* ------------------------------------------------------------ device units */
+
+/**
+ * The order expanded to individual units, because steps 5–9 act on DEVICES,
+ * not on order lines: a profile, a test, a label and an activation each belong
+ * to one unit. A quantity cannot carry a TID.
+ *
+ * `physical` is the load-bearing field. A softPOS licence gets a profile, a
+ * configuration and an activation — it runs on the merchant's own handset —
+ * but it has no parcel, no label and no peripherals. Artefacts that counted
+ * every unit as a box were the reason the trace claimed "4 labels" for an
+ * order carrying three terminals and one licence.
+ */
+export interface DeviceUnit {
+  /** 1-based, in order-line order. */
+  n: number
+  model: ModelId
+  label: string
+  physical: boolean
+  /** Deterministic from the merchant and position, so the same unit carries
+   *  the same identifier on every screen rather than a fresh random one. */
+  tid: string
+}
+
+function tidBase(merchantId: string): number {
+  let h = 0
+  for (let i = 0; i < merchantId.length; i++) h = (h * 31 + merchantId.charCodeAt(i)) % 90000
+  return 10000 + h
+}
+
+export function deviceUnits(merchant: Merchant): DeviceUnit[] {
+  const base = tidBase(merchant.id)
+  const out: DeviceUnit[] = []
+  for (const line of orderLines(merchant)) {
+    const model = MODELS[line.model]
+    if (!model) continue
+    for (let i = 0; i < line.qty; i++) {
+      const n = out.length + 1
+      out.push({
+        n,
+        model: line.model,
+        label: `${model.label} · unit ${n}`,
+        physical: model.physical,
+        tid: `T${base + n}`,
+      })
+    }
+  }
+  return out
+}
+
+export function physicalUnits(merchant: Merchant): DeviceUnit[] {
+  return deviceUnits(merchant).filter((u) => u.physical)
+}
+
+export function licenceUnits(merchant: Merchant): DeviceUnit[] {
+  return deviceUnits(merchant).filter((u) => !u.physical)
+}
+
+/** One sentence naming what the licence lines are excluded FROM, used wherever
+ *  a physical-only count would otherwise look like a missing device. */
+function licenceNote(merchant: Merchant, excludedFrom: string): string {
+  const lic = licenceUnits(merchant)
+  if (lic.length === 0) return ""
+  return ` ${lic.length} softPOS licence${lic.length > 1 ? "s" : ""} ${
+    lic.length > 1 ? "are" : "is"
+  } not counted here — software on the merchant's own handset has no ${excludedFrom}.`
+}
+
 /* --------------------------------------------------------------- artefacts */
 
 export interface RecordRow {
@@ -446,6 +516,55 @@ export function traceFor(
       const p = priceOrder(lines, service)
       return `pricing.apply → rate card ${RATE_CARD.id}, total ${eur(p.total)}`
     }
+
+    /* Steps 5-9 act on units, and the static lines all quoted a single count
+     * for both. An order of three terminals plus a softPOS licence carries
+     * four profiles but only three parcels, so a hard-coded "4 labels" was
+     * shipping a box that does not exist. */
+    case "5.0":
+      return `profile.generate → ${deviceUnits(merchant).length} profiles created`
+    case "5.1":
+      return `scheme.enable → Visa, MC, Amex, contactless${
+        licenceUnits(merchant).length ? ", softPOS" : ""
+      }`
+    case "5.2": {
+      const tip = configProfile(merchant, ACQUIRER.name).find((c) => c.label.startsWith("Tipping"))
+      return `config.load → MID/TID bound, tipping=${tip?.value.startsWith("Enabled") ? "on" : "off"}`
+    }
+    case "6.0": {
+      const n = physicalUnits(merchant).length
+      // "0/0 online" reads as a completed check. There was no check.
+      return n === 0 ? "test.connect → skipped, no hardware on this order" : `test.connect → ${n}/${n} terminals online`
+    }
+    case "6.1":
+      return `test.txn → sale ok, refund ok, reversal ok (×${deviceUnits(merchant).length})`
+    case "6.3":
+      return `cert.issue → ${deviceUnits(merchant).length} certificates written`
+    case "7.0":
+    case "7.1":
+    case "7.2":
+    case "7.3": {
+      const n = physicalUnits(merchant).length
+      if (n === 0) return "ship.skip → software-only order, nothing to despatch"
+      if (taskIndex === 0) return `ship.book → carrier=DHL Freight, ${n} parcel(s), pickup booked`
+      if (taskIndex === 1) return `label.print → ${n} labels, 1 manifest`
+      if (taskIndex === 2) return `dispatch.confirm → ${n} parcels in transit`
+      return `track.notify → merchant emailed tracking for ${n} parcel(s)`
+    }
+    case "8.1":
+      return `guide.run → locale=${localeFor(merchant) ?? "not in the rules table"}, ${
+        deviceUnits(merchant).length
+      } devices paired`
+    case "8.2": {
+      const n = deviceUnits(merchant).length
+      const live = merchant.currentStep > 8 || merchant.status === "Live"
+      return live ? `activate.device → ${n}/${n} active` : `activate.device → 1/${n} active, ${n - 1} pending`
+    }
+    case "9.0":
+      return merchant.status === "Live"
+        ? "stream.watch → first live payment €48.00 detected ok"
+        : "stream.watch → no live payment observed yet"
+
     default:
       return null
   }
@@ -484,6 +603,65 @@ export function localeFor(merchant: Merchant): string | null {
 
 export function vatFor(merchant: Merchant): string | null {
   return COUNTRY_RULES[countryOf(merchant)]?.vat ?? null
+}
+
+/**
+ * The artefact for a task that CANNOT have run, on an order with no hardware.
+ *
+ * This is not the same as a task that failed, and it is emphatically not the
+ * same as a task that passed: "0 of 0 parcels scanned" is a green tick over a
+ * check that never took place, which is the worst of the three to be wrong
+ * about. The absence is named, the reason is a standing property of the order
+ * rather than a fault, and the work that DID happen is pointed at.
+ */
+function softwareOnly(merchant: Merchant, subject: "connectivity" | "peripherals" | "shipment"): Artifact {
+  const lic = licenceUnits(merchant)
+  const where =
+    subject === "shipment"
+      ? "There is nothing to pack, label, collect or track."
+      : subject === "connectivity"
+        ? "The link belongs to the merchant's own handset and its mobile network — it is not ours to test."
+        : "There is no printer, reader or PIN pad on this order."
+  return {
+    kind: "records",
+    title: subject === "shipment" ? "No shipment on this order" : `No ${subject} to report`,
+    note: `${merchant.name} ordered software only. ${where} This step is skipped by construction, not pending.`,
+    rows: [
+      { label: "Physical units", value: "0", source: "counted from the order" },
+      { label: "softPOS licences", value: String(lic.length), source: "licence lines on this order" },
+      {
+        label: subject === "shipment" ? "Parcels" : subject === "connectivity" ? "Terminals on our network" : "Peripherals",
+        value: null,
+        source: "none exist — this is an absence, not a zero result",
+      },
+      {
+        label: "Where the work happened instead",
+        value:
+          subject === "shipment"
+            ? "Step 08 — the merchant installs the app on their own device"
+            : "Step 06 · Test transactions — the licence still transacts and is tested",
+        source: "pipeline",
+      },
+    ],
+  }
+}
+
+/**
+ * Tasks that cannot run for this merchant at all.
+ *
+ * A skipped task is not a completed one. Marking "Print labels" done, with a
+ * green tick, on an order that has nothing to label contradicts the artefact
+ * sitting immediately beside it — and a tick is the strongest claim the row
+ * can make. The step still shows every task, because hiding them would leave
+ * the reader unable to tell a skipped step from an unbuilt one.
+ */
+export function taskSkipped(stepId: StepId, taskIndex: number, merchant: Merchant): boolean {
+  if (physicalUnits(merchant).length > 0) return false
+  if (stepId === 7) return true
+  // Connectivity and peripherals are hardware checks; the transaction tests
+  // and the certificate are not, and a softPOS licence takes both.
+  if (stepId === 6) return taskIndex === 0 || taskIndex === 2
+  return false
 }
 
 /** Resolve the artefact a given task produced. Returning null is a real
@@ -659,76 +837,369 @@ export function artifactFor(
         note: "What the customer will see, and what must pass before it can ship.",
       }
 
-    /* 05 Configure */
-    case "5.0":
+    /* 05 Configure — one artefact per task. Every task here writes something
+       to a device, so "wrote to the trace" was never an honest answer: the
+       acquirer is being asked to accept a build they cannot see. */
+    case "5.0": {
+      const units = deviceUnits(merchant)
       return {
-        kind: "records",
-        title: "Terminal configuration",
-        note: "The parameter set that will be pushed to every device on this order.",
-        rows: [
-          { label: "Acquirer BIN", value: "452110", source: "acquirer profile" },
-          { label: "Currencies", value: "EUR, GBP", source: "merchant profile" },
-          { label: "Contactless limit", value: "€50.00", source: "scheme default for country" },
-          { label: "Tipping", value: merchant.sector === "Hospitality" ? "Enabled" : "Disabled", source: "sector default" },
-          { label: "Receipt", value: "Print merchant copy, email customer copy", source: "acquirer template" },
-        ],
+        kind: "table",
+        title: `Device profiles (${units.length})`,
+        note: "One profile per unit, not per order line — a quantity cannot carry a TID. The softPOS licence gets a profile too: it never ships, but it does transact.",
+        table: {
+          columns: ["Unit", "Model", "TID", "Kind"],
+          rows: units.map((u) => [
+            `Unit ${u.n}`,
+            MODELS[u.model].label,
+            u.tid,
+            u.physical ? MODELS[u.model].form : "Software on merchant device",
+          ]),
+        },
       }
+    }
     case "5.1":
       return {
-        kind: "checks",
-        title: "Configuration validation",
-        note: "Run against the parameter set before it is allowed to leave the building.",
+        kind: "records",
+        title: "Schemes and payment methods",
+        note: "What this merchant may accept. Each line names who decided it — an acquirer permission and a scheme mandate are different kinds of claim.",
         rows: [
-          { label: "Scheme rules", state: "pass", evidence: "Contactless limit within Visa/MC ceiling for the country" },
-          { label: "Currency support", state: "pass", evidence: "All listed currencies enabled on BIN 452110" },
-          { label: "PCI parameter set", state: "pass", evidence: "P2PE profile INGP2PE-4 applied" },
+          { label: "Visa / Mastercard", value: "Enabled", source: `${ACQUIRER.name} BIN 452110` },
+          { label: "Amex", value: "Enabled", source: "separate Amex agreement on file" },
+          { label: "Domestic debit", value: vatFor(merchant) ? "Enabled for the merchant's country" : null, source: vatFor(merchant) ? "country scheme table" : "country not in the rules table" },
+          { label: "Contactless", value: "Enabled", source: "scheme mandated" },
+          {
+            label: "softPOS acceptance",
+            value: licenceUnits(merchant).length > 0 ? "Enabled" : null,
+            source: licenceUnits(merchant).length > 0 ? "licence line on this order" : "no softPOS licence on this order",
+          },
         ],
       }
+    case "5.2":
+      // The same parameter set Ingenico's own deployment workspace renders.
+      // Typed a second time here, the two personas would be free to disagree
+      // about what was actually loaded onto the merchant's terminals.
+      return {
+        kind: "records",
+        title: "Loaded configuration",
+        note: "The parameter set pushed to every profile above. This is the identical record Ingenico works from — not a summary of it.",
+        rows: configProfile(merchant, ACQUIRER.name).map((item) => ({
+          label: item.label,
+          value: item.value,
+          source: item.source.toLowerCase(),
+        })),
+      }
+    case "5.3": {
+      const units = deviceUnits(merchant)
+      // Derived from the content it signs, so changing the order changes the
+      // checksum. A fixed string would go on attesting to a build that moved.
+      const digest = (tidBase(merchant.id) * 7919 + units.length * 104729)
+        .toString(16)
+        .toUpperCase()
+        .padStart(8, "0")
+      return {
+        kind: "records",
+        title: "Signed build",
+        note: "What was sealed, and what would break the seal.",
+        rows: [
+          { label: "Bundle", value: `BLD-${merchant.id.replace("m-", "").toUpperCase()}-01`, source: "config store" },
+          { label: "Profiles included", value: `${units.length} of ${units.length}`, source: "counted from the profiles above" },
+          { label: "Checksum", value: `SHA-256 …${digest}`, source: "derived from the bundle contents" },
+          { label: "Signing certificate", value: "INGP2PE-4, valid to 2027-04", source: "Ingenico key management" },
+          { label: "Countersigned by acquirer", value: null, source: "not required — this build carries no acquirer key material" },
+        ],
+      }
+    }
 
     /* 06 Test */
-    case "6.0":
+    case "6.0": {
+      const phys = physicalUnits(merchant)
+      // A software-only order has no hardware of ours on the network. An empty
+      // table would read as a failed lookup, and the row-count wording below
+      // ("0 of 0 units") is the shape of a check that never ran.
+      if (phys.length === 0) return softwareOnly(merchant, "connectivity")
+      return {
+        kind: "table",
+        title: `Connectivity (${phys.length} unit${phys.length === 1 ? "" : "s"})`,
+        note: `Each unit's own link to the gateway, because a fleet figure hides the one that cannot reach it.${licenceNote(merchant, "link of ours to test")}`,
+        table: {
+          columns: ["Unit", "TID", "Link", "Gateway"],
+          rows: phys.map((u, i) => [
+            `Unit ${u.n} · ${MODELS[u.model].label}`,
+            u.tid,
+            MODELS[u.model].battery ? "Wi-Fi, 4G fallback" : "Ethernet",
+            i === phys.length - 1 && phys.length > 3 ? "Reachable — 1.9s, slowest of the set" : "Reachable",
+          ]),
+        },
+      }
+    }
+    case "6.1":
       return {
         kind: "checks",
         title: "Test transactions",
-        note: "Run end to end against the acquirer's certification host.",
+        note: "Run end to end against the acquirer's certification host, not a simulator.",
         rows: [
           { label: "Contactless sale", state: "pass", evidence: "EUR 1.00 approved, auth 0X41B9, 1.2s round trip" },
           { label: "Chip and PIN sale", state: "pass", evidence: "EUR 1.00 approved, auth 0X41C0" },
-          { label: "Refund", state: "pass", evidence: "EUR 1.00 refunded against original auth" },
+          { label: "Refund", state: "pass", evidence: "EUR 1.00 refunded against the original auth" },
           { label: "Offline / store-and-forward", state: "warn", evidence: "Approved on reconnect after 40s — above the 30s target" },
         ],
       }
-
-    /* 07 Ship */
-    case "7.0":
-      return { kind: "delivery", title: "Shipment tracking", note: "The consignment in flight, against the date committed at order." }
-    case "7.1":
-      return { kind: "stock", title: "Dispatched lines", note: "What actually left each site, against what the order asked for." }
-
-    /* 08 Install */
-    case "8.0":
+    case "6.2": {
+      const phys = physicalUnits(merchant)
+      const battery = phys.filter((u) => MODELS[u.model].battery)
+      if (phys.length === 0) return softwareOnly(merchant, "peripherals")
       return {
         kind: "checks",
-        title: "Installation sign-off",
-        note: "Confirmed on site, device by device.",
+        title: "Peripherals",
+        note: `Hardware only.${licenceNote(merchant, "printer, reader or PIN pad")}`,
         rows: [
-          { label: "Devices powered and paired", state: "pass", evidence: `${merchant.terminalCount} of ${merchant.terminalCount} devices reachable` },
-          { label: "Network", state: "pass", evidence: "Wi-Fi primary, 4G fallback tested on each device" },
+          { label: "Printer", state: "pass", evidence: `Test slip printed on ${phys.length} of ${phys.length} units` },
+          { label: "Contactless reader", state: "pass", evidence: `Field strength within tolerance on ${phys.length} of ${phys.length} units` },
+          { label: "PIN pad", state: "pass", evidence: "Tamper seal intact, all keys registering" },
+          {
+            label: "Battery",
+            // Mains-powered units have no battery to test. Reporting a pass
+            // would attest to a check that could not have run.
+            state: battery.length > 0 ? "pass" : "warn",
+            evidence:
+              battery.length > 0
+                ? `Charged above 80% on ${battery.length} portable unit${battery.length === 1 ? "" : "s"}`
+                : "Not applicable — every unit on this order is mains-powered",
+          },
+        ],
+      }
+    }
+    case "6.3": {
+      const units = deviceUnits(merchant)
+      return {
+        kind: "document",
+        title: "Pass certificates",
+        note: "One certificate per unit. This is what the dispatch gate checks for, so a unit missing here cannot ship.",
+        filename: `certificates-${merchant.id.replace("m-", "")}.pdf`,
+        lines: [
+          `PRE-DISPATCH TEST CERTIFICATE`,
+          `Merchant   ${merchant.name}, ${merchant.location}`,
+          `Acquirer   ${ACQUIRER.name}`,
+          ``,
+          ...units.map((u) => `  ${u.tid}  ${MODELS[u.model].label.padEnd(12)}  PASS  (1 observation above target — see Test transactions)`),
+          ``,
+          `${units.length} of ${units.length} units certified. Certificates expire if the`,
+          `configuration bundle is re-signed.`,
+        ],
+      }
+    }
+
+    /* 07 Ship — the step where the physical/licence split first bites. */
+    case "7.0": {
+      const geo = deliveryGeo(merchant)
+      const nearest = geo ? warehousesByDistance(geo)[0] : null
+      const phys = physicalUnits(merchant)
+      if (phys.length === 0) return softwareOnly(merchant, "shipment")
+      return {
+        kind: "records",
+        title: "Carrier booking",
+        note: "The collection, not the promise. The date this has to meet is on the Delivery artefact at step 03 — restating it here would give it a second place to drift.",
+        rows: [
+          { label: "Carrier", value: "DHL Freight", source: "framework agreement, road lane" },
+          {
+            label: "Collection from",
+            value: nearest ? `${nearest.wh.name}, ${nearest.wh.city}` : null,
+            source: nearest ? `nearest stocked site, ${nearest.distanceKm} km` : "no delivery point on file",
+          },
+          { label: "Parcels booked", value: String(phys.length), source: "one per physical unit" },
+          {
+            label: "Collection reference",
+            value: `DHL-${tidBase(merchant.id)}`,
+            source: "carrier API",
+          },
+          { label: "Collection window", value: null, source: "carrier confirms the slot the evening before" },
+        ],
+      }
+    }
+    case "7.1": {
+      const geo = deliveryGeo(merchant)
+      const nearest = geo ? warehousesByDistance(geo)[0] : null
+      const phys = physicalUnits(merchant)
+      if (phys.length === 0) return softwareOnly(merchant, "shipment")
+      return {
+        kind: "table",
+        title: `Labels and manifest (${phys.length} parcel${phys.length === 1 ? "" : "s"})`,
+        // Every parcel carries the same destination, so printing it on each row
+        // is three copies of one fact crowding out the three that differ.
+        note: `All parcels ship to ${geo ? geo.address : "the delivery point on file"}. A label is a physical object, so the count follows the hardware and not the order.${licenceNote(merchant, "parcel to label")}`,
+        table: {
+          columns: ["Parcel", "Contents", "Ships from"],
+          rows: phys.map((u) => [
+            `${tidBase(merchant.id)}-${String(u.n).padStart(2, "0")}`,
+            `${MODELS[u.model].label} · ${u.tid}`,
+            nearest ? `${nearest.wh.name} · ${nearest.distanceKm} km` : "Site not resolved",
+          ]),
+        },
+      }
+    }
+    case "7.2": {
+      const phys = physicalUnits(merchant)
+      if (phys.length === 0) return softwareOnly(merchant, "shipment")
+      return {
+        kind: "checks",
+        title: "Dispatch hand-off",
+        note: "What the carrier actually took, against what was labelled.",
+        rows: [
+          { label: "Parcels scanned by carrier", state: "pass", evidence: `${phys.length} of ${phys.length} labels scanned at collection` },
+          { label: "Manifest signed", state: "pass", evidence: "Driver signature captured against the collection reference" },
+          { label: "Seals intact", state: "pass", evidence: "Tamper-evident seals photographed at hand-off" },
+        ],
+      }
+    }
+    case "7.3":
+      if (physicalUnits(merchant).length === 0) return softwareOnly(merchant, "shipment")
+      return {
+        kind: "delivery",
+        title: "Tracking",
+        note: "The consignment in flight, against the date committed at order.",
+      }
+
+    /* 08 Install */
+    case "8.0": {
+      const shipped = physicalUnits(merchant).length > 0
+      return {
+        kind: "records",
+        title: shipped ? "Arrival" : "Licence issued",
+        note: shipped
+          ? "How we know it landed, and who we then contacted."
+          : "There was no delivery to detect. The trigger for a software-only order is the licence going live, not a carrier scan.",
+        rows: [
+          {
+            label: shipped ? "Delivery confirmed" : "Licence activated",
+            value: shipped ? "Carrier reported delivered" : "Entitlement issued to the merchant account",
+            source: shipped ? "carrier tracking webhook" : "licence service",
+          },
+          {
+            label: "Signed for by",
+            value: null,
+            source: shipped ? "carrier did not return a signatory name" : "no delivery — nothing to sign for",
+          },
+          {
+            label: "Setup guide sent to",
+            value: merchant.name,
+            source: `in ${localeFor(merchant) ?? "the merchant's country locale, which is not in the rules table"}`,
+          },
+          { label: "Merchant opened the guide", value: "Yes", source: "guide telemetry" },
+        ],
+      }
+    }
+    case "8.1": {
+      const units = deviceUnits(merchant)
+      return {
+        kind: "table",
+        title: "Guided setup",
+        note: "Where each unit got to. A unit that stalled is named rather than averaged into a completion rate.",
+        table: {
+          columns: ["Unit", "TID", "Step reached", "Paired"],
+          rows: units.map((u) => [
+            `Unit ${u.n} · ${MODELS[u.model].label}`,
+            u.tid,
+            u.physical ? "Powered, network joined, paired" : "Installed on merchant handset",
+            "Yes",
+          ]),
+        },
+      }
+    }
+    case "8.2": {
+      const units = deviceUnits(merchant)
+      const live = merchant.currentStep > 8 || merchant.status === "Live"
+      return {
+        kind: "table",
+        title: "Activation",
+        note: live
+          ? "Each unit bound to its TID on the live host."
+          : "Activation is written here as each unit comes up. Units still to activate are shown as pending, not as failures.",
+        table: {
+          columns: ["Unit", "TID", "Host", "State"],
+          rows: units.map((u, i) => [
+            `Unit ${u.n} · ${MODELS[u.model].label}`,
+            u.tid,
+            "Live acquiring host",
+            live ? "Active" : i === 0 ? "Active" : "Pending",
+          ]),
+        },
+      }
+    }
+    case "8.3": {
+      const units = deviceUnits(merchant)
+      return {
+        kind: "checks",
+        title: "Ready to trade",
+        note: "A €0.01 authorisation per unit, reversed immediately. Nothing here is a simulation.",
+        rows: [
+          { label: "Authorisation test", state: "pass", evidence: `Approved on ${units.length} of ${units.length} units, including the softPOS licence` },
+          { label: "Reversal", state: "pass", evidence: "Every test authorisation reversed; no residue on the merchant statement" },
           { label: "Staff walkthrough", state: "pass", evidence: "Completed with the duty manager" },
         ],
       }
+    }
 
     /* 09 Go-live */
-    case "9.0":
+    case "9.0": {
+      const live = merchant.status === "Live"
       return {
         kind: "records",
-        title: "Go-live record",
-        note: "The state of the merchant at the moment the account was opened for live traffic.",
+        title: "First live payment",
+        note: live
+          ? "The transaction that proves the merchant is trading, not that the plumbing works."
+          : "Nothing observed yet. This is an empty watch, not a failure — the record fills the moment a real customer pays.",
         rows: [
+          { label: "First live payment", value: live ? "€48.00" : null, source: live ? "transaction stream" : "not yet observed" },
+          { label: "Observed on", value: live ? deviceUnits(merchant)[0]?.tid ?? null : null, source: live ? "terminal that took the payment" : "no payment to attribute" },
+          { label: "Authorisation", value: live ? "0X5A20, approved" : null, source: live ? "acquiring host" : "no payment to authorise" },
+          { label: "Test transactions excluded", value: "Yes", source: "the €0.01 activation authorisations are filtered out" },
+        ],
+      }
+    }
+    case "9.1": {
+      const units = deviceUnits(merchant)
+      const mid = merchant.id.replace("m-", "MID-").toUpperCase()
+      return {
+        kind: "table",
+        title: "Ledger reconciliation",
+        note: `Every TID matched against ${ACQUIRER.name}'s own ledger. An orphan would be a terminal taking money that your ledger cannot attribute.`,
+        table: {
+          columns: ["TID", "Bound to MID", "In your ledger", "Orphan"],
+          rows: units.map((u) => [u.tid, mid, "Matched", "No"]),
+        },
+      }
+    }
+    case "9.2":
+      return {
+        kind: "records",
+        title: "Write-back",
+        note: "What went into your systems, and where. The agent writes the record; it does not keep a second copy of it.",
+        rows: [
+          { label: "Destination", value: `${ACQUIRER.name} CRM — merchant record`, source: "your system of record" },
           { label: "Merchant ID", value: merchant.id.replace("m-", "MID-").toUpperCase(), source: "acquirer host" },
-          { label: "Devices live", value: String(merchant.terminalCount), source: "terminal estate" },
-          { label: "First live transaction", value: null, source: "not yet observed" },
-          { label: "Settlement account", value: "Verified", source: "penny-test confirmed" },
+          { label: "Devices written", value: String(deviceUnits(merchant).length), source: "counted from the activation table" },
+          { label: "Onboarding duration", value: null, source: "submission timestamp not carried on this record" },
+          { label: "Underwriting decision", value: "Attached, with the signatory", source: "step 02 sign-off" },
+        ],
+      }
+    case "9.3":
+      return {
+        kind: "document",
+        title: "Go-live notice",
+        note: "Sent to you and to the merchant. The same text to both, so neither is told something the other is not.",
+        filename: `go-live-${merchant.id.replace("m-", "")}.pdf`,
+        lines: [
+          `${merchant.name} is live.`,
+          ``,
+          `Merchant ID   ${merchant.id.replace("m-", "MID-").toUpperCase()}`,
+          `Devices       ${deviceUnits(merchant).length} active`,
+          `Acquirer      ${ACQUIRER.name}`,
+          `Settlement    Daily, 23:00 local — first settlement one working day`,
+          `              after the first live payment.`,
+          ``,
+          `The onboarding record has been written back to your CRM. Fleet`,
+          `monitoring passes to Ingenico operations from this point; the`,
+          `merchant relationship does not.`,
         ],
       }
 
