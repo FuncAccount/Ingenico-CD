@@ -52,11 +52,17 @@ const PARTY_META = {
  * One place, because the three parties' labels have to stay mutually
  * consistent. Two claims used to be wrong here:
  *
- *  - Every acquirer handoff said **"your decision"**, including one sitting
- *    behind an unmet precondition. On Underwrite the acquirer cannot decide
- *    until the merchant's documents arrive, so "your decision" put the ball in
- *    the reader's court when the ball was demonstrably elsewhere. A blocked
- *    acquirer row now reads **"pending actions"**.
+ *  - An acquirer handoff said **"your decision"**, which names the OWNER of a
+ *    row rather than its STATE — the one thing a status badge is for. Every
+ *    other badge here reports state ("in progress"), and the row already says
+ *    "· YOU" in its own header, so the badge was spending the only status slot
+ *    restating the party. It now reads **"pending action"**.
+ *
+ *    This was also the case the previous fix missed: it keyed "blocked" on
+ *    `!active`, but an ACTIVE row can sit behind an unmet precondition too
+ *    (Underwrite, where a screening escalation must be recorded first). That
+ *    row showed "your decision" over a disabled button — putting the ball in
+ *    the reader's court while refusing the click.
  *  - A request that had gone out and not come back showed nothing at all, so
  *    "asked, waiting" looked identical to "not asked yet". That is now an
  *    explicit amber **"in progress"** — and it is gated on the request
@@ -73,9 +79,13 @@ function statusBadge(
   if (done) return null
 
   if (handoff.party === "acquirer") {
+    // "queued", not the old "pending actions": one letter apart from the
+    // active label is not a distinction anyone can read, and these two can
+    // appear in the same list. A later acquirer row is waiting its turn
+    // behind another party, which "queued" says and "pending" does not.
     return active
-      ? { label: "your decision", className: "bg-primary/12 text-primary" }
-      : { label: "pending actions", className: "bg-secondary text-muted-foreground" }
+      ? { label: "pending action", className: "bg-primary/12 text-primary" }
+      : { label: "queued", className: "bg-secondary text-muted-foreground" }
   }
 
   // An Ingenico request is raised BY the agent run, not by a click, so its
