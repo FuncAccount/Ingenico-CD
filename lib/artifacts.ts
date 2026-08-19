@@ -14,7 +14,7 @@ import { ACQUIRER } from "@/lib/branding"
 import { MODELS, configProfile, orderLines, type ModelId } from "@/lib/devices"
 import { exceptionOnStep } from "@/lib/exceptions"
 import { countryOf, distanceKm } from "@/lib/geo"
-import { riskAssessment } from "@/lib/underwriting"
+import { riskAssessment, SCORE_THE_RISK_TASK, UNDERWRITING_STEP } from "@/lib/underwriting"
 
 /* ------------------------------------------------------------------ money */
 

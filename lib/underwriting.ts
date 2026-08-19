@@ -8,7 +8,7 @@
 // So the score here is the SUM of the factors shown. It cannot disagree with
 // its own breakdown, because it is computed from it.
 
-import type { Merchant } from "@/lib/acquirer-data"
+import { PIPELINE, type Merchant } from "@/lib/acquirer-data"
 
 /** A merchant past underwriting has, by definition, had its KYC completed —
  *  the fixture just doesn't carry the detail for merchants seeded mid-journey.
@@ -16,7 +16,22 @@ import type { Merchant } from "@/lib/acquirer-data"
  *  put ten merchants in Medium for want of data rather than for cause, while
  *  their own timelines said "Underwriting signed off". Read the completion from
  *  the journey position, so the two can never disagree. */
-const UNDERWRITING_STEP = 2
+export const UNDERWRITING_STEP = 2
+
+/**
+ * Index of the task that actually refuses when documents are missing.
+ *
+ * Derived from the task's own label rather than written as `3`. A literal
+ * would keep pointing at position 3 if the task list were ever reordered,
+ * putting the halt marker on whichever task happened to move into that slot —
+ * a stop rendered against the wrong row is worse than no stop, because it
+ * accuses a check that passed. Falls back to -1, which matches no row, so a
+ * rename shows nothing rather than mislabelling something.
+ */
+export const SCORE_THE_RISK_TASK: number =
+  PIPELINE.find((s) => s.id === UNDERWRITING_STEP)?.tasks.findIndex((t) =>
+    /score the risk/i.test(t.label),
+  ) ?? -1
 
 function pastUnderwriting(merchant: Merchant): boolean {
   return merchant.currentStep > UNDERWRITING_STEP

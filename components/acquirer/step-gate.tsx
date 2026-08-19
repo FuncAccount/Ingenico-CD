@@ -27,7 +27,7 @@ import {
   blockingIndex,
   settledState,
   draftEmail,
-  handoffsFor,
+  handoffsForMerchant,
   fmtDate,
   fmtDateTime,
   handoffKey,
@@ -113,7 +113,10 @@ export function StepGate({
 }: Props) {
   // Keyed by step AND by what was ordered: steps 7 and 8 otherwise promise a
   // consignment and a boxed terminal to a merchant who bought only software.
-  const list = handoffsFor(step, physicalUnits(merchant).length === 0)
+  // ...and narrowed to what THIS merchant still owes, so a chase asks for the
+  // two documents actually missing rather than re-requesting the four already
+  // parsed.
+  const list = handoffsForMerchant(step, merchant, physicalUnits(merchant).length === 0)
 
   // A step the journey has already passed is settled by fact, so its handoffs
   // default to done. Without this, completed history renders as an outstanding

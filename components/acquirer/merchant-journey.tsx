@@ -563,9 +563,14 @@ function StepCockpit({
                 : // A step where nothing applied is not a success. Green here
                   // would read as work delivered on an order that had none.
                   status === "done" && runnableCount > 0
-                  ? finding
-                    ? "border-warning/40 bg-warning/15 text-warning-foreground"
-                    : "border-success/30 bg-success/10 text-success"
+                  ? // A halt stops the journey; a finding lets it continue
+                    // with something to answer. Same colour for both would
+                    // make the stop look survivable.
+                    finding?.taskIndex !== undefined
+                    ? "border-destructive/40 bg-destructive/12 text-destructive"
+                    : finding
+                      ? "border-warning/40 bg-warning/15 text-warning-foreground"
+                      : "border-success/30 bg-success/10 text-success"
                   : "border-border bg-secondary text-muted-foreground",
             )}
           >
@@ -579,9 +584,11 @@ function StepCockpit({
                 className={cn(
                   "h-2 w-2 rounded-full",
                   status === "done" && runnableCount > 0
-                    ? finding
-                      ? "bg-warning"
-                      : "bg-success"
+                    ? finding?.taskIndex !== undefined
+                      ? "bg-destructive"
+                      : finding
+                        ? "bg-warning"
+                        : "bg-success"
                     : blocker
                       ? "bg-destructive"
                       : "bg-muted-foreground/60",
@@ -596,9 +603,11 @@ function StepCockpit({
                   : // Every task ran, but the run turned something up. Saying
                     // "Complete" over a held dispatch would be the badge
                     // contradicting the record directly beneath it.
-                    finding
-                    ? "Finding"
-                    : "Complete"
+                    finding?.taskIndex !== undefined
+                    ? "Halted"
+                    : finding
+                      ? "Finding"
+                      : "Complete"
                 : // "Ready" on a blocked step is a false all-clear: this is the
                   // one step that cannot be run to completion.
                   blocker
@@ -770,7 +779,13 @@ function StepCockpit({
             // pending. It takes precedence over both, or a green tick ends up
             // asserting work the artefact beside it says never happened.
             const isSkipped = taskSkipped(step.id, i, merchant)
-            const isPending = i >= completed && !isRunning && !isFailed
+            // The agent reached this task and REFUSED to produce its output,
+            // because the evidence it needs is not on file. That is neither
+            // done nor failed: nothing went wrong, and nothing was produced.
+            // A tick here would credit the agent with a score it declined to
+            // compute — the exact claim this stop exists to prevent.
+            const isHalted = finding?.taskIndex === i && !isRunning
+            const isPending = i >= completed && !isRunning && !isFailed && !isHalted
             const art = artifactFor(step.id, i, merchant)
             return (
               <button
@@ -790,17 +805,21 @@ function StepCockpit({
                       ? "border-dashed border-border bg-transparent text-muted-foreground"
                       : isFailed
                         ? "border-destructive/45 bg-destructive/15 text-destructive"
-                        : isDone
-                          ? "border-success/40 bg-success/15 text-success"
-                          : isRunning
-                            ? "border-primary bg-primary/15 text-primary"
-                            : "border-border bg-secondary text-muted-foreground",
+                        : isHalted
+                          ? "border-destructive/45 bg-destructive/15 text-destructive"
+                          : isDone
+                            ? "border-success/40 bg-success/15 text-success"
+                            : isRunning
+                              ? "border-primary bg-primary/15 text-primary"
+                              : "border-border bg-secondary text-muted-foreground",
                   )}
                 >
                   {isSkipped ? (
                     <Minus className="h-3.5 w-3.5" />
                   ) : isFailed ? (
                     <AlertTriangle className="h-3.5 w-3.5" />
+                  ) : isHalted ? (
+                    <Pause className="h-3.5 w-3.5" />
                   ) : isDone ? (
                     <Check className="h-3.5 w-3.5" />
                   ) : isRunning ? (
@@ -824,6 +843,11 @@ function StepCockpit({
                   {isFailed && (
                     <p className="mt-1 text-xs font-medium leading-relaxed text-destructive">
                       Failed · {blocker.summary}
+                    </p>
+                  )}
+                  {isHalted && !isFailed && (
+                    <p className="mt-1 text-xs font-medium leading-relaxed text-destructive">
+                      Halted · {finding!.headline}
                     </p>
                   )}
                   {/* Name the artefact on the row, so the claim and the thing

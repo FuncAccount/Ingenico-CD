@@ -205,6 +205,44 @@ export function handoffsFor(step: StepId, softwareOnly: boolean): Handoff[] {
   return STEP_HANDOFFS[step]
 }
 
+/**
+ * The handoffs for a step on a given MERCHANT, narrowed to what that merchant
+ * actually still owes.
+ *
+ * The step-2 list is the full KYB set, which is the right ask when nothing has
+ * arrived. Once the agent has parsed four of six documents, sending that same
+ * list asks the merchant to re-supply what they already sent — the single
+ * fastest way to make an automated chase look unread, and to lose the two
+ * documents that matter in a list of four they can ignore. So where the file
+ * names its outstanding items, the request is narrowed to exactly those.
+ */
+export function handoffsForMerchant(
+  step: StepId,
+  merchant: Merchant,
+  softwareOnly: boolean,
+): Handoff[] {
+  const base = handoffsFor(step, softwareOnly)
+  const outstanding = merchant.underwriting?.documentsOutstanding
+  if (step !== 2 || !outstanding?.length) return base
+
+  return base.map((h) =>
+    h.party === "merchant"
+      ? {
+          ...h,
+          ask: `Supply the ${outstanding.length} outstanding document${
+            outstanding.length === 1 ? "" : "s"
+          }. Underwriting cannot score the file without them.`,
+          // Counted, not spelled. "Two documents" in a literal goes on saying
+          // two after one of them lands.
+          subject: `${outstanding.length} document${
+            outstanding.length === 1 ? "" : "s"
+          } still needed to complete your application`,
+          items: outstanding,
+        }
+      : h,
+  )
+}
+
 /** The party a step is waiting on, before anyone has done anything.
  *
  *  Deliberately NOT just the first handoff: step 3 opens with an Ingenico

@@ -434,7 +434,10 @@ export type MerchantStatus =
 
 export interface MerchantEvent {
   step: StepId
-  actor: "Agent" | "Acquirer"
+  // The merchant acts on this timeline too — supplying documents is an event
+  // the file records. Without them here an inbound arrival had to be
+  // attributed to the Agent, crediting the agent with the merchant's own act.
+  actor: "Agent" | "Acquirer" | "Merchant"
   text: string
   time: string
   done: boolean
