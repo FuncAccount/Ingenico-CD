@@ -1008,10 +1008,13 @@ export function artifactFor(
           // Each named on its own row. A count cannot be chased, and a reader
           // cannot tell from "2 outstanding" whether the gap is clerical or
           // the reason the ownership chain is unknown.
+          // The DOCUMENT is the label. Rows are keyed by label, so a shared
+          // "Outstanding" label collided in React and, worse, buried the one
+          // thing the reader needs — which document — in the source note.
           ...missing.map((d) => ({
-            label: "Outstanding",
+            label: d,
             value: null,
-            source: `not supplied — ${d.toLowerCase()}`,
+            source: "not supplied by the merchant",
           })),
           {
             label: "Cross-field consistency",

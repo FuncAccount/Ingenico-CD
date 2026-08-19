@@ -36,6 +36,8 @@ import {
   workingDaysBetween,
 } from "@/lib/handoffs"
 import { DemoInbound } from "@/components/acquirer/demo-control"
+import { useDemo } from "@/components/acquirer/demo-provider"
+import { outstandingDocuments } from "@/lib/underwriting"
 import { cn } from "@/lib/utils"
 
 const PARTY_META = {
@@ -527,6 +529,7 @@ function MerchantPanel({
   const [edited, setEdited] = useState<string | null>(null)
   const body = edited ?? draft.body
   const [open, setOpen] = useState(false)
+  const { supplyDocuments } = useDemo()
 
   if (!runComplete) {
     return <Blocked>The agent drafts the request to the merchant once the run finishes.</Blocked>
@@ -625,7 +628,16 @@ function MerchantPanel({
           like a received one. */}
       <DemoInbound
         label={`Simulate inbound: merchant ${handoff.portalAction}`}
-        onTrigger={() => onChange({ ...state, receivedIso: new Date().toISOString() })}
+        onTrigger={() => {
+          onChange({ ...state, receivedIso: new Date().toISOString() })
+          // The reply and its CONTENTS are the same event. Marking the handoff
+          // received without delivering the documents left the file still
+          // halted underneath a control that had just said the merchant
+          // uploaded them — the chase closed, the gap didn't.
+          if (handoff.party === "merchant" && outstandingDocuments(merchant).length > 0) {
+            supplyDocuments(merchant.id)
+          }
+        }}
       />
     </div>
   )

@@ -18,6 +18,7 @@ import {
   riskAssessment,
   type EdgeResolution,
   type EdgeVerdict,
+  outstandingDocuments,
 } from "@/lib/underwriting"
 
 function bandTone(band: string) {
@@ -234,6 +235,9 @@ export function EdgeCaseDesk({
     )
   }
 
+  // Same source as the risk panel's refusal, so the two cannot disagree about
+  // whether this file is decidable.
+  const blocked = outstandingDocuments(merchant).length > 0
   const chosen = resolution?.verdict
   const spec = EDGE_VERDICTS.find((v) => v.id === chosen)
   const needsNote = spec?.needsNote ?? false
@@ -253,6 +257,35 @@ export function EdgeCaseDesk({
         </div>
       </div>
 
+      {/* The determination is withheld, not merely disabled-looking, while the
+          file cannot be scored. This edge case IS the missing document: the
+          ownership chain is unknown precisely because the corporate holder's
+          statement never arrived, so every verdict here would be a ruling on
+          evidence nobody has seen. Leaving the three buttons live let an
+          acquirer "Accept as-is" an unknown beneficial owner — and resolving
+          it that way then satisfied the sign-off gate downstream. */}
+      {blocked ? (
+        <div className="rounded-xl border-2 border-destructive/40 bg-destructive/[0.07] px-3.5 py-3">
+          <p className="text-[11px] font-bold uppercase tracking-wide text-destructive">
+            Determination unavailable
+          </p>
+          <p className="mt-1.5 text-xs leading-relaxed text-foreground">
+            You cannot rule on this until the outstanding document arrives — it is the evidence the
+            question turns on. The agent is chasing it.
+          </p>
+          <ul className="mt-2 space-y-1">
+            {EDGE_VERDICTS.map((v) => (
+              <li
+                key={v.id}
+                className="flex items-center gap-2 text-[11px] text-muted-foreground line-through decoration-muted-foreground/50"
+              >
+                <span className="h-3.5 w-3.5 shrink-0 rounded-full border-2 border-border/60" />
+                {v.label}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : (
       <div>
         <p className="mb-1.5 text-[11px] font-medium text-foreground">Your determination</p>
         <div className="space-y-1.5">
@@ -284,8 +317,9 @@ export function EdgeCaseDesk({
           ))}
         </div>
       </div>
+      )}
 
-      {needsNote && (
+      {!blocked && needsNote && (
         <div>
           <label htmlFor="edge-note" className="mb-1.5 block text-[11px] font-medium text-foreground">
             {chosen === "condition" ? "The condition" : "Why you are referring it"}
