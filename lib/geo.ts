@@ -35,6 +35,15 @@ export const CITY_COORDS: Record<string, [number, number]> = {
   "Rotterdam, NL": [4.48, 51.92],
   "Frankfurt, DE": [8.68, 50.11],
   "Barcelona, ES": [2.17, 41.39],
+  // Added with the demo-coverage journeys. The throw above caught every one of
+  // these, which is exactly what it is for.
+  "York, UK": [-1.08, 53.96],
+  "Galway, IE": [-9.05, 53.27],
+  "Innsbruck, AT": [11.4, 47.27],
+  "Porto, PT": [-8.61, 41.15],
+  "Stockholm, SE": [18.07, 59.33],
+  "Tartu, EE": [26.72, 58.38],
+  "Prague, CZ": [14.42, 50.09],
 }
 
 export function coordsFor(city: string): [number, number] {

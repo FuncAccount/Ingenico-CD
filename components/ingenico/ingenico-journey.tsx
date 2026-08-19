@@ -4,7 +4,9 @@ import { useMemo, useState } from "react"
 import { ArrowDownLeft, Check, MapPin, Radio, Wrench } from "lucide-react"
 import { PIPELINE, stepById, type Merchant, type StepId } from "@/lib/acquirer-data"
 import { acquirerOf, estateRows, ingenicoRole, type IngenicoRole } from "@/lib/estate"
+import { needsPhysicalKeying } from "@/lib/devices"
 import { useDecisions } from "@/components/acquirer/decisions-provider"
+import { AgentPanel } from "@/components/ingenico/agent-panel"
 import {
   ConfigPane,
   OrderPane,
@@ -32,38 +34,31 @@ export function IngenicoJourney({
 }) {
   const { decisions } = useDecisions()
   const rows = useMemo(() => estateRows(decisions), [decisions])
-  const live = merchant ? rows.find((r) => r.merchant.id === merchant.id)?.merchant : undefined
+  const row = merchant ? rows.find((r) => r.merchant.id === merchant.id) : undefined
   const [step, setStep] = useState<StepId | null>(null)
 
-  if (!live) {
+  // A journey is always opened FROM an order, so there is no picker here. One
+  // that listed every merchant would be a second copy of the deployments list,
+  // making the same records reachable two ways.
+  if (!row) {
     return (
       <main className="mx-auto max-w-7xl px-6 py-8">
-        <h1 className="text-2xl font-semibold tracking-tight text-foreground">
-          Merchant journey
-        </h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Pick a journey from any book to see it from the deployment side.
+        <p className="text-sm text-muted-foreground">
+          That order is no longer in flight.{" "}
+          <button
+            onClick={() => onSelectMerchant(undefined)}
+            className="font-medium text-primary hover:underline"
+          >
+            Back to orders
+          </button>
         </p>
-        <div className="mt-5 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-          {rows.map((r) => (
-            <button
-              key={r.merchant.id}
-              onClick={() => onSelectMerchant(r.merchant)}
-              className="glass glass-hover rounded-2xl p-3.5 text-left"
-            >
-              <span className="block text-[13px] font-medium text-foreground">
-                {r.merchant.name}
-              </span>
-              <span className="block text-[11px] text-muted-foreground">
-                {r.acquirer} · step {r.merchant.currentStep}
-              </span>
-            </button>
-          ))}
-        </div>
       </main>
     )
   }
 
+  // Bound after the guard, so `row` is known present and no step below has to
+  // invent a fallback for a measurement it does not have.
+  const live = row.merchant
   const book = acquirerOf(live)
   const active: StepId = step ?? live.currentStep
 
@@ -74,7 +69,7 @@ export function IngenicoJourney({
           onClick={() => onSelectMerchant(undefined)}
           className="text-[11px] font-medium text-primary hover:underline"
         >
-          All journeys
+          ← Back to {book} orders
         </button>
         <h1 className="mt-1 text-2xl font-semibold tracking-tight text-foreground">
           {live.name}
@@ -128,7 +123,7 @@ export function IngenicoJourney({
         </nav>
 
         <section>
-          <StepPane merchant={live} step={active} book={book} />
+          <StepPane merchant={live} step={active} book={book} daysInStep={row.daysInStep} />
         </section>
       </div>
     </main>
@@ -139,10 +134,12 @@ function StepPane({
   merchant,
   step,
   book,
+  daysInStep,
 }: {
   merchant: Merchant
   step: StepId
   book: string
+  daysInStep: number
 }) {
   const role = ingenicoRole(step)
   const meta = stepById(step)
@@ -180,20 +177,28 @@ function StepPane({
             {stepById(merchant.currentStep).name}.
           </p>
         </div>
-      ) : role === "inbound" ? (
-        <InboundPane merchant={merchant} step={step} book={book} />
-      ) : step === 3 ? (
-        <OrderPane merchant={merchant} />
-      ) : step === 5 ? (
-        <ConfigPane merchant={merchant} />
-      ) : step === 6 ? (
-        <TestPane merchant={merchant} />
-      ) : step === 7 ? (
-        <ShipPane merchant={merchant} />
-      ) : step === 8 ? (
-        <FieldPane merchant={merchant} />
       ) : (
-        <GoLivePane merchant={merchant} />
+        <>
+          {/* The agent's own work comes FIRST on every reached step. Burying it
+              under the records would make it look like commentary on the step
+              rather than the thing that moved it. */}
+          <AgentPanel merchant={merchant} step={step} daysInStep={daysInStep} acquirer={book} />
+          {role === "inbound" ? (
+            <InboundPane merchant={merchant} step={step} book={book} />
+          ) : step === 3 ? (
+            <OrderPane merchant={merchant} />
+          ) : step === 5 ? (
+            <ConfigPane merchant={merchant} acquirer={book} />
+          ) : step === 6 ? (
+            <TestPane merchant={merchant} />
+          ) : step === 7 ? (
+            <ShipPane merchant={merchant} />
+          ) : step === 8 ? (
+            <FieldPane merchant={merchant} acquirer={book} />
+          ) : (
+            <GoLivePane merchant={merchant} />
+          )}
+        </>
       )}
     </div>
   )
@@ -245,7 +250,12 @@ function InboundPane({
   )
 }
 
-function FieldPane({ merchant }: { merchant: Merchant }) {
+function FieldPane({ merchant, acquirer }: { merchant: Merchant; acquirer: string }) {
+  // Derived, never asserted: this pane claimed keys inject at first connection
+  // for every merchant, which is false for an acquirer whose terminals were
+  // keyed at a facility before despatch — and would have contradicted the
+  // routing the Order step just showed.
+  const keyed = needsPhysicalKeying(acquirer)
   return (
     <div className="glass rounded-2xl p-4">
       <div className="flex items-center gap-2">
@@ -254,9 +264,12 @@ function FieldPane({ merchant }: { merchant: Merchant }) {
       </div>
       <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
         {merchant.terminalCount} unit{merchant.terminalCount === 1 ? "" : "s"} delivered to{" "}
-        {merchant.location}. The merchant powers them on; keys inject at first
-        connection. Nothing reports here until a device calls home — until then
-        it has no uptime to show, which is different from being offline.
+        {merchant.location}. The merchant powers them on;{" "}
+        {keyed
+          ? `these arrived already keyed at a certified facility, so they need no key step here`
+          : `keys inject at first connection`}
+        . Nothing reports here until a device calls home — until then it has no
+        uptime to show, which is different from being offline.
       </p>
     </div>
   )

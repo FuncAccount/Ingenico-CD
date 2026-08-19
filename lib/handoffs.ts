@@ -12,7 +12,7 @@
 // These are different kinds of thing, so they are different shapes in the
 // type, not one status enum wearing three labels.
 
-import type { Merchant, StepId } from "./acquirer-data"
+import type { Merchant, MerchantStatus, StepId } from "./acquirer-data"
 
 export type Party = "acquirer" | "ingenico" | "merchant"
 
@@ -187,6 +187,45 @@ export function waitingOn(
   if (currentStep !== undefined && step < currentStep) return null
   const i = blockingIndex(step, merchantId, states)
   return i === null ? null : STEP_HANDOFFS[step][i].party
+}
+
+// ---------------------------------------------------------------------------
+// Which statuses a step can legitimately carry
+// ---------------------------------------------------------------------------
+
+/**
+ * Whether a status is even POSSIBLE at a step, derived from that step's
+ * handoffs rather than asserted.
+ *
+ * This exists because the fixture is a demo roster built to show every
+ * scenario, and the tempting way to "cover all the cases" is to put every
+ * status against every step. Most of those combinations are fiction: steps
+ * 5-7 have no acquirer handoff at all, so a merchant sitting there "Needs
+ * sign-off" would show a decision nobody can take, on a screen with no control
+ * to take it. A demo that shows an impossible state teaches the room something
+ * false, which is worse than a gap they never notice.
+ *
+ * The genuinely impossible combinations are therefore NOT gaps to be filled —
+ * they are the shape of the process, and `coverageGaps()` reports them
+ * separately from cells that are merely empty.
+ */
+export function statusPossibleAt(step: StepId, status: MerchantStatus): boolean {
+  const parties = STEP_HANDOFFS[step].map((h) => h.party)
+  switch (status) {
+    // Terminal, and only terminal. Step 9 has no handoffs because there is
+    // nothing left to wait for.
+    case "Live":
+      return step === 9
+    case "Needs sign-off":
+      return parties.includes("acquirer")
+    case "With merchant":
+      return parties.includes("merchant")
+    // Work in progress, or work gone wrong. Either can happen at any step that
+    // has not finished — including step 9, which cannot be "in progress".
+    case "On track":
+    case "Exception":
+      return step !== 9
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -19,7 +19,7 @@ import {
   type Merchant,
   type StepId,
 } from "./acquirer-data"
-import { ownerOf, STEP_HANDOFFS, type Party } from "./handoffs"
+import { ownerOf, statusPossibleAt, STEP_HANDOFFS, type Party } from "./handoffs"
 import { applyDecisions, decisionAtStep, type Decisions } from "./decisions"
 
 // ---------------------------------------------------------------------------
@@ -117,6 +117,108 @@ const OTHER_BOOKS: Merchant[] = [
       { step: 8, actor: "Agent", text: "Merchant installing devices on site.", time: "now", done: false },
     ],
   },
+
+  // -------------------------------------------------------------------------
+  // Demo coverage for the estate. This seat is organised by WHO a journey is
+  // waiting on, so the roster has to exercise all three lanes in more than one
+  // book — otherwise every non-home journey looks the same and the lanes only
+  // ever fill from Northgate.
+  // -------------------------------------------------------------------------
+
+  // Step 1 in another book. Ingenico is owed nothing yet, which is itself
+  // worth showing: the estate sees journeys it has no work on.
+  {
+    id: "m-vasa",
+    name: "Vasa Bageri",
+    sector: "Hospitality",
+    location: "Stockholm, SE",
+    size: "kr 6.4m / yr",
+    terminals: "3× A920",
+    terminalCount: 3,
+    currentStep: 1,
+    status: "On track",
+    submitted: "8 hours ago",
+    events: [
+      { step: 1, actor: "Acquirer", text: "Intake received — two bakery sites.", time: "8h ago", done: true },
+      { step: 1, actor: "Agent", text: "Sizing the kit against comparable bakeries.", time: "now", done: false },
+    ],
+  },
+
+  // Step 3, parked on Ingenico's OWN order desk in another book. This is the
+  // lane the estate exists to surface: work owed by Ingenico, in a book the
+  // acquirer product cannot see.
+  {
+    id: "m-lisboaverde",
+    name: "Lisboa Verde Mercado",
+    sector: "Retail",
+    location: "Lisbon, PT",
+    size: "€2.9m / yr",
+    terminals: "5× A920 + 3× Move 5000",
+    terminalCount: 8,
+    currentStep: 3,
+    status: "On track",
+    submitted: "4 days ago",
+    events: [
+      { step: 2, actor: "Acquirer", text: "Underwriting signed off by Meridian Payments.", time: "3d ago", done: true },
+      { step: 3, actor: "Agent", text: "Basket assembled. With the order desk for availability and lead time.", time: "now", done: false },
+    ],
+  },
+
+  // Step 5, Exception, outside the home book — so a failure of Ingenico's own
+  // work is not a Northgate-only story.
+  {
+    id: "m-tallinnkohvik",
+    name: "Tallinn Kohvik",
+    sector: "Hospitality",
+    location: "Tartu, EE",
+    size: "€740k / yr",
+    terminals: "2× Desk 5000",
+    terminalCount: 2,
+    currentStep: 5,
+    status: "Exception",
+    submitted: "9 days ago",
+    events: [
+      { step: 4, actor: "Acquirer", text: "Branding approved by Baltic Card Services.", time: "4d ago", done: true },
+      { step: 5, actor: "Agent", text: "Configuration build failed — the acquirer host rejected the MID range as out of allocation.", time: "now", done: false },
+    ],
+  },
+
+  // Step 8, With merchant, in another book.
+  {
+    id: "m-hansabooks",
+    name: "Hansa Books",
+    sector: "Retail",
+    location: "Riga, LV",
+    size: "€520k / yr",
+    terminals: "1× A920",
+    terminalCount: 1,
+    currentStep: 8,
+    status: "With merchant",
+    submitted: "21 days ago",
+    events: [
+      { step: 7, actor: "Agent", text: "Delivered to the shop.", time: "8d ago", done: true },
+      { step: 8, actor: "Agent", text: "Not activated. Owner away until the end of the month.", time: "now", done: false },
+    ],
+  },
+
+  // Step 9 outside the home book, so "Live" is not something only Northgate
+  // ever reaches.
+  {
+    id: "m-praha",
+    name: "Praha Kavárna",
+    sector: "Hospitality",
+    location: "Prague, CZ",
+    size: "Kč 18m / yr",
+    terminals: "4× A920",
+    terminalCount: 4,
+    currentStep: 9,
+    status: "Live",
+    submitted: "27 days ago",
+    events: [
+      { step: 8, actor: "Agent", text: "All 4 terminals activated on site.", time: "5d ago", done: true },
+      { step: 9, actor: "Agent", text: "First live payment detected. Records reconciled to Meridian Payments.", time: "4d ago", done: true },
+    ],
+  },
 ]
 
 /** Which book each journey sits in, and how long it has been on its current
@@ -143,6 +245,24 @@ const ESTATE_META: Record<string, { acquirer: string; daysInStep: number }> = {
   "m-bellavista": { acquirer: "Meridian Payments", daysInStep: 1 },
   "m-harbourline": { acquirer: "Baltic Card Services", daysInStep: 1 },
   "m-stonebridge": { acquirer: "Baltic Card Services", daysInStep: 4 },
+
+  // Demo-coverage journeys, home book.
+  "m-ravenswood": { acquirer: HOME_ACQUIRER, daysInStep: 1 },
+  "m-thistle": { acquirer: HOME_ACQUIRER, daysInStep: 1 },
+  "m-orchard": { acquirer: HOME_ACQUIRER, daysInStep: 3 },
+  "m-meadowbank": { acquirer: HOME_ACQUIRER, daysInStep: 1 },
+  // Past the 2-day configure/test service level, so the estate has a genuine
+  // breach to sort to the top of the "On us" lane rather than an empty state.
+  "m-summit": { acquirer: HOME_ACQUIRER, daysInStep: 4 },
+  "m-glasswing": { acquirer: HOME_ACQUIRER, daysInStep: 3 },
+  "m-pinegrove": { acquirer: HOME_ACQUIRER, daysInStep: 6 },
+
+  // Demo-coverage journeys, other books.
+  "m-vasa": { acquirer: "Meridian Payments", daysInStep: 1 },
+  "m-lisboaverde": { acquirer: "Meridian Payments", daysInStep: 2 },
+  "m-tallinnkohvik": { acquirer: "Baltic Card Services", daysInStep: 5 },
+  "m-hansabooks": { acquirer: "Baltic Card Services", daysInStep: 9 },
+  "m-praha": { acquirer: "Meridian Payments", daysInStep: 4 },
 }
 
 /** Every journey Ingenico can see, across all books. The estate's population,
@@ -206,6 +326,15 @@ export function estateRows(decisions: Decisions): EstateRow[] {
         `estate: no book recorded for ${merchant.id}. Add it to ESTATE_META.`,
       )
     }
+    // Same reasoning as the check above: loud, not forgiving. A journey whose
+    // status cannot occur at its step renders a lane and an action that the
+    // process does not support, and it looks like a working screen.
+    if (!statusPossibleAt(merchant.currentStep, merchant.status)) {
+      throw new Error(
+        `estate: ${merchant.id} is "${merchant.status}" at step ${merchant.currentStep}, ` +
+          `which that step's handoffs do not allow.`,
+      )
+    }
     const party = waitingParty(merchant, decisions)
     const sla = party === "ingenico" ? ingenicoSla(merchant.currentStep) : null
     return {
@@ -225,9 +354,20 @@ export function estateRows(decisions: Decisions): EstateRow[] {
  *  ownership is only the default shape of the step. */
 export function waitingParty(m: Merchant, decisions: Decisions): Party | null {
   if (m.status === "Live") return null
-  // Escalated to the acquirer by name: it is their call, not Ingenico's.
-  if (m.status === "Exception" || m.status === "Needs sign-off") return "acquirer"
+  // A sign-off is an acquirer decision by definition, and `statusPossibleAt`
+  // guarantees the step actually has one to take.
+  if (m.status === "Needs sign-off") return "acquirer"
   if (m.status === "With merchant") return "merchant"
+
+  // An exception is the step's OWN work having failed, so it is held by
+  // whoever owns that work. This used to route every exception to the
+  // acquirer, which was right for the only exception the fixture had — an
+  // order blocked on a bad delivery address at step 3, genuinely theirs to
+  // correct — and silently wrong the moment an Ingenico-owned step could
+  // fail. A certification failure at step 6 filed under "on the acquirer"
+  // tells Marc there is nothing he can do about his own test rig, and quietly
+  // drops it out of the one lane that carries a service level.
+  if (m.status === "Exception") return ownerOf(m.currentStep)
 
   // The acquirer has signed THIS step, so they are no longer holding it — even
   // though `currentStep` has not advanced. Without this the journey falls

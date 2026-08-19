@@ -605,9 +605,198 @@ export const MERCHANTS: Merchant[] = [
       { step: 8, actor: "Agent", text: "Guiding merchant through install in Spanish — 3 of 4 activated.", time: "2h ago", done: false },
     ],
   },
+
+  // -------------------------------------------------------------------------
+  // Demo coverage. Every step 1-9 carries at least one journey and all five
+  // statuses appear, so a walkthrough never lands on an empty screen.
+  //
+  // These are ordinary fixtures, not a special case. `statusPossibleAt()`
+  // rejects any step/status pair the handoff model says cannot occur, and
+  // `estateRows` throws on one, so this comment cannot quietly go stale.
+  // -------------------------------------------------------------------------
+
+  // Step 1, still being drafted. Having both statuses at this step is the
+  // point: here the agent has not finished, so there is nothing yet to decide.
+  {
+    id: "m-ravenswood",
+    name: "Ravenswood Deli",
+    sector: "Hospitality",
+    location: "Bristol, UK",
+    size: "£680k / yr",
+    terminals: "2× A920",
+    terminalCount: 2,
+    currentStep: 1,
+    status: "On track",
+    submitted: "3 hours ago",
+    events: [
+      { step: 1, actor: "Acquirer", text: "Intake received — single site, counter service.", time: "3h ago", done: true },
+      { step: 1, actor: "Agent", text: "Matching against comparable delis to size the kit.", time: "now", done: false },
+    ],
+  },
+
+  // Step 1, drafted and now waiting on the acquirer to accept the merchant.
+  {
+    id: "m-thistle",
+    name: "Thistle & Thread",
+    sector: "Retail",
+    location: "Edinburgh, UK",
+    size: "£940k / yr",
+    terminals: "2× A920 + softPOS",
+    terminalCount: 3,
+    currentStep: 1,
+    status: "Needs sign-off",
+    submitted: "1 day ago",
+    events: [
+      { step: 1, actor: "Acquirer", text: "Intake received — shop floor plus weekend markets.", time: "1d ago", done: true },
+      { step: 1, actor: "Agent", text: "Recommended 2× A920 for the shop and softPOS for market stalls.", time: "5h ago", done: true },
+      { step: 1, actor: "Acquirer", text: "Awaiting your confirmation of the setup.", time: "now", done: false },
+    ],
+  },
+
+  // Step 2, RETURNED to the merchant — the status that was missing entirely.
+  // Not "On track", which would relabel a request for missing evidence as
+  // progress, and not "Needs sign-off", because the decision is not the
+  // acquirer's to take again until the documents come back.
+  {
+    id: "m-orchard",
+    name: "Orchard Lane Veterinary",
+    sector: "Healthcare",
+    location: "Dublin, IE",
+    size: "€1.5m / yr",
+    terminals: "3× Desk 5000",
+    terminalCount: 3,
+    currentStep: 2,
+    status: "With merchant",
+    submitted: "6 days ago",
+    underwriting: {
+      identity: "Verified — CRO registration and director KYC matched",
+      // A partial parse is stated as partial. "4 documents parsed" alone would
+      // read as a complete file.
+      documents: "4 of 6 documents parsed — 2 outstanding",
+      riskScore: 22,
+      riskBand: "Low",
+      edgeCase:
+        "Beneficial ownership cannot be confirmed from the file supplied: a 30% holder is a second company with no ownership statement attached.",
+    },
+    events: [
+      { step: 1, actor: "Acquirer", text: "Merchant submitted — 3 consulting rooms.", time: "6d ago", done: true },
+      { step: 2, actor: "Agent", text: "Identity verified. 4 of 6 documents parsed; ownership chain incomplete.", time: "4d ago", done: true },
+      { step: 2, actor: "Acquirer", text: "Returned to merchant for the ownership statement and a settlement bank statement.", time: "3d ago", done: true },
+      { step: 2, actor: "Agent", text: "Chase sent. Merchant has opened the portal but not uploaded.", time: "now", done: false },
+    ],
+  },
+
+  // Step 3, validated by the order desk and waiting on the acquirer to commit
+  // the spend. Mixed basket so the routing has a real allocation to solve.
+  {
+    id: "m-meadowbank",
+    name: "Meadowbank Farm Shop",
+    sector: "Retail",
+    location: "York, UK",
+    size: "£3.1m / yr",
+    terminals: "6× A920 + 4× Move 5000",
+    terminalCount: 10,
+    currentStep: 3,
+    status: "Needs sign-off",
+    submitted: "5 days ago",
+    events: [
+      { step: 1, actor: "Acquirer", text: "Merchant submitted — farm shop, café and a seasonal yard.", time: "5d ago", done: true },
+      { step: 2, actor: "Acquirer", text: "Underwriting signed off. Risk score 16 (Low).", time: "4d ago", done: true },
+      { step: 3, actor: "Agent", text: "Basket priced and availability confirmed.", time: "1d ago", done: true },
+      { step: 3, actor: "Acquirer", text: "Awaiting your order confirmation against the rate card.", time: "now", done: false },
+    ],
+  },
+
+  // Step 6, Exception. An Ingenico-OWNED step going wrong: the acquirer can
+  // see it and chase, but cannot fix it from this screen.
+  {
+    id: "m-summit",
+    name: "Summit Sports",
+    sector: "Retail",
+    location: "Innsbruck, AT",
+    size: "€2.7m / yr",
+    terminals: "6× A920",
+    terminalCount: 6,
+    currentStep: 6,
+    status: "Exception",
+    submitted: "12 days ago",
+    events: [
+      { step: 5, actor: "Agent", text: "Configuration built and signed.", time: "4d ago", done: true },
+      { step: 6, actor: "Agent", text: "Certification pack run: 4 of 6 terminals passed.", time: "2d ago", done: true },
+      { step: 6, actor: "Agent", text: "2 terminals failed the contactless floor-limit test. Held for rebuild — not shipped.", time: "now", done: false },
+    ],
+  },
+
+  // Step 7, Exception. Despatched then stopped, which is a different failure
+  // from never having left: the units exist and are somewhere.
+  {
+    id: "m-glasswing",
+    name: "Glasswing Hotels",
+    sector: "Hospitality",
+    location: "Porto, PT",
+    size: "€4.6m / yr",
+    terminals: "10× A920 + 2× Desk 5000",
+    terminalCount: 12,
+    currentStep: 7,
+    status: "Exception",
+    submitted: "16 days ago",
+    events: [
+      { step: 6, actor: "Agent", text: "Certification pack passed on all 12 units.", time: "5d ago", done: true },
+      { step: 7, actor: "Agent", text: "Despatched from two depots.", time: "3d ago", done: true },
+      { step: 7, actor: "Agent", text: "Second shipment held in transit — commercial invoice rejected at the border. 10 of 12 delivered.", time: "now", done: false },
+    ],
+  },
+
+  // Step 8, waiting on the merchant rather than progressing. Same status as
+  // Orchard Lane but a genuinely different meaning — nothing is missing from
+  // the file, the site simply has not let anyone in.
+  {
+    id: "m-pinegrove",
+    name: "Pinegrove Garden Rooms",
+    sector: "Retail",
+    location: "Galway, IE",
+    size: "€1.1m / yr",
+    terminals: "2× Move 5000",
+    terminalCount: 2,
+    currentStep: 8,
+    status: "With merchant",
+    submitted: "18 days ago",
+    events: [
+      { step: 7, actor: "Agent", text: "Delivered and signed for at the showroom.", time: "6d ago", done: true },
+      { step: 8, actor: "Agent", text: "Install window missed twice. Devices on site, not yet powered on.", time: "2d ago", done: true },
+      { step: 8, actor: "Acquirer", text: "Chased the merchant for a third appointment.", time: "now", done: false },
+    ],
+  },
 ]
 
 // KPI helpers derived from the book so the numbers always match the table.
+/**
+ * The order the book is worked in, which is what this page says it is for:
+ * "everything onboarding, and what needs your call".
+ *
+ * The table previously rendered in fixture order — effectively arbitrary, and
+ * arbitrary is a claim too: it tells the reader there is no reason to start at
+ * the top. Anything demanding the acquirer's own action leads; work parked
+ * elsewhere follows; finished journeys sit at the bottom. Ties break by step
+ * so a scan still runs along the pipeline.
+ */
+const STATUS_URGENCY: Record<MerchantStatus, number> = {
+  Exception: 0,
+  "Needs sign-off": 1,
+  "With merchant": 2,
+  "On track": 3,
+  Live: 4,
+}
+
+export function portfolioOrder(merchants: Merchant[]): Merchant[] {
+  return [...merchants].sort((a, b) => {
+    const u = STATUS_URGENCY[a.status] - STATUS_URGENCY[b.status]
+    if (u !== 0) return u
+    if (a.currentStep !== b.currentStep) return a.currentStep - b.currentStep
+    return a.name.localeCompare(b.name)
+  })
+}
+
 export function portfolioKpis(merchants: Merchant[]) {
   const liveThisMonth = merchants.filter((m) => m.status === "Live").length
   const awaitingSignOff = merchants.filter((m) => m.status === "Needs sign-off").length

@@ -40,7 +40,7 @@ export const MODELS: Record<ModelId, DeviceModel> = {
 
 /* ---------------------------------------------------------------- geography */
 
-interface Point { lat: number; lon: number }
+export interface Point { lat: number; lon: number }
 
 const CITIES: Record<string, Point> = {
   "Manchester, UK": { lat: 53.48, lon: -2.24 },
@@ -62,15 +62,40 @@ const CITIES: Record<string, Point> = {
   "Leeds, UK": { lat: 53.8, lon: -1.55 },
 }
 
+/** Undefined for a city not in the table — callers must treat that as an
+ *  unknown location rather than substituting a default that would silently
+ *  place the merchant somewhere real. */
+export function cityPoint(city: string): Point | undefined {
+  return CITIES[city]
+}
+
 export interface Warehouse {
   id: string
   name: string
   city: string
   at: Point
-  /** On-hand units per model. A model absent from this map is not stocked here
-   *  at all, which is different from being stocked at zero. */
+  /**
+   * AVAILABLE TO PROMISE this week, not total inventory: units already
+   * committed to other deployments cannot be shipped again, so planning
+   * against the warehouse's full on-hand figure would let every order be met
+   * from the biggest depot and make the sourcing search decorative.
+   *
+   * A model absent from this map is not stocked here at all, which is
+   * different from being stocked at zero.
+   */
   stock: Partial<Record<ModelId, number>>
   cutoff: string
+  /**
+   * Whether this site is a certified key injection facility (KIF).
+   *
+   * A PIN-entry terminal cannot be keyed anywhere convenient: loading the
+   * acquirer's encryption keys requires a PCI-certified secure room, and only
+   * a few sites hold that certification. A high-volume distribution centre
+   * usually does NOT — Rotterdam ships the most units here and cannot inject
+   * a key, which is what makes a depot-to-depot hop a real constraint rather
+   * than a decorative line on a map.
+   */
+  keyInjection: boolean
 }
 
 export const WAREHOUSES: Warehouse[] = [
@@ -79,24 +104,28 @@ export const WAREHOUSES: Warehouse[] = [
     name: "Rotterdam DC",
     city: "Rotterdam, NL",
     at: { lat: 51.92, lon: 4.48 },
-    stock: { A920: 340, "Move 5000": 180, "Desk 5000": 260 },
+    stock: { A920: 22, "Move 5000": 14, "Desk 5000": 9 },
     cutoff: "16:00 CET",
+    // The largest depot is a volume DC, not a secure facility.
+    keyInjection: false,
   },
   {
     id: "wh-fra",
     name: "Frankfurt DC",
     city: "Frankfurt, DE",
     at: { lat: 50.11, lon: 8.68 },
-    stock: { A920: 120, "Move 5000": 64, "Desk 5000": 95 },
+    stock: { A920: 15, "Move 5000": 6, "Desk 5000": 7 },
     cutoff: "15:00 CET",
+    keyInjection: true,
   },
   {
     id: "wh-bcn",
     name: "Barcelona DC",
     city: "Barcelona, ES",
     at: { lat: 41.39, lon: 2.17 },
-    stock: { A920: 88, "Move 5000": 40, "Desk 5000": 30 },
+    stock: { A920: 9, "Move 5000": 4, "Desk 5000": 3 },
     cutoff: "15:00 CET",
+    keyInjection: true,
   },
   {
     id: "wh-dub",
@@ -105,20 +134,51 @@ export const WAREHOUSES: Warehouse[] = [
     at: { lat: 53.35, lon: -6.26 },
     // Deliberately thin on Desk 5000: Brightline's 12-unit order cannot be met
     // from the site on its doorstep, which is the whole point of the screen.
-    stock: { A920: 45, "Move 5000": 22, "Desk 5000": 5 },
+    stock: { A920: 5, "Move 5000": 2, "Desk 5000": 1 },
     cutoff: "14:00 GMT",
+    keyInjection: false,
   },
   {
     id: "wh-mil",
     name: "Milan DC",
     city: "Milan, IT",
     at: { lat: 45.46, lon: 9.19 },
-    stock: { A920: 76, "Move 5000": 35, "Desk 5000": 48 },
+    stock: { A920: 7, "Move 5000": 5, "Desk 5000": 4 },
     cutoff: "15:00 CET",
+    keyInjection: false,
   },
 ]
 
-function haversine(a: Point, b: Point): number {
+/**
+ * WHETHER TERMINALS MUST BE PHYSICALLY KEYED BEFORE DELIVERY.
+ *
+ * Most modern estates use remote key injection: the terminal is shipped
+ * unkeyed and pulls its keys over the network on first connection, so every
+ * depot can ship straight to the merchant. Some acquirers still require keys
+ * to be loaded in a certified facility before the box leaves — older key
+ * hierarchies, or a scheme approval that predates RKI.
+ *
+ * This is a property of the ACQUIRER, not the device or the depot, which is
+ * why the whole rollout changes shape when it is true.
+ */
+export const REMOTE_KEY_INJECTION: Record<string, boolean> = {
+  "Northgate Acquiring": true,
+  "Meridian Payments": false,
+  "Baltic Card Services": false,
+}
+
+/** Unknown acquirers are treated as requiring a physical stop. An unverified
+ *  key policy is not evidence that remote injection is permitted, and guessing
+ *  "remote" would silently skip a mandatory step. */
+export function needsPhysicalKeying(acquirer: string): boolean {
+  return REMOTE_KEY_INJECTION[acquirer] !== true
+}
+
+export function injectionSites(): Warehouse[] {
+  return WAREHOUSES.filter((w) => w.keyInjection)
+}
+
+export function haversineKm(a: Point, b: Point): number {
   const R = 6371
   const dLat = ((b.lat - a.lat) * Math.PI) / 180
   const dLon = ((b.lon - a.lon) * Math.PI) / 180
@@ -203,7 +263,7 @@ export function planLine(m: Merchant, line: OrderLine): LinePlan {
   const dest = CITIES[m.location]
   const candidates: SourceCandidate[] = WAREHOUSES.map((w) => {
     const onHand = w.stock[line.model] ?? 0
-    const distanceKm = dest ? haversine(w.at, dest) : 0
+    const distanceKm = dest ? haversineKm(w.at, dest) : 0
     return {
       warehouse: w,
       distanceKm,
@@ -242,6 +302,13 @@ export interface DeliveryOption {
   days: number
   /** Per-shipment cost in EUR. */
   cost: number
+  /**
+   * How the freight actually travels. Carried explicitly rather than inferred
+   * from `id`, because emissions are a property of the MODE — a future express
+   * AIR product would otherwise be silently costed as a road lane, which is
+   * the one error a carbon figure must not make.
+   */
+  mode: "road" | "air"
   note?: string
 }
 
@@ -255,6 +322,7 @@ export function deliveryOptions(transitDays: number): DeliveryOption[] {
       service: "Standard road",
       days: transitDays + 1,
       cost: 42,
+      mode: "road",
     },
     {
       id: "exp",
@@ -262,6 +330,7 @@ export function deliveryOptions(transitDays: number): DeliveryOption[] {
       service: "Express road",
       days: transitDays,
       cost: 88,
+      mode: "road",
     },
   ]
   if (transitDays >= 2) {
@@ -271,6 +340,7 @@ export function deliveryOptions(transitDays: number): DeliveryOption[] {
       service: "Air freight",
       days: 1,
       cost: 265,
+      mode: "air",
       note: "Bypasses the road lane entirely.",
     })
   }
@@ -287,8 +357,14 @@ export interface ConfigItem {
   source: "Derived by agent" | "From acquirer" | "Scheme mandated"
 }
 
-export function configProfile(m: Merchant): ConfigItem[] {
+export function configProfile(m: Merchant, acquirer: string): ConfigItem[] {
   const contactless = m.sector === "Transport" ? "£100 / €50 with transit exemption" : "£100 / €50"
+  // Derived from the acquirer's key policy, never asserted: this line stating
+  // "Remote" while the shipment is routed through an injection facility would
+  // have the Configure step contradict the Order step.
+  const keying = needsPhysicalKeying(acquirer)
+    ? "Physical, at a certified facility before despatch"
+    : "Remote, at first connection"
   return [
     { label: "Acceptance profile", value: `${m.sector} — standard EMV`, source: "Derived by agent" },
     { label: "Schemes enabled", value: "Visa, Mastercard, Amex, domestic debit", source: "From acquirer" },
@@ -296,7 +372,7 @@ export function configProfile(m: Merchant): ConfigItem[] {
     { label: "Tipping / gratuity", value: m.sector === "Hospitality" ? "Enabled, prompt after amount" : "Disabled", source: "Derived by agent" },
     { label: "Receipt branding", value: "Merchant logo, acquirer footer", source: "From acquirer" },
     { label: "Settlement window", value: "Daily, 23:00 local", source: "From acquirer" },
-    { label: "Key injection", value: "Remote, at first connection", source: "Scheme mandated" },
+    { label: "Key injection", value: keying, source: "From acquirer" },
   ]
 }
 
@@ -460,6 +536,18 @@ export interface FleetSummary {
   firmwareBehind: number
   merchants: number
   licences: number
+}
+
+/**
+ * Share of ACTIVATED terminals currently online.
+ *
+ * Returns null when nothing has been activated: with no denominator there is
+ * no availability to report, and rendering 0% would claim a total outage at a
+ * site whose terminals are simply still in their boxes.
+ */
+export function availabilityPct(s: FleetSummary): number | null {
+  if (s.activated === 0) return null
+  return Math.round((s.online / s.activated) * 100)
 }
 
 export function fleetSummary(devices: FleetDevice[], licences: number): FleetSummary {

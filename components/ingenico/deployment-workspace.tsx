@@ -237,8 +237,8 @@ function DeliveryPicker({ transitDays, cutoff }: { transitDays: number; cutoff: 
 
 /* -------------------------------------------------------- 5. Configure */
 
-export function ConfigPane({ merchant }: { merchant: Merchant }) {
-  const items = configProfile(merchant)
+export function ConfigPane({ merchant, acquirer }: { merchant: Merchant; acquirer: string }) {
+  const items = configProfile(merchant, acquirer)
   return (
     <div className="flex flex-col gap-4">
       <Intro
