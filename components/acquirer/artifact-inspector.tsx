@@ -556,6 +556,29 @@ function RecordsView({ artifact }: { artifact: Extract<Artifact, { kind: "record
             {r.source && (
               <p className="mt-0.5 font-mono text-[10px] text-muted-foreground">{r.source}</p>
             )}
+            {/* A gap that names who closes it and when is a scheduled step; a
+                gap that names nobody is an open question the reader has to
+                chase. The two must not look alike. */}
+            {r.value === null && r.resolution && (
+              <p
+                className={cn(
+                  "mt-1.5 inline-flex items-center gap-1.5 rounded px-1.5 py-0.5 text-[10px]",
+                  r.resolution.blocking
+                    ? "bg-warning/15 text-warning-foreground"
+                    : "bg-secondary text-muted-foreground",
+                )}
+              >
+                {r.resolution.blocking ? (
+                  <AlertTriangle className="h-3 w-3 shrink-0" />
+                ) : (
+                  <Info className="h-3 w-3 shrink-0" />
+                )}
+                <span>
+                  <span className="font-medium">{r.resolution.owner}</span> · {r.resolution.when}
+                  {r.resolution.blocking ? " — needed before this step can clear" : ""}
+                </span>
+              </p>
+            )}
           </div>
         ))}
       </div>
@@ -704,7 +727,12 @@ export function ArtifactInspector(props: Props) {
     case "brand":
       return (
         <Shell title={artifact.title} note={artifact.note}>
-          <BrandStudio merchant={props.merchant} theme={props.theme} onTheme={props.onTheme} />
+          <BrandStudio
+            merchant={props.merchant}
+            theme={props.theme}
+            onTheme={props.onTheme}
+            focus={artifact.focus}
+          />
         </Shell>
       )
   }

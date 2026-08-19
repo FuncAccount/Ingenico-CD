@@ -52,6 +52,32 @@ export function coordsFor(city: string): [number, number] {
   return c
 }
 
+/** The country suffix a location carries ("Manchester, UK" → "UK"). */
+export function countryOf(location: string): string {
+  const parts = location.split(",")
+  return (parts[parts.length - 1] ?? "").trim()
+}
+
+/**
+ * Great-circle distance in km between two cities.
+ *
+ * Used to rank look-alike merchants. Matching on sector alone put Spanish and
+ * Italian merchants at the top of the comparison set for a Manchester
+ * applicant, which is not a look-alike in any sense an underwriter would
+ * accept — acquiring economics, scheme mix and regulator all track geography.
+ */
+export function distanceKm(from: string, to: string): number {
+  const [lon1, lat1] = coordsFor(from)
+  const [lon2, lat2] = coordsFor(to)
+  const R = 6371
+  const rad = (d: number) => (d * Math.PI) / 180
+  const dLat = rad(lat2 - lat1)
+  const dLon = rad(lon2 - lon1)
+  const a =
+    Math.sin(dLat / 2) ** 2 + Math.cos(rad(lat1)) * Math.cos(rad(lat2)) * Math.sin(dLon / 2) ** 2
+  return Math.round(2 * R * Math.asin(Math.sqrt(a)))
+}
+
 /**
  * A site's condition, derived from the devices standing in it — never stored.
  *

@@ -12,6 +12,7 @@ import { useMemo, useState } from "react"
 import { AlertTriangle, Check, Info, Lock, Wand2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { Merchant } from "@/lib/acquirer-data"
+import type { BrandFocus } from "@/lib/artifacts"
 import {
   ACQUIRER,
   DISPLAY_NAME_LIMIT,
@@ -252,20 +253,95 @@ function RuleRow({ rule, onFix }: { rule: BrandRule; onFix: (r: BrandRule) => vo
 
 /* ---------------------------------------------------------------------- main */
 
+/**
+ * What the merchant actually sent us, item by item.
+ *
+ * This is the `assets` face of the step and it is deliberately NOT the theme
+ * editor: "pull the assets" and "design with them" are different acts, and
+ * rendering the same editor for both made the journey look stuck. An item the
+ * merchant never supplied is named as a gap with the fallback that will ship
+ * in its place — a silent default here is how a house-style receipt reaches a
+ * customer under the merchant's name.
+ */
+function AssetInventory({ theme, merchant }: { theme: BrandTheme; merchant: Merchant }) {
+  const items: { label: string; value: string | null; source: string; fallback?: string }[] = [
+    {
+      label: "Logo artwork",
+      value: theme.logoSupplied ? "Received — vector, transparent ground" : null,
+      source: "merchant onboarding upload",
+      fallback: "Display name set in the brand typeface",
+    },
+    { label: "Brand colour", value: theme.primary.toUpperCase(), source: "sampled from supplied artwork" },
+    { label: "Display name", value: theme.displayName, source: "merchant submission" },
+    { label: "Receipt footer", value: theme.receiptFooter || null, source: "merchant submission", fallback: "Footer left blank on the printed receipt" },
+    { label: "Trading address", value: merchant.location, source: "registered company record" },
+  ]
+  const missing = items.filter((i) => i.value === null).length
+
+  return (
+    <div className="space-y-3">
+      <div className="overflow-hidden rounded-xl border border-border/70 bg-white/60">
+        <div className="flex items-center justify-between gap-2 border-b border-border/60 px-3 py-2">
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            Received from the merchant
+          </p>
+          <span
+            className={cn(
+              "rounded px-1.5 py-0.5 text-[10px] font-bold",
+              missing ? "bg-warning/15 text-warning-foreground" : "bg-success/12 text-success",
+            )}
+          >
+            {missing ? `${missing} not supplied` : "Complete"}
+          </span>
+        </div>
+        <div className="divide-y divide-border/50">
+          {items.map((i) => (
+            <div key={i.label} className="flex items-start justify-between gap-4 px-3 py-2.5">
+              <div className="min-w-0">
+                <p className="text-[11px] font-medium text-foreground">{i.label}</p>
+                <p className="mt-0.5 text-[10px] text-muted-foreground">{i.source}</p>
+              </div>
+              <div className="shrink-0 text-right">
+                {i.value === null ? (
+                  <>
+                    <p className="text-[11px] font-medium text-warning-foreground">Not supplied</p>
+                    <p className="mt-0.5 text-[10px] text-muted-foreground">{i.fallback}</p>
+                  </>
+                ) : (
+                  <p className="max-w-[15rem] break-words text-[11px] text-foreground">{i.value}</p>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+      <p className="text-[11px] leading-relaxed text-muted-foreground">
+        Assets are taken as received. Nothing here is edited at this task — the design that uses
+        them is drafted in <span className="font-medium text-foreground">Draft the device theme</span>.
+      </p>
+    </div>
+  )
+}
+
 export function BrandStudio({
   merchant,
   theme,
   onTheme,
+  focus,
 }: {
   merchant: Merchant
   theme: BrandTheme
   onTheme: (t: BrandTheme) => void
+  /** Which face of the studio to render. See `BrandFocus`. */
+  focus: BrandFocus
 }) {
   const [screen, setScreen] = useState<ScreenId>("welcome")
   const rules = useMemo(() => checkBrand(theme), [theme])
   const blocked = blockers(rules)
 
   const set = <K extends keyof BrandTheme>(k: K, v: BrandTheme[K]) => onTheme({ ...theme, [k]: v })
+
+  if (focus === "assets") return <AssetInventory theme={theme} merchant={merchant} />
 
   return (
     <div className="space-y-4">
@@ -300,7 +376,10 @@ export function BrandStudio({
         </div>
       </div>
 
-      {/* Controls */}
+      {/* Controls — only on the theme task. On the checks task the design is
+          the thing being judged, and putting its editor beside the verdict
+          invites you to change the subject rather than answer the question. */}
+      {focus === "theme" && (
       <div className="rounded-xl border border-border/70 bg-white/60 p-4">
         <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           Design
@@ -392,8 +471,10 @@ export function BrandStudio({
           </label>
         </div>
       </div>
+      )}
 
-      {/* Gate */}
+      {/* Gate — the whole subject of the checks task, and a summary on the
+          theme task so a failing edit is visible while it is being made. */}
       <div className="overflow-hidden rounded-xl border border-border/70 bg-white/60">
         <div className="flex items-center justify-between gap-2 border-b border-border/60 px-3 py-2">
           <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">

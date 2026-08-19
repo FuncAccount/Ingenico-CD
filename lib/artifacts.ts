@@ -12,6 +12,7 @@
 import { MERCHANTS, type Merchant, type StepId } from "@/lib/acquirer-data"
 import { ACQUIRER } from "@/lib/branding"
 import { MODELS, configProfile, orderLines, type ModelId } from "@/lib/devices"
+import { countryOf, distanceKm } from "@/lib/geo"
 import { riskAssessment } from "@/lib/underwriting"
 
 /* ------------------------------------------------------------------ money */
@@ -418,6 +419,17 @@ export interface RecordRow {
   value: string | null
   /** Where the value came from, so a figure is never orphaned from its source. */
   source?: string
+  /**
+   * For a row with no value: WHO closes the gap and WHEN.
+   *
+   * A named absence was still only half an answer — "not on file" told the
+   * reader something was missing but not whether it was their problem, or
+   * whether the pipeline would stall on it. Every gap either resolves later
+   * in the flow (`blocking: false`) or needs someone to act now
+   * (`blocking: true`), and saying which is the difference between a note
+   * and a task.
+   */
+  resolution?: { owner: string; when: string; blocking: boolean }
 }
 
 export interface CheckRow {
@@ -445,7 +457,20 @@ export type Artifact =
   // changes something here, and the change is what the sign-off then rests on.
   | { kind: "risk"; title: string; note: string }
   | { kind: "edge"; title: string; note: string }
-  | { kind: "brand"; title: string; note: string }
+  /** `focus` says WHICH part of the brand studio this task produced. Without
+   *  it all three branding tasks rendered the identical studio — same
+   *  controls, same mockups — so the journey looked like it had stalled on one
+   *  screen and there was no way to tell what any individual task had done. */
+  | { kind: "brand"; title: string; note: string; focus: BrandFocus }
+
+/**
+ * Which face of the brand studio a task is answerable for.
+ *
+ *  - `assets` — what the merchant actually supplied, and what is missing.
+ *  - `theme`  — the editable design and its live proof on the device.
+ *  - `checks` — the rules the design must pass before it can ship.
+ */
+export type BrandFocus = "assets" | "theme" | "checks"
 
 /** The console line for a task, derived from the same numbers the artefact
  *  renders. Hand-written trace text drifts: the stock line claimed "4× dock"
@@ -599,16 +624,12 @@ const COUNTRY_RULES: Record<string, { locale: string; vat: string }> = {
   CZ: { locale: "cs-CZ", vat: "DPH 21%" },
 }
 
-function countryOf(merchant: Merchant): string {
-  return merchant.location.split(",").pop()?.trim() ?? ""
-}
-
 export function localeFor(merchant: Merchant): string | null {
-  return COUNTRY_RULES[countryOf(merchant)]?.locale ?? null
+  return COUNTRY_RULES[countryOf(merchant.location)]?.locale ?? null
 }
 
 export function vatFor(merchant: Merchant): string | null {
-  return COUNTRY_RULES[countryOf(merchant)]?.vat ?? null
+  return COUNTRY_RULES[countryOf(merchant.location)]?.vat ?? null
 }
 
 /**
@@ -717,20 +738,55 @@ export function artifactFor(
           { label: "Location", value: merchant.location, source: "your submission" },
           { label: "Annual card volume", value: merchant.size, source: "banded" },
           { label: "Devices requested", value: merchant.terminals, source: "your submission" },
-          { label: "Company number", value: null, source: "not supplied at intake" },
+          {
+            label: "Company number",
+            value: null,
+            source: "not supplied at intake",
+            resolution: {
+              owner: "Agent",
+              when: "looked up at Underwrite from the registry",
+              blocking: false,
+            },
+          },
         ],
       }
+    /* Look-alikes are ranked by SECTOR THEN GEOGRAPHY, not sector alone.
+     * Sector-only matching surfaced Málaga and Milan as the closest
+     * comparators for a Manchester applicant — same trade, but nothing an
+     * underwriter can read across, because acquiring economics, scheme mix
+     * and regulator all track the country. Home market first, then true
+     * distance, and the distance is PRINTED so the ranking can be checked
+     * rather than taken on trust. */
     case "1.1": {
-      const peers = MERCHANTS.filter(
-        (m) => m.sector === merchant.sector && m.id !== merchant.id,
-      ).slice(0, 5)
+      const home = countryOf(merchant.location)
+      const peers = MERCHANTS.filter((m) => m.sector === merchant.sector && m.id !== merchant.id)
+        .map((m) => ({ m, km: distanceKm(merchant.location, m.location) }))
+        .sort((a, b) => {
+          const aHome = countryOf(a.m.location) === home
+          const bHome = countryOf(b.m.location) === home
+          if (aHome !== bHome) return aHome ? -1 : 1
+          return a.km - b.km
+        })
+        .slice(0, 5)
+      const homeCount = peers.filter((p) => countryOf(p.m.location) === home).length
       return {
         kind: "table",
         title: `Look-alike merchants in your book (${peers.length})`,
-        note: `Matched on sector only. Sector is the one attribute every record carries, so a closer match would narrow the set below a useful size.`,
+        note:
+          homeCount === peers.length
+            ? `Same sector, ranked by distance from ${merchant.location}. Every comparator is in your home market (${home}).`
+            : homeCount === 0
+              ? `Same sector, ranked by distance from ${merchant.location}. Your book holds no ${merchant.sector.toLowerCase()} merchant in ${home}, so every comparator here is cross-border — read the figures with that in mind.`
+              : `Same sector, ranked by distance from ${merchant.location}. ${homeCount} of ${peers.length} ${homeCount === 1 ? "is" : "are"} in your home market (${home}); the rest are cross-border and are shown because your book holds no closer match.`,
         table: {
-          columns: ["Merchant", "Location", "Volume", "Devices"],
-          rows: peers.map((m) => [m.name, m.location, m.size, m.terminals]),
+          columns: ["Merchant", "Location", "Distance", "Volume", "Devices"],
+          rows: peers.map(({ m, km }) => [
+            m.name,
+            m.location,
+            countryOf(m.location) === home ? `${km} km` : `${km} km · cross-border`,
+            m.size,
+            m.terminals,
+          ]),
         },
       }
     }
@@ -756,8 +812,26 @@ export function artifactFor(
           { label: "Expected annual volume", value: merchant.size, source: "banded from your submission" },
           { label: "Device count", value: `${merchant.terminalCount}`, source: "derived from the recommended kit" },
           { label: "Tax treatment", value: vat, source: vat ? "derived from country" : "country not in the rules table" },
-          { label: "Company number", value: null, source: "retrieved at underwriting, not at intake" },
-          { label: "Settlement account", value: null, source: "collected from the merchant with the KYB documents" },
+          {
+            label: "Company number",
+            value: null,
+            source: "retrieved at underwriting, not at intake",
+            resolution: {
+              owner: "Agent",
+              when: "at Underwrite · Verify the business",
+              blocking: false,
+            },
+          },
+          {
+            label: "Settlement account",
+            value: null,
+            source: "collected from the merchant with the KYB documents",
+            resolution: {
+              owner: "Merchant",
+              when: "with the KYB document request at Underwrite",
+              blocking: false,
+            },
+          },
         ],
       }
     }
@@ -839,14 +913,16 @@ export function artifactFor(
     case "4.0":
       return {
         kind: "brand",
-        title: "Brand assets and design",
-        note: "What the merchant gave us, and what you make of it. Edits proof live.",
+        focus: "assets",
+        title: "Brand assets received",
+        note: "What the merchant supplied and where each item came from. Anything they did not send is named, not defaulted silently.",
       }
     case "4.1":
       return {
         kind: "brand",
+        focus: "theme",
         title: "Device theme",
-        note: "The screens the theme reaches. PIN entry is excluded by the hardware.",
+        note: "The editable design and its live proof. PIN entry is excluded by the hardware, so the theme cannot reach it.",
       }
     case "4.2":
       return {
@@ -862,8 +938,9 @@ export function artifactFor(
     case "4.3":
       return {
         kind: "brand",
-        title: "Proof and brand checks",
-        note: "What the customer will see, and what must pass before it can ship.",
+        focus: "checks",
+        title: "Brand checks",
+        note: "Every rule the design must pass before it can ship, with the proof beside it so a failure can be seen and not just read.",
       }
 
     /* 05 Configure — one artefact per task. Every task here writes something

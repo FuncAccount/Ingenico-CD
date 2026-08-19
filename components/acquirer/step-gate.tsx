@@ -43,6 +43,48 @@ const PARTY_META = {
   merchant: { label: "Merchant", Icon: Store, tone: "text-warning-foreground" },
 } as const
 
+/**
+ * The status badge on a handoff row.
+ *
+ * One place, because the three parties' labels have to stay mutually
+ * consistent. Two claims used to be wrong here:
+ *
+ *  - Every acquirer handoff said **"your decision"**, including one sitting
+ *    behind an unmet precondition. On Underwrite the acquirer cannot decide
+ *    until the merchant's documents arrive, so "your decision" put the ball in
+ *    the reader's court when the ball was demonstrably elsewhere. A blocked
+ *    acquirer row now reads **"pending actions"**.
+ *  - A request that had gone out and not come back showed nothing at all, so
+ *    "asked, waiting" looked identical to "not asked yet". That is now an
+ *    explicit amber **"in progress"** — and it is gated on the request
+ *    actually having been sent, so it reports work that is genuinely under
+ *    way rather than work that is merely possible.
+ */
+function statusBadge(
+  handoff: Handoff,
+  state: HandoffState,
+  done: boolean,
+  active: boolean,
+): { label: string; className: string } | null {
+  // A settled row already carries a green tick and its settlement line.
+  if (done) return null
+
+  if (handoff.party === "acquirer") {
+    return active
+      ? { label: "your decision", className: "bg-primary/12 text-primary" }
+      : { label: "pending actions", className: "bg-secondary text-muted-foreground" }
+  }
+
+  const sent =
+    handoff.party === "ingenico"
+      ? (state as IngenicoWaitState).requestedIso !== null
+      : (state as MerchantChaseState).sentIso !== null
+
+  // Not yet asked is not "in progress" — nobody is working on it.
+  if (!sent) return null
+  return { label: "in progress", className: "bg-warning/15 text-warning-foreground" }
+}
+
 interface Props {
   step: StepId
   merchant: Merchant
@@ -199,6 +241,7 @@ function HandoffRow({
 }) {
   const meta = PARTY_META[handoff.party]
   const { Icon } = meta
+  const badge = statusBadge(handoff, state, done, active)
 
   return (
     <div
@@ -225,9 +268,14 @@ function HandoffRow({
               {total > 1 ? `${index + 1} of ${total} · ` : ""}
               {meta.label}
             </span>
-            {handoff.party === "acquirer" && (
-              <span className="rounded bg-primary/12 px-1.5 py-0.5 text-[10px] font-medium text-primary">
-                your decision
+            {badge && (
+              <span
+                className={cn(
+                  "rounded px-1.5 py-0.5 text-[10px] font-medium",
+                  badge.className,
+                )}
+              >
+                {badge.label}
               </span>
             )}
           </div>
