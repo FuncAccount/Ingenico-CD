@@ -1629,24 +1629,36 @@ function StepCockpit({
                 )
               })
             )}
-            {status === "done" && (
-              <div className="animate-trace-in pt-0.5 text-success">
-                {/* The mono face has no U+2713, which rendered as tofu. */}
-                {"ok  agent run complete — "}
-                {/* Read from LIVE state, not the static map: once a handoff is
-                    settled the trace must stop saying it is waiting on them. */}
-                {(() => {
-                  const w = waitingOn(step.id, merchant.id, handoffs, merchant.currentStep)
-                  return w === "acquirer"
-                    ? "waiting on your decision"
-                    : w === "merchant"
-                      ? "waiting on the merchant"
-                      : w === "ingenico"
-                        ? "waiting on Ingenico"
-                        : "nothing further required"
-                })()}
-              </div>
-            )}
+            {status === "done" &&
+              (finding ? (
+                /* The run reached the end of its task list, but a step whose
+                   own output records a failure has not "completed" in the
+                   sense this line was claiming — and "waiting on your
+                   decision" invited a decision the gate below has already
+                   withdrawn. Both halves were wrong, so both are replaced:
+                   the run STOPPED, and what it is waiting on is the fix, not
+                   the acquirer. Warning tone, not success. */
+                <div className="animate-trace-in pt-0.5 text-warning">
+                  {`!!  agent run stopped — ${finding.headline.toLowerCase().replace(/\.$/, "")}`}
+                </div>
+              ) : (
+                <div className="animate-trace-in pt-0.5 text-success">
+                  {/* The mono face has no U+2713, which rendered as tofu. */}
+                  {"ok  agent run complete — "}
+                  {/* Read from LIVE state, not the static map: once a handoff is
+                      settled the trace must stop saying it is waiting on them. */}
+                  {(() => {
+                    const w = waitingOn(step.id, merchant.id, handoffs, merchant.currentStep)
+                    return w === "acquirer"
+                      ? "waiting on your decision"
+                      : w === "merchant"
+                        ? "waiting on the merchant"
+                        : w === "ingenico"
+                          ? "waiting on Ingenico"
+                          : "nothing further required"
+                  })()}
+                </div>
+              ))}
           </div>
         </div>
       </div>
