@@ -730,6 +730,12 @@ function riskIndex(id: StepId): number {
 export function laneState(
   merchant: Pick<Merchant, "currentStep" | "riskLane">,
   step: PipelineStep,
+  /** Steps completed during this session, on top of the fixture's position.
+   *
+   *  Optional so the many read-only callers (estate rollups, the portfolio
+   *  table) need no change, and because omitting it is the honest default:
+   *  those surfaces genuinely have no session to consult. */
+  progressed: ReadonlySet<StepId> = EMPTY_PROGRESS,
 ): "done" | "active" | "upcoming" {
   if (step.lane === "risk") {
     const lane = merchant.riskLane
@@ -740,16 +746,94 @@ export function laneState(
     const here = riskIndex(step.id)
     const open = riskIndex(lane.at)
     if (here < open) return "done"
+    if (progressed.has(step.id)) return "done"
     // A referred file is emphatically NOT done — it is active work that has
     // stalled, and collapsing it into "done" would file a rejection alongside
     // an approval.
     if (here === open) return "active"
     return "upcoming"
   }
-  if (step.id < merchant.currentStep) return "done"
-  if (step.id === merchant.currentStep) return "active"
+
+  /* BUILD AND SPINE, BY LANE POSITION — never `step.id < currentStep`.
+  
+     That comparison was two bugs at once. It ranked steps by id across lanes
+     that do not share a line of travel, so a merchant sitting at 01 (id 1) had
+     every build step read `id > 1` = "upcoming", yet nothing distinguished B4
+     from B1 and the cockpit let you start the last one first. And it consulted
+     only the fixture, so completing a step changed nothing at all: `currentStep`
+     is never written in this app, which is why an approved B1 kept reporting
+     itself as unfinished. */
+  if (progressed.has(step.id)) return "done"
+
+  /* The spine picks up the build lane in front of it. Ship is the rejoin, so
+     the steps the file must pass to REACH it include all four build steps —
+     evaluating the spine on its own reported Ship as active while B1 Order was
+     still outstanding, inviting a dispatch for a terminal nobody had ordered.
+     (The risk lane is deliberately absent: it runs concurrently and is
+     enforced at Ship by `shipClearance`, which can say WHICH risk step is
+     open. Folding it in here would only make Ship `upcoming`, which reads as
+     "not your turn yet" rather than "held".) */
+  const lane = step.lane === "build" ? BUILD_LANE : SPINE_PATH
+  const here = lane.findIndex((s) => s.id === step.id)
+
+  /* The first step on this lane that is not yet finished. A step is `active`
+     only if it IS that step — so B4 stays `upcoming` while B1 is outstanding,
+     which is what stops you starting at the end of the lane. */
+  const openIdx = lane.findIndex((s) => !isLaneStepDone(merchant, s, progressed))
+  if (openIdx === -1) return "done"
+  if (here < openIdx) return "done"
+  if (here === openIdx) return "active"
   return "upcoming"
 }
+
+/** Shared empty set, so the default argument does not allocate on every call
+ *  and `laneState` stays cheap enough for the rollups that run it per step. */
+const EMPTY_PROGRESS: ReadonlySet<StepId> = new Set()
+
+/** Whether a step on the build/spine path counts as finished.
+ *
+ *  Split out because `laneState` needs it while it is still computing its own
+ *  answer, and calling itself would recurse. Deliberately NOT a second opinion
+ *  about doneness: it applies the same two rules — the fixture's position, and
+ *  what this session has completed. */
+function isLaneStepDone(
+  merchant: Pick<Merchant, "currentStep" | "riskLane">,
+  step: PipelineStep,
+  progressed: ReadonlySet<StepId>,
+): boolean {
+  if (progressed.has(step.id)) return true
+
+  const cur = PIPELINE.find((s) => s.id === merchant.currentStep)
+  if (!cur) return false
+
+  /* CROSS-LANE POSITION. `currentStep` names ONE place, but the build and
+     spine paths run in sequence around the fork, so "am I past this step"
+     often has to be answered about a different lane from the one the merchant
+     is standing on. Comparing only within a matching lane got two things
+     wrong, both caught by probing every fixture rather than reasoning about
+     it: 01 Capture reported `active` for merchants long past it, and SolMar —
+     sitting at 03 Install — reported B1 Order as still active while its
+     terminals were on site.
+  
+     Whole-journey order is the honest comparison, taken from the PIPELINE
+     array so it survives any lane being reordered. */
+  const orderOf = (id: StepId) => PIPELINE.findIndex((s) => s.id === id)
+  const at = orderOf(cur.id)
+  const here = orderOf(step.id)
+
+  /* Anything BEFORE the fork is finished once the merchant is past it. Beyond
+     the fork the two lanes are genuinely concurrent, so a merchant on the
+     build lane says nothing about the risk lane — that is `riskLane`'s job,
+     handled above, and this function is never asked about a risk step. */
+  return here < at
+}
+
+/** The build and spine paths in running order — same reason as RISK_LANE:
+ *  position comes from the PIPELINE array, never from `id`. */
+export const BUILD_LANE: PipelineStep[] = PIPELINE.filter((s) => s.lane === "build")
+export const SPINE_LANE: PipelineStep[] = PIPELINE.filter((s) => s.lane === "spine")
+
+
 
 /** The first spine step after the fork — where the lanes meet again.
  *
@@ -762,6 +846,26 @@ export const REJOIN_STEP: StepId = (() => {
   // so "the first spine step with a bigger id than the fork" is meaningless.
   const forkAt = PIPELINE.findIndex((s) => s.lane !== "spine")
   return PIPELINE.slice(forkAt).find((s) => s.lane === "spine")!.id
+})()
+
+/** Everything a file must pass to travel the spine, in order.
+ *
+ *  The spine is NOT one unbroken run: 01 Capture sits BEFORE the fork and is
+ *  what starts the build, while Ship onwards sit AFTER it and cannot begin
+ *  until the build lane has finished. Splicing the build lane in at the rejoin
+ *  states that once, here, so `laneState` never has to re-derive it.
+ *
+ *  Declared below REJOIN_STEP deliberately — it reads it at module-init, and
+ *  above it that is a temporal dead zone, i.e. a crash on import.
+ *
+ *  Prefixing the build lane to the WHOLE spine was wrong in a way that looked
+ *  right across all 19 fixtures: it put 01 behind the four steps it precedes,
+ *  so every merchant past capture reported it as still upcoming. The risk lane
+ *  is deliberately excluded — it runs concurrently, and is enforced at Ship by
+ *  `shipClearance`, which can name which risk step is open. */
+export const SPINE_PATH: PipelineStep[] = (() => {
+  const rejoinAt = SPINE_LANE.findIndex((s) => s.id === REJOIN_STEP)
+  return [...SPINE_LANE.slice(0, rejoinAt), ...BUILD_LANE, ...SPINE_LANE.slice(rejoinAt)]
 })()
 
 /* `shipRisk` lived here. It warned and allowed the run anyway, and it read

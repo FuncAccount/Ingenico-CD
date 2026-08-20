@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   AlertTriangle,
   Building2,
@@ -37,6 +37,8 @@ import {
   REJOIN_STEP,
   type StepId,
 } from "@/lib/acquirer-data"
+import { decisionAtStep } from "@/lib/decisions"
+import { useDecisions } from "@/components/acquirer/decisions-provider"
 import { clearanceLine, shipClearance } from "@/lib/ship-clearance"
 import { cn } from "@/lib/utils"
 import {
@@ -65,6 +67,9 @@ import { exceptionDetailMissing, exceptionOnStep } from "@/lib/exceptions"
 import { ExceptionPanel } from "@/components/acquirer/exception-panel"
 
 type StepState = "done" | "active" | "upcoming"
+
+/** Shared empty progress set — see the note at `progress` below. */
+const EMPTY_STEPS: ReadonlySet<StepId> = new Set()
 
 export function MerchantJourney({
   merchant,
@@ -109,10 +114,42 @@ export function MerchantJourney({
     return s
   }, [current, exceptionCtx])
 
+  /* WHAT THIS SESSION HAS FINISHED, per merchant.
+  
+     `merchant.currentStep` is a fixture and is never written — completing a
+     step used to change nothing at all, so an approved B1 kept reporting
+     itself as unfinished and the file never advanced. This is the missing
+     write.
+  
+     Keyed by merchant id because progress belongs to a file, not to the
+     screen: without the key, finishing B1 for one merchant would mark B1 done
+     for whoever you looked at next.
+  
+     Lives here rather than in the cockpit because the rail draws from it too,
+     and a second copy is how the rail and the cockpit come to disagree about
+     the same step. */
+  /* Module-scope constant, not `new Set()` inline: a fresh set each render is a
+     new identity, which would re-fire every memo and effect downstream of it. */
+  const [progress, setProgress] = useState<Record<string, Set<StepId>>>({})
+  const progressed = progress[current.id] ?? EMPTY_STEPS
+
+  const markStepDone = useCallback(
+    (id: StepId) => {
+      setProgress((prev) => {
+        const own = prev[current.id]
+        if (own?.has(id)) return prev
+        const next = new Set(own ?? [])
+        next.add(id)
+        return { ...prev, [current.id]: next }
+      })
+    },
+    [current.id],
+  )
+
   // Delegates to the model so the risk lane is read from `riskLane` rather
   // than from a position on the build path it no longer shares.
   function stepState(step: PipelineStep): StepState {
-    return laneState(current, step)
+    return laneState(current, step, progressed)
   }
 
   const focused = PIPELINE.find((s) => s.id === focusStep)!
@@ -306,6 +343,7 @@ export function MerchantJourney({
           theme={theme}
           setTheme={setTheme}
           exceptionCtx={exceptionCtx}
+          onStepDone={markStepDone}
         />
       </div>
     </div>
@@ -636,6 +674,7 @@ function StepCockpit({
   theme,
   setTheme,
   exceptionCtx,
+  onStepDone,
 }: {
   step: PipelineStep
   state: StepState
@@ -644,6 +683,11 @@ function StepCockpit({
   theme: BrandTheme
   setTheme: (t: BrandTheme) => void
   exceptionCtx: ExceptionContext
+  /** Report this step finished, so the journey can advance. Reported UP rather
+   *  than held here because the rail, the ship gate and the next step all need
+   *  it — a copy kept in this component would be invisible to every one of
+   *  them, which is how completing a step came to change nothing. */
+  onStepDone: (id: StepId) => void
 }) {
   // Null unless the risk lane is genuinely outstanding — see the banner below.
   /* Computed for every step, not just Ship, because the Play gate below reads
@@ -982,6 +1026,37 @@ function StepCockpit({
     if (clearance.released) return null
     return `${clearanceLine(clearance)} Ingenico cannot dispatch until every prior step passes.`
   }, [step.id, clearance])
+
+  /* WHEN A STEP IS FINISHED — the write that was missing.
+  
+     Three conditions, and all three are needed. Tasks run (the work happened),
+     no unresolved finding (a step that failed has not passed), and, where the
+     acquirer owns a gate, their decision taken — otherwise the agent finishing
+     its own tasks would advance a file through a sign-off nobody performed,
+     which is the entire point of having a gate.
+  
+     `signed`, never merely "decided": returning a file to the merchant is an
+     act, but it is not progress, and treating it as completion would let a
+     rejection carry the file forward.
+  
+     Derived from `acquirerRole` rather than a list of step ids — a hand-kept
+     list stops covering any step whose role changes later, and an unguarded
+     gate does not look like an omission, it looks like an approval. */
+  // The SHARED record, the same one StepGate and the sign-off screen write to
+  // — so approving on either surface advances the file. A local copy here
+  // would make this component's idea of "approved" a fourth opinion.
+  const { decisions } = useDecisions()
+  const decision = decisionAtStep(decisions, merchant.id, step.id)
+  const needsDecision = step.acquirerRole === "signs-off" || step.acquirerRole === "approves"
+  const stepFinished =
+    completed >= step.tasks.length &&
+    !blocker &&
+    !runBlocked &&
+    (!needsDecision || decision?.kind === "signed")
+
+  useEffect(() => {
+    if (stepFinished) onStepDone(step.id)
+  }, [stepFinished, step.id, onStepDone])
 
   // What stops the acquirer's own decision on THIS step. Different steps are
   // blocked by different things, so this is computed per step rather than by

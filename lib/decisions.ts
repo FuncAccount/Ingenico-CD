@@ -38,16 +38,34 @@ export interface Decision {
   atIso: string
 }
 
+/**
+ * Keyed by merchant AND step — see `decisionKey`.
+ *
+ * It used to be keyed by merchant alone, one slot each, which made the record
+ * a LATEST-DECISION register rather than a history: approving B1 Order and
+ * then approving B2 Branding overwrote the first, so B1 silently reverted to
+ * undecided. The reader could not tell that from a step never approved at all,
+ * because both render identically — and the gate that consults it went on
+ * asking for an approval already given.
+ */
 export type Decisions = Record<string, Decision>
 
-export function decisionFor(decisions: Decisions, merchantId: string): Decision | null {
-  return decisions[merchantId] ?? null
+/* `decisionFor(decisions, merchantId)` lived here — "the merchant's decision",
+ * singular, which only had a meaning while one slot existed per merchant. With
+ * a history to read it would have to pick one arbitrarily, so it is deleted
+ * rather than rewritten: every caller must now say WHICH GATE it is asking
+ * about. It had no callers left. */
+
+/** One decision per (merchant, gate). Composite because a merchant passes
+ *  several regulated gates and each is decided on its own evidence. */
+export function decisionKey(merchantId: string, step: StepId): string {
+  return `${merchantId}::${step}`
 }
 
 /**
- * A decision only counts against the gate it was taken at. Without the step
- * check, signing off underwriting at step 2 would silently also clear the
- * branding approval the merchant reaches at step 4 — one click approving a
+ * A decision only counts against the gate it was taken at. Without the step in
+ * the key, signing off underwriting at R3 would silently also clear the
+ * branding approval the merchant reaches at B2 — one click approving a
  * decision that was never put to anyone.
  */
 export function decisionAtStep(
@@ -55,8 +73,7 @@ export function decisionAtStep(
   merchantId: string,
   step: StepId,
 ): Decision | null {
-  const d = decisions[merchantId]
-  return d && d.step === step ? d : null
+  return decisions[decisionKey(merchantId, step)] ?? null
 }
 
 /**
@@ -65,12 +82,12 @@ export function decisionAtStep(
  * so no surface can hold a private opinion about it.
  */
 export function effectiveStatus(merchant: Merchant, decisions: Decisions): MerchantStatus {
-  const d = decisions[merchant.id]
+  // Only the decision taken at the gate the merchant is STANDING AT can speak
+  // for their status now. Asking by key rather than fetching their one record
+  // and comparing its step: with a history to read, "their decision" is no
+  // longer a meaningful phrase.
+  const d = decisionAtStep(decisions, merchant.id, merchant.currentStep)
   if (!d) return merchant.status
-
-  // A decision that isn't about the gate the merchant is standing at tells us
-  // nothing about their current status.
-  if (d.step !== merchant.currentStep) return merchant.status
 
   // Only a merchant who was waiting on you can be moved by your decision.
   if (merchant.status !== "Needs sign-off") return merchant.status

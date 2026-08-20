@@ -2,7 +2,7 @@
 
 import { createContext, useCallback, useContext, useMemo, useState } from "react"
 import type { StepId } from "@/lib/acquirer-data"
-import type { DecisionKind, Decisions } from "@/lib/decisions"
+import { decisionKey, type DecisionKind, type Decisions } from "@/lib/decisions"
 
 interface DecisionsContextValue {
   decisions: Decisions
@@ -25,7 +25,10 @@ export function DecisionsProvider({ children }: { children: React.ReactNode }) {
   const record = useCallback((merchantId: string, kind: DecisionKind, step: StepId) => {
     setDecisions((prev) => ({
       ...prev,
-      [merchantId]: { kind, step, atIso: new Date().toISOString() },
+      // Composite key. Writing to `[merchantId]` made each new decision
+      // destroy the previous one, so approving a second gate silently
+      // un-approved the first.
+      [decisionKey(merchantId, step)]: { kind, step, atIso: new Date().toISOString() },
     }))
   }, [])
 
