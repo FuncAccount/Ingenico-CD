@@ -406,56 +406,84 @@ function StepRow({
 }) {
   return (
     <div className="flex flex-col items-center">
-      <span
-        className={cn(
-          "flex h-8 w-8 shrink-0 items-center justify-center rounded-full border text-[11px] font-semibold transition-colors",
-          state === "done"
-            ? "border-primary bg-primary text-primary-foreground"
-            : state === "active"
-              ? "border-primary bg-primary/15 text-primary glow-primary"
-              : "border-border bg-card text-muted-foreground",
-        )}
-      >
-        {state === "done" ? <Check className="h-4 w-4" /> : step.code}
-      </span>
+      {/* THE WHOLE NODE IS THE TARGET — circle included.
+          The marker used to sit outside the button, so the most icon-like,
+          most obviously "the step" part of the node was the one part that did
+          not respond to a click. A reader aiming at the numbered disc hit
+          nothing and read the step as inert. The button now wraps marker and
+          card together; it carries no box of its own, so the two keep exactly
+          the positions they had (the fork arches and lane arrowheads are
+          measured against the marker's centre and must not shift). */}
       <button
         onClick={() => onFocus(step.id)}
-        className={cn(
-          "mt-1.5 w-full rounded-lg border text-center transition-all",
-          dense ? "px-1.5 py-1.5" : "px-3 py-2",
-          isFocus
-            ? "border-primary/50 bg-primary/[0.06]"
-            : "border-transparent hover:border-border hover:bg-secondary/50",
-        )}
+        className="group flex w-full cursor-pointer flex-col items-center focus:outline-none"
       >
-        {/* NO `truncate` in a lane column: at half width "Underwrite" clipped
-            to "Underw…", and a step whose name is cut to nonsense reads as a
-            rendering fault rather than a narrow column. These names are one or
-            two short words, so wrapping is safe. */}
-        <div className="flex items-center justify-center gap-1.5">
-          <span
-            className={cn(
-              "font-semibold leading-tight",
-              dense ? "text-[13px]" : "text-sm",
-              state === "upcoming" ? "text-muted-foreground" : "text-foreground",
-            )}
-          >
-            {step.name}
-          </span>
-          {ownerOf(step.id) === "acquirer" && (
-            <UserCheck className="h-3.5 w-3.5 shrink-0 text-primary" />
+        <span
+          className={cn(
+            "flex h-8 w-8 shrink-0 items-center justify-center rounded-full border text-[11px] font-semibold transition-all",
+            state === "done"
+              ? "border-primary bg-primary text-primary-foreground"
+              : state === "active"
+                ? "border-primary bg-primary/15 text-primary glow-primary"
+                : "border-border bg-card text-muted-foreground",
+            // Feedback ON the marker, so it is visibly part of the target
+            // rather than a decoration that happens to sit above one.
+            "group-hover:ring-2 group-hover:ring-primary/25",
+            "group-focus-visible:ring-2 group-focus-visible:ring-primary/60",
           )}
-        </div>
-        <div className="mt-1 flex flex-wrap items-center justify-center gap-1">
-          <span
-            className={cn(
-              "inline-block rounded px-1.5 py-0.5 text-[10px] font-semibold",
-              bandTone(step.band),
+        >
+          {state === "done" ? <Check className="h-4 w-4" /> : step.code}
+          {/* Folding the marker into the button makes it part of the button's
+              accessible name, and a bare tick contributes nothing to that.
+              Prefixed with "Step" because the header badge already uses the
+              bare word "Complete" for a different claim — that one counts
+              releases too, and two unqualified "Complete"s on one screen are
+              ambiguous to a reader and to any text assertion. */}
+          {state !== "upcoming" && (
+            <span className="sr-only">
+              {state === "done" ? "Step complete" : "Step in progress"}
+            </span>
+          )}
+        </span>
+        <div
+          className={cn(
+            "mt-1.5 w-full rounded-lg border text-center transition-all",
+            dense ? "px-1.5 py-1.5" : "px-3 py-2",
+            isFocus
+              ? "border-primary/50 bg-primary/[0.06]"
+              : "border-transparent group-hover:border-border group-hover:bg-secondary/50",
+            "group-focus-visible:border-primary/50 group-focus-visible:bg-primary/[0.06]",
+          )}
+        >
+          {/* NO `truncate` in a lane column: at half width "Underwrite" clipped
+              to "Underw…", and a step whose name is cut to nonsense reads as a
+              rendering fault rather than a narrow column. These names are one or
+              two short words, so wrapping is safe. */}
+          <div className="flex items-center justify-center gap-1.5">
+            <span
+              className={cn(
+                "font-semibold leading-tight",
+                dense ? "text-[13px]" : "text-sm",
+                state === "upcoming" ? "text-muted-foreground" : "text-foreground",
+              )}
+            >
+              {step.name}
+            </span>
+            {ownerOf(step.id) === "acquirer" && (
+              <UserCheck className="h-3.5 w-3.5 shrink-0 text-primary" />
             )}
-          >
-            {step.band}
-          </span>
-          {!dense && <OwnerBadge step={step.id} compact />}
+          </div>
+          <div className="mt-1 flex flex-wrap items-center justify-center gap-1">
+            <span
+              className={cn(
+                "inline-block rounded px-1.5 py-0.5 text-[10px] font-semibold",
+                bandTone(step.band),
+              )}
+            >
+              {step.band}
+            </span>
+            {!dense && <OwnerBadge step={step.id} compact />}
+          </div>
         </div>
       </button>
       {connector === "down" && (
