@@ -17,7 +17,54 @@ export interface AgentTask {
   detail: string
   // short machine-style output the agent emits (rendered mono, like a console)
   output: string
+  /**
+   * Set when the agent does NOT perform this work itself.
+   *
+   * Absent means the agent did it — reading documents, drafting, judging
+   * against policy. Present means it assembled a request, sent it to a named
+   * system and read the answer back. Both are real work and the app was
+   * showing them identically, which quietly claimed Ingenico's agent decides
+   * KYC, pricing and credit. It does not; it drives the systems that do.
+   *
+   * Deliberately per-TASK, not per-step. `tools` is a capability list for the
+   * whole step, so it cannot say which unit of work leaves the agent — on
+   * Underwriting the parse is genuinely ours and the score is not, and one
+   * chip row cannot express that.
+   */
+  delegate?: Delegation
 }
+
+/**
+ * A unit of work performed by a system the agent operates rather than by the
+ * agent itself.
+ *
+ * A discriminated union on `runsOn`, because the three cases carry genuinely
+ * different obligations rather than being one shape with a label:
+ *
+ *  - `acquirer` — their existing contract, their system of record. Nothing to
+ *    sell and nothing to swap.
+ *  - `ingenico` — our tool is serving a capability the acquirer could serve
+ *    themselves, so `swap` is REQUIRED. A fallback presented without its
+ *    alternative reads as a dependency, which is the objection this whole
+ *    distinction exists to answer.
+ *  - `external` — public or scheme infrastructure (a companies register, a
+ *    certification host). There is no `swap` because nobody is selling it and
+ *    a "replace this" affordance on a statutory register would be nonsense.
+ *
+ * `runsOn` mirrors `ToolOwner`'s values on purpose — same question, same
+ * vocabulary — but is not the same type: a Tool is a capability the step can
+ * reach for, a Delegation is a round trip that actually happened.
+ */
+export type Delegation = { capability: string; system: string; prepares: string; reads: string } & (
+  | { runsOn: "acquirer" }
+  | {
+      runsOn: "ingenico"
+      /** How the acquirer takes this over with their own provider. Required,
+       *  so Ingenico's tool can never be the only option on screen. */
+      swap: string
+    }
+  | { runsOn: "external" }
+)
 
 /** Who owns the system the agent is driving. This is the whole product claim
  *  on the regulated steps: Ingenico does not replace the acquirer's KYC, risk
@@ -252,30 +299,71 @@ export const PIPELINE: PipelineStep[] = [
       externalTool("Companies House"),
       acquirerTool("KYC / KYB platform"),
       acquirerTool("Sanctions & PEP screening"),
-      acquirerTool("Adverse media"),
+      // Ingenico's, not theirs — this fixture's acquirer buys screening and
+      // KYB but not media. The chip and the task's `delegate.runsOn` answer the
+      // same question, so they must not disagree.
+      ingenicoTool("Adverse media"),
     ],
+    // Names the exception rather than leaving the per-task strip to contradict
+    // it: three of these four calls land on the acquirer's own stack, one does
+    // not, and a blanket "runs inside your systems" was false about the fourth.
     integration:
-      "If you already run a KYC provider, the agent calls it over your existing contract rather than replacing it. Your platform stays the system of record; Ingenico supplies the orchestration and reads the results back.",
+      "The agent screens nobody itself — it calls your platform over your existing contract and reads the results back, and your platform stays the system of record. Adverse media is the one capability running on Ingenico's here, because this acquirer does not buy it; it can be pointed at yours.",
     tasks: [
+      /* Every task on this step is a round trip — the agent screens nobody. It
+         shapes the request, calls out and reads the answer back. Stating that
+         four times is not repetition here; it IS the step. */
       {
         label: "Verify the entity",
         detail: "Confirms the legal entity and its directors against the company registry.",
         output: "kyb.verify → entity active, 2 directors matched ok",
+        delegate: {
+          runsOn: "external",
+          capability: "Company registry",
+          system: "Companies House",
+          prepares: "Company number and the two director names taken off the certificate",
+          reads: "The live filing, compared field by field against what was submitted",
+        },
       },
       {
         label: "Screen sanctions and PEP",
         detail: "Checks every beneficial owner above 25% against the consolidated lists.",
         output: "screen.pep_sanctions → 0 sanctions, 0 PEP",
+        delegate: {
+          runsOn: "acquirer",
+          capability: "Sanctions and PEP",
+          system: "Your screening platform",
+          prepares: "Every owner above 25%, with dates of birth and nationalities resolved",
+          reads: "Each hit scored, and only genuine matches escalated to you",
+        },
       },
       {
         label: "Verify identity",
         detail: "Matches submitted identity documents to the named owners.",
         output: "identity.verify → 2 of 2 owners matched",
+        delegate: {
+          runsOn: "acquirer",
+          capability: "Identity verification",
+          system: "Your KYC / KYB platform",
+          prepares: "Identity documents paired to the owner each one belongs to",
+          reads: "The match result per owner, written back onto the application",
+        },
       },
       {
         label: "Scan adverse media",
         detail: "Searches the five-year window and flags only material findings.",
         output: "media.scan → 1 note raised for review",
+        /* The one capability on this step Ingenico serves, and the reason the
+           swap line is a required field: an acquirer who already buys media
+           screening must be able to see, here, that ours is not compulsory. */
+        delegate: {
+          runsOn: "ingenico",
+          capability: "Adverse media",
+          system: "Ingenico media scan",
+          prepares: "Entity and owner names, plus the five-year window and languages to search",
+          reads: "Material findings only — routine mentions are discarded, not queued",
+          swap: "Point this at your own media provider over REST and the agent calls yours instead. Your contract, your retention policy.",
+        },
       },
     ],
     // The non-blocking point, said once and in the right place: this lane runs
@@ -304,11 +392,26 @@ export const PIPELINE: PipelineStep[] = [
         label: "Model the economics",
         detail: "Projects revenue per method against the merchant's expected mix and volume.",
         output: "econ.model → blended 1.31% on £2.4m/yr",
+        delegate: {
+          runsOn: "ingenico",
+          capability: "Conversion modelling",
+          system: "Ingenico conversion model",
+          prepares: "Sector, expected volume and method mix, matched to comparable merchants",
+          reads: "Sign-up sensitivity per rate line, with the supported range it was fitted over",
+          swap: "Acquirers who run their own elasticity model call it here instead — the agent sends the same inputs and reads your curve back.",
+        },
       },
       {
         label: "Recommend a tariff",
         detail: "Proposes monthly, setup and per-transaction rates for this merchant type.",
         output: "tariff.recommend → £19/mo, £0 setup, card 1.4% / wallet 0.9%",
+        delegate: {
+          runsOn: "acquirer",
+          capability: "Rate card",
+          system: "Your pricing book",
+          prepares: "The merchant category and the bands you allow for it",
+          reads: "Rates proposed inside your bands — the agent does not discount on your behalf",
+        },
       },
     ],
     // "the agent shows both sides" meant the two A/B variants. With the test
@@ -334,6 +437,11 @@ export const PIPELINE: PipelineStep[] = [
     integration:
       "Your risk model remains the system of record and your thresholds decide the outcome. If you already underwrite in your own tool, this step plugs into it over API — the in-context model is there for acquirers who do not run one.",
     tasks: [
+      /* Two of these four carry no `delegate`, and that is the point of the
+         field. Reading the documents and spotting what sits outside policy are
+         the agent's own work; scoring the exposure and setting the limit are
+         decisions the acquirer's model owns. Marking all four as handoffs would
+         understate what the agent does, marking none overstates it. */
       {
         label: "Parse the documents",
         detail: "Extracts and cross-checks figures across every uploaded document.",
@@ -343,11 +451,25 @@ export const PIPELINE: PipelineStep[] = [
         label: "Score the risk",
         detail: "Combines all signals into a single risk score and band.",
         output: "risk.score → 18 / 100  band=LOW",
+        delegate: {
+          runsOn: "acquirer",
+          capability: "Risk scoring",
+          system: "Your risk model",
+          prepares: "The parsed figures and screening results, mapped to your model's inputs",
+          reads: "Your score and band — the agent does not weight the factors itself",
+        },
       },
       {
         label: "Set the acceptance limit",
         detail: "Recommends the daily exposure the acquirer would carry, and why.",
         output: "limit.recommend → £14,000/day  (category: standard retail)",
+        delegate: {
+          runsOn: "acquirer",
+          capability: "Credit policy",
+          system: "Your credit policy",
+          prepares: "Merchant category, band and projected volume",
+          reads: "The limit your policy allows, with the rule that produced it named",
+        },
       },
       {
         label: "Flag edge cases",

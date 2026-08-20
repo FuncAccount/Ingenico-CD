@@ -43,6 +43,7 @@ import { decisionBasis } from "@/lib/decision-basis"
 import { useDecisions } from "@/components/acquirer/decisions-provider"
 import { useBrandTheme } from "@/components/acquirer/brand-theme-provider"
 import { InProgressTag, PulseDot } from "@/components/acquirer/in-progress-tag"
+import { DelegationChip, DelegationTrace, type Beat } from "@/components/acquirer/delegation-trace"
 import { clearanceLine, shipClearance } from "@/lib/ship-clearance"
 import { cn } from "@/lib/utils"
 import {
@@ -1150,6 +1151,48 @@ function StepCockpit({
     [step.id, merchant, step.tasks.length, exceptionCtx],
   )
 
+  /**
+   * How far a task's round trip to an external system has got.
+   *
+   * ONE definition, read by the chip on the row and by the strip above the
+   * artefact. Two copies of this would be two places for "is it back yet" to
+   * drift, which is the defect that produced a badge reading Complete over a
+   * spinner — the same mistake one register lower.
+   *
+   * Only a CLEAN completion with nothing outstanding counts as returned. A
+   * failed, halted or still-open task did leave the agent, so `idle` would deny
+   * a dispatch that happened, while `returned` would claim an answer that never
+   * came back.
+   */
+  const beatOf = (i: number): Beat => {
+    if (taskSkipped(step.id, i, merchant)) return "idle"
+    const done = i < completed
+    const running = i === runningTaskIndex
+    if (!done && !running) return "idle"
+    const art = artifactFor(step.id, i, merchant)
+    const stalled =
+      blocker?.taskIndex === i || finding?.taskIndex === i || exceptions.has(i)
+    const open = art?.kind === "checks" ? art.rows.some((r) => r.state === "running") : false
+    return done && !running && !stalled && !open ? "returned" : "sent"
+  }
+
+  /**
+   * Where this step's work actually runs, counted off the tasks themselves.
+   *
+   * Read against `runsOn` so the banner and the per-task strips cannot
+   * disagree. `external` is deliberately not counted on either side: a
+   * statutory register is nobody's product, and folding it in would either
+   * inflate "your systems" or invent an Ingenico dependency.
+   */
+  const boundaryLead = useMemo(() => {
+    const runs = step.tasks.map((t) => t.delegate?.runsOn).filter(Boolean)
+    const yours = runs.filter((r) => r === "acquirer").length
+    const ingenico = runs.filter((r) => r === "ingenico").length
+    if (yours > 0 && ingenico > 0) return "Mostly your systems."
+    if (ingenico > 0 && yours === 0) return "Runs on Ingenico's, and does not have to."
+    return "Runs inside your systems."
+  }, [step.tasks])
+
   // Counted with the ROW'S OWN predicate rather than the map's size, so the
   // header cannot report a number the list does not show: an artefact exists
   // whether or not the agent has reached it, and a task that failed or halted
@@ -1636,10 +1679,15 @@ function StepCockpit({
         {step.integration && (
           <div className="relative mt-3 flex gap-2 rounded-lg border border-primary/25 bg-primary/[0.06] px-3 py-2.5">
             <Plug className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" />
-            <p className="text-xs leading-relaxed text-foreground">
-              <span className="font-semibold">Runs inside your systems. </span>
-              {step.integration}
-            </p>
+                <p className="text-xs leading-relaxed text-foreground">
+                  {/* DERIVED, not asserted. This lead was the literal string
+                      "Runs inside your systems." on every step carrying an
+                      integration note — which went false the moment one task on
+                      KYC was served by Ingenico's own media scan, leaving a
+                      banner contradicting the strip directly beneath it. */}
+                  <span className="font-semibold">{boundaryLead} </span>
+                  {step.integration}
+                </p>
           </div>
         )}
 
@@ -1912,6 +1960,7 @@ function StepCockpit({
               isDone && !isFailed && !isHalted && !isSkipped && !exception && art?.kind === "checks"
                 ? art.rows.filter((r) => r.state === "running").length
                 : 0
+            const tripBeat = beatOf(i)
             return (
               <button
                 key={task.label}
@@ -2007,6 +2056,11 @@ function StepCockpit({
                       </span>
                     </p>
                   )}
+                  {/* Which tasks leave the agent, visible without opening any of
+                      them. The absence of this chip is as informative as its
+                      presence — on Underwriting the parse and the policy flag
+                      carry none, because the agent really does do those. */}
+                  {task.delegate && <DelegationChip delegate={task.delegate} beat={tripBeat} />}
                   {/* The verdict, on the row. Naming the artefact told you
                       where to look but not what it found, so "did the load
                       work?" needed a click. GATED ON `isDone`: a headline like
@@ -2060,7 +2114,24 @@ function StepCockpit({
         </div>
 
         {/* Artefact inspector — what the selected task actually produced */}
-        <div className="min-h-[22rem] bg-white/35">
+        {/* `flex flex-col` is load-bearing, not tidiness: the inspector's empty
+            state is `h-full`, which resolved against the whole 22rem and — once
+            the strip above it took real height — pushed its text straight
+            through the handoffs section below. The strip sizes to content, the
+            inspector takes the remainder. */}
+        <div className="flex min-h-[22rem] flex-col bg-white/35">
+          {/* ABOVE the artefact, because it says where the artefact came from.
+              Underneath it would read as a footnote to a result the agent had
+              already been credited with producing. */}
+          {step.tasks[selected]?.delegate && (
+            <div className="shrink-0 border-b border-border px-5 py-4">
+              <DelegationTrace
+                delegate={step.tasks[selected].delegate}
+                beat={beatOf(selected)}
+              />
+            </div>
+          )}
+          <div className="flex min-h-0 flex-1 flex-col">
           <ArtifactInspector
             artifact={artifactFor(step.id, selected, merchant)}
             merchant={merchant}
@@ -2078,6 +2149,7 @@ function StepCockpit({
               releases={releases}
               onReleases={setReleases}
             />
+          </div>
         </div>
       </div>
 
