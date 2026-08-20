@@ -74,6 +74,7 @@ function statusBadge(
   state: HandoffState,
   done: boolean,
   active: boolean,
+  runComplete: boolean,
 ): { label: string; className: string } | null {
   // A settled row already carries a green tick and its settlement line.
   if (done) return null
@@ -91,12 +92,19 @@ function statusBadge(
   // An Ingenico request is raised BY the agent run, not by a click, so its
   // `requestedIso` is only written when someone chases or simulates a reply.
   // Gating the badge on that field alone made the row contradict itself: the
-  // body already showed a running SLA clock ("Due 20 Aug · 1 working day")
-  // while the badge said nothing, so an active request looked unstarted. The
-  // run completing IS the request going out, and `active` carries that.
+  // body showed a running SLA clock ("Due 20 Aug · 1 working day") while the
+  // badge said nothing, so an active request looked unstarted.
+  //
+  // The run completing IS the request going out — but `active` DOES NOT CARRY
+  // THAT. `active` is `i === blocking`, i.e. "this row is at the front of the
+  // queue", which is true from the moment the step opens. So on an unplayed
+  // step the badge read "in progress" at 0/4 tasks, directly above its own
+  // body text saying the request goes out "once the agent run finishes" —
+  // claiming a team was working on something nobody had asked them for.
+  // `runComplete` is the fact the badge actually needed.
   const sent =
     handoff.party === "ingenico"
-      ? active || (state as IngenicoWaitState).requestedIso !== null
+      ? (active && runComplete) || (state as IngenicoWaitState).requestedIso !== null
       : (state as MerchantChaseState).sentIso !== null
 
   // Not yet asked is not "in progress" — nobody is working on it.
@@ -211,7 +219,14 @@ export function StepGate({
           </span>
         ) : (
           <span className="text-[10px] text-muted-foreground">
-            {`waiting on ${PARTY_META[list[blocking].party].label.toLowerCase()}`}
+            {/* The same claim the badge was making, one level up: naming the
+                next party before the run has finished says they are sitting on
+                something, when the only outstanding thing is the run itself —
+                which is yours. Name that instead, so the rail points at the
+                one control that can actually move the step. */}
+            {runComplete
+              ? `waiting on ${PARTY_META[list[blocking].party].label.toLowerCase()}`
+              : "waiting on the agent run"}
           </span>
         )}
       </div>
@@ -275,7 +290,7 @@ function HandoffRow({
 }) {
   const meta = PARTY_META[handoff.party]
   const { Icon } = meta
-  const badge = statusBadge(handoff, state, done, active)
+  const badge = statusBadge(handoff, state, done, active, runComplete)
 
   return (
     <div
