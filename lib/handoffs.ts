@@ -116,20 +116,39 @@ export const STEP_HANDOFFS: Record<StepId, Handoff[]> = {
         "This is the regulated decision and it is recorded against your licence, not Ingenico's. The agent's screening is evidence, not the decision.",
     },
   ],
+  // YOU PLACE THE ORDER; INGENICO THEN CONFIRMS IT. This ran the other way
+  // round — the run opened the step by putting the basket into Ingenico's
+  // order-desk queue, with the acquirer's own decision sitting "queued"
+  // underneath it. Three things were wrong with that:
+  //
+  //  - The basket is the acquirer's to change; quantities are editable right
+  //    there on the step. So the order desk was being asked to commit stock,
+  //    an allocation and a delivery date against numbers that could move
+  //    underneath them, and any later edit silently voided the answer they
+  //    sent back — a confirmation for a basket that no longer existed.
+  //  - It is an OUTWARD act. The run put a request into another company's
+  //    queue, in the acquirer's name, before the acquirer had agreed to any of
+  //    it. Same shape as a notice that sends itself.
+  //  - It is not how ordering works. A supplier acknowledges an ORDER: there
+  //    is nothing to confirm availability *for* until one has been placed.
+  //
+  // Reordering is the whole fix — the panel already withholds controls from
+  // any row that is not the blocking one, so Ingenico's SLA clock, chase and
+  // inbound simulation now stay hidden until the order is actually placed.
   3: [
     {
+      party: "acquirer",
+      ask: "Approve the basket and place the order against your rate card.",
+      action: "Place the order",
+      commits:
+        "You are fixing the basket as it stands and committing to its value on your contracted rate card. Quantities are yours to change up to this point; afterwards you are changing a live order.",
+    },
+    {
       party: "ingenico",
-      ask: "Order desk validates the basket, stock and lead time.",
+      ask: "Order desk confirms stock and a delivery date for the order you placed.",
       team: "Ingenico order desk",
       slaDays: 1,
       returns: "Confirmed availability, warehouse allocation and a committed delivery date",
-    },
-    {
-      party: "acquirer",
-      ask: "Place and confirm the order against your rate card.",
-      action: "Place the order",
-      commits:
-        "You are committing to the order value on your contracted rate card and releasing it to fulfilment.",
     },
   ],
   // Branding is the acquirer's alone. This step previously led with an
@@ -275,10 +294,13 @@ export function handoffsForMerchant(
 
 /** The party a step is waiting on, before anyone has done anything.
  *
- *  Deliberately NOT just the first handoff: step 3 opens with an Ingenico
- *  validation but the step exists so that YOU place the order, and labelling it
- *  "Ingenico" hid the acquirer's own decision behind a supplier's queue. Where
- *  the acquirer has a decision anywhere in the step, the step is theirs. */
+ *  Deliberately NOT just the first handoff. This began as a patch for step 3,
+ *  which opened with an Ingenico validation even though the step exists so
+ *  that YOU place the order — so the header read "Waiting · Ingenico" over the
+ *  acquirer's own untaken decision. That ORDER has since been corrected at
+ *  source, and the rule is kept for the general reason rather than the
+ *  specific one: wherever the acquirer holds a decision anywhere in a step,
+ *  the step is theirs, and no supplier's queue ahead of it may say otherwise. */
 export function ownerOf(step: StepId): Party | null {
   const list = STEP_HANDOFFS[step]
   if (list.some((h) => h.party === "acquirer")) return "acquirer"

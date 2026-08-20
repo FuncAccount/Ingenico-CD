@@ -175,13 +175,26 @@ export function StepGate({
 
   // Must resolve through the same rules as `read`, or the panel shows a handoff
   // as approved while still naming it as the thing blocking the step.
+  //
+  // Signing the acquirer's row clears THAT ROW, not the step. This used to
+  // collapse straight to `null`, which was safe only while the acquirer's
+  // decision was always the LAST handoff — as soon as Order was reordered to
+  // put the order desk after it, placing the order reported "Step clear" over
+  // an Ingenico confirmation nobody had asked for yet. So advance to the next
+  // unsettled row instead, and only call the step clear when none remains.
   const rawBlocking = isPast ? null : blockingIndex(step, merchant.id, states)
-  const blocking =
+  const signedAcquirerRow =
     rawBlocking !== null &&
     list[rawBlocking].party === "acquirer" &&
     decision?.kind === "signed"
+  const nextAfterSigned = signedAcquirerRow
+    ? list.findIndex((h, i) => i > (rawBlocking as number) && !isResolved(h, read(i)))
+    : -1
+  const blocking = signedAcquirerRow
+    ? nextAfterSigned === -1
       ? null
-      : rawBlocking
+      : nextAfterSigned
+    : rawBlocking
 
   function write(i: number, next: HandoffState) {
     onStates((prev) => ({ ...prev, [handoffKey(merchant.id, step, i)]: next }))

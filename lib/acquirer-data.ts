@@ -366,8 +366,12 @@ export const PIPELINE: PipelineStep[] = [
     lane: "build",
     band: "Assist",
     acquirerRole: "approves",
-    blurb: "Agent proposes the terminal order. Acquirer approves and confirms.",
-    agentMission: "Assemble a ready-to-place terminal order with stock and delivery confirmed.",
+    blurb: "Agent proposes the terminal order. Acquirer approves and places it.",
+    // "with stock and delivery confirmed" promised a confirmation that only
+    // the order desk can give, and only AFTER the order is placed. What the
+    // agent assembles is an order ready TO place, checked as far as published
+    // information allows.
+    agentMission: "Assemble a ready-to-place terminal order, checked against stock and delivery.",
     tools: [
       ingenicoTool("Ingenico order desk"),
       ingenicoTool("Pricing"),
@@ -380,11 +384,16 @@ export const PIPELINE: PipelineStep[] = [
         output: "order.build → 3× A920, 1× softPOS licence, 4× dock",
       },
       {
-        // Not "check stock": counting warehouse units is Ingenico's job. The
-        // acquirer needs the answer that follows from it — can it be supplied.
-        label: "Confirm availability",
-        detail: "Ingenico's order desk confirms what it can supply against this basket.",
-        output: "availability.confirm → all lines available in full",
+        // Counting warehouse units is Ingenico's job — and so is COMMITTING to
+        // it. This said "Ingenico's order desk confirms what it can supply",
+        // which credited the agent's own lookup with another party's
+        // commitment, and asserted it before that party had been asked
+        // anything: the order desk is only engaged once the order is placed,
+        // one panel below. What the agent can honestly do is read the
+        // published stock position, which indicates rather than commits.
+        label: "Check availability",
+        detail: "Reads Ingenico's published stock position for an indication against this basket.",
+        output: "availability.check → all lines showing in stock (indicative)",
       },
       {
         label: "Validate delivery",
@@ -397,7 +406,11 @@ export const PIPELINE: PipelineStep[] = [
         output: "pricing.apply → rate card NG-2024, total confirmed",
       },
     ],
-    handback: "You approve the proposed order. One click confirms it and releases it to fulfilment.",
+    // Placing is not the end of the step: the order desk still has to come
+    // back with stock and a date. Saying "releases it to fulfilment" made the
+    // acquirer's click sound terminal and left that wait unmentioned.
+    handback:
+      "You approve the proposed order and place it. Ingenico's order desk then confirms availability and commits a delivery date.",
   },
   {
     id: 4,

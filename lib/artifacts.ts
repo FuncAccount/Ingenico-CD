@@ -1054,9 +1054,11 @@ export function traceFor(
       return `order.build → ${active.map((l) => `${l.qty}× ${l.name}`).join(", ")}`
     case "3.1": {
       const stock = checkStock(active, geo)
+      // `.check`, not `.confirm` — the agent reads a published position; the
+      // order desk is what confirms, after the order is placed.
       return stock.shortLines.length
-        ? `availability.confirm → ${stock.shortLines.length} line(s) part-supplied, balance to follow`
-        : `availability.confirm → all ${active.length} line(s) available in full`
+        ? `availability.check → ${stock.shortLines.length} line(s) short, balance to follow`
+        : `availability.check → all ${active.length} line(s) showing in stock`
     }
     case "3.2":
       return geo
@@ -2110,9 +2112,13 @@ export function artifactFor(
       // The acquirer is not Ingenico's inventory controller. The question here
       // is "can this order be met, and when" — not which shelf it sits on.
       return {
+        // "Confirmed by the Ingenico order desk" attributed this to a party
+        // that has not been asked yet — they are engaged once the order is
+        // placed, and their answer is what the handoff returns. This panel is
+        // the published position, which is an indication, not a commitment.
         kind: "stock",
         title: "Availability",
-        note: "Confirmed by the Ingenico order desk against this basket.",
+        note: "Indicative, from Ingenico's published stock position. The order desk commits to it once you place the order.",
       }
     case "3.2":
       return { kind: "delivery", title: "Delivery", note: "Where it ships to, from where, and the earliest date the network can commit to." }
