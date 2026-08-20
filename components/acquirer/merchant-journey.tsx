@@ -29,6 +29,9 @@ import {
   statusTone,
   type Merchant,
   type PipelineStep,
+  laneState,
+  shipRisk,
+  REJOIN_STEP,
   type StepId,
 } from "@/lib/acquirer-data"
 import { cn } from "@/lib/utils"
@@ -80,10 +83,10 @@ export function MerchantJourney({
 
   const tone = statusTone(current.status)
 
+  // Delegates to the model so the risk lane is read from `riskLane` rather
+  // than from a position on the build path it no longer shares.
   function stepState(step: PipelineStep): StepState {
-    if (step.id < current.currentStep) return "done"
-    if (step.id === current.currentStep) return "active"
-    return "upcoming"
+    return laneState(current, step)
   }
 
   const focused = PIPELINE.find((s) => s.id === focusStep)!
@@ -91,6 +94,16 @@ export function MerchantJourney({
 
   const doneCount = PIPELINE.filter((s) => stepState(s) === "done").length
   const pct = Math.round((doneCount / PIPELINE.length) * 100)
+
+  // Grouped by lane, not sliced by index, so adding a step to a lane cannot
+  // silently land it in the wrong branch of the fork.
+  const riskLane = PIPELINE.filter((s) => s.lane === "risk")
+  const buildLane = PIPELINE.filter((s) => s.lane === "build")
+  const firstForkId = Math.min(...riskLane.concat(buildLane).map((s) => s.id))
+  const spine = {
+    before: PIPELINE.filter((s) => s.lane === "spine" && s.id < firstForkId),
+    after: PIPELINE.filter((s) => s.lane === "spine" && s.id > firstForkId),
+  }
 
   return (
     <div className="mx-auto max-w-6xl px-6 py-8">
@@ -186,75 +199,69 @@ export function MerchantJourney({
           <p className="px-1 pb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
             Pipeline
           </p>
-          {PIPELINE.map((step, i) => {
-            const state = stepState(step)
-            const isFocus = step.id === focusStep
-            const isLast = i === PIPELINE.length - 1
-            return (
-              <div key={step.id} className="flex gap-3">
-                {/* connector */}
-                <div className="flex flex-col items-center">
-                  <span
-                    className={cn(
-                      "flex h-8 w-8 shrink-0 items-center justify-center rounded-full border text-[11px] font-semibold transition-colors",
-                      state === "done"
-                        ? "border-primary bg-primary text-primary-foreground"
-                        : state === "active"
-                          ? "border-primary bg-primary/15 text-primary glow-primary"
-                          : "border-border bg-card text-muted-foreground",
-                    )}
-                  >
-                    {state === "done" ? <Check className="h-4 w-4" /> : step.code}
-                  </span>
-                  {!isLast && (
-                    <span
-                      className={cn(
-                        "min-h-6 w-px flex-1",
-                        state === "done" ? "bg-primary/60" : "bg-border",
-                      )}
-                    />
-                  )}
-                </div>
-                {/* clickable card */}
-                <button
-                  onClick={() => setFocusStep(step.id)}
-                  className={cn(
-                    "mb-1.5 flex-1 rounded-lg border px-3 py-2.5 text-left transition-all",
-                    isFocus
-                      ? "border-primary/50 bg-primary/[0.06]"
-                      : "border-transparent hover:border-border hover:bg-secondary/50",
-                  )}
-                >
-                  <div className="flex items-center gap-2">
-                    <span
-                      className={cn(
-                        "text-sm font-semibold",
-                        state === "upcoming"
-                          ? "text-muted-foreground"
-                          : "text-foreground",
-                      )}
-                    >
-                      {step.name}
-                    </span>
-                    {ownerOf(step.id) === "acquirer" && (
-                      <UserCheck className="h-3.5 w-3.5 text-primary" />
-                    )}
-                  </div>
-                  <div className="mt-1 flex flex-wrap items-center gap-1">
-                    <span
-                      className={cn(
-                        "inline-block rounded px-1.5 py-0.5 text-[10px] font-semibold",
-                        bandTone(step.band),
-                      )}
-                    >
-                      {step.band}
-                    </span>
-                    <OwnerBadge step={step.id} compact />
-                  </div>
-                </button>
-              </div>
-            )
-          })}
+          {/* Capture — the shared start, before the fork. */}
+          {spine.before.map((step) => (
+            <StepRow
+              key={step.id}
+              step={step}
+              state={stepState(step)}
+              isFocus={step.id === focusStep}
+              onFocus={setFocusStep}
+              connector="down"
+            />
+          ))}
+
+          {/* THE FORK. Two columns side by side, because the whole point is
+              that neither waits for the other — stacking them vertically is
+              what made the old rail assert an order that does not exist. */}
+          <div className="relative mt-1 flex gap-2">
+            {/* the split: one line in, two lines out */}
+            <span aria-hidden className="absolute -top-1.5 left-4 h-1.5 w-px bg-primary/60" />
+            <div className="min-w-0 flex-1">
+              <LaneHeader label="Risk" />
+              {riskLane.map((step) => (
+                <StepRow
+                  key={step.id}
+                  step={step}
+                  state={stepState(step)}
+                  isFocus={step.id === focusStep}
+                  onFocus={setFocusStep}
+                  connector="none"
+                  dense
+                />
+              ))}
+            </div>
+            <div className="min-w-0 flex-1">
+              <LaneHeader label="Build" />
+              {buildLane.map((step, i) => (
+                <StepRow
+                  key={step.id}
+                  step={step}
+                  state={stepState(step)}
+                  isFocus={step.id === focusStep}
+                  onFocus={setFocusStep}
+                  connector={i === buildLane.length - 1 ? "none" : "down"}
+                  dense
+                />
+              ))}
+            </div>
+          </div>
+
+          <p className="px-1 pb-1 pt-2 text-[10px] leading-relaxed text-muted-foreground">
+            Both lanes run at the same time and rejoin at Ship.
+          </p>
+
+          {/* Rejoined spine. */}
+          {spine.after.map((step, i) => (
+            <StepRow
+              key={step.id}
+              step={step}
+              state={stepState(step)}
+              isFocus={step.id === focusStep}
+              onFocus={setFocusStep}
+              connector={i === spine.after.length - 1 ? "none" : "down"}
+            />
+          ))}
         </div>
 
         {/* Right: the agent trace cockpit for the focused step */}
@@ -266,6 +273,95 @@ export function MerchantJourney({
         />
       </div>
     </div>
+  )
+}
+
+/** One step in the rail. Extracted so the capture step, both fork lanes and
+ *  the rejoined spine render through the SAME component — three copies of this
+ *  markup would be three places for the state styling to drift apart. */
+function StepRow({
+  step,
+  state,
+  isFocus,
+  onFocus,
+  connector,
+  dense = false,
+}: {
+  step: PipelineStep
+  state: StepState
+  isFocus: boolean
+  onFocus: (id: StepId) => void
+  connector: "down" | "none"
+  dense?: boolean
+}) {
+  return (
+    <div className="flex gap-3">
+      <div className="flex flex-col items-center">
+        <span
+          className={cn(
+            "flex h-8 w-8 shrink-0 items-center justify-center rounded-full border text-[11px] font-semibold transition-colors",
+            state === "done"
+              ? "border-primary bg-primary text-primary-foreground"
+              : state === "active"
+                ? "border-primary bg-primary/15 text-primary glow-primary"
+                : "border-border bg-card text-muted-foreground",
+          )}
+        >
+          {state === "done" ? <Check className="h-4 w-4" /> : step.code}
+        </span>
+        {connector === "down" && (
+          <span
+            className={cn("min-h-6 w-px flex-1", state === "done" ? "bg-primary/60" : "bg-border")}
+          />
+        )}
+      </div>
+      <button
+        onClick={() => onFocus(step.id)}
+        className={cn(
+          "mb-1.5 min-w-0 flex-1 rounded-lg border text-left transition-all",
+          dense ? "px-2 py-2" : "px-3 py-2.5",
+          isFocus
+            ? "border-primary/50 bg-primary/[0.06]"
+            : "border-transparent hover:border-border hover:bg-secondary/50",
+        )}
+      >
+        <div className="flex items-center gap-1.5">
+          <span
+            className={cn(
+              "truncate font-semibold",
+              dense ? "text-[13px]" : "text-sm",
+              state === "upcoming" ? "text-muted-foreground" : "text-foreground",
+            )}
+          >
+            {step.name}
+          </span>
+          {ownerOf(step.id) === "acquirer" && (
+            <UserCheck className="h-3.5 w-3.5 shrink-0 text-primary" />
+          )}
+        </div>
+        <div className="mt-1 flex flex-wrap items-center gap-1">
+          <span
+            className={cn(
+              "inline-block rounded px-1.5 py-0.5 text-[10px] font-semibold",
+              bandTone(step.band),
+            )}
+          >
+            {step.band}
+          </span>
+          {!dense && <OwnerBadge step={step.id} compact />}
+        </div>
+      </button>
+    </div>
+  )
+}
+
+/** Names a branch of the fork. Without it the two columns are just two lists
+ *  and the reader has to infer why they sit side by side. */
+function LaneHeader({ label }: { label: string }) {
+  return (
+    <p className="px-1 pb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+      {label}
+    </p>
   )
 }
 
@@ -346,6 +442,9 @@ function StepCockpit({
   merchant: Merchant
   onOpenSignoff: () => void
 }) {
+  // Null unless the risk lane is genuinely outstanding — see the banner below.
+  const rejoinRisk = shipRisk(merchant)
+
   // How many tasks have completed. Upcoming steps start at 0 (preview),
   // done steps start fully complete, the active step invites you to play.
   const initialProgress = state === "done" ? step.tasks.length : 0
@@ -821,6 +920,28 @@ function StepCockpit({
           </div>
         )}
       </div>
+
+      {/* THE REJOIN. Ship is where the two lanes meet, so it is the one step
+          that can be reached with the other lane unfinished. Deliberately a
+          warning and not a block (a product decision), which means the banner
+          carries the entire claim: it is non-dismissible, names the actual
+          state rather than a generic "not ready", and says what shipping now
+          would mean. `shipRisk` returns null when cleared, so this cannot
+          render as an empty box implying a check that found nothing. */}
+      {step.lane === "spine" && step.id === REJOIN_STEP && rejoinRisk && (
+        <div className="border-b border-border px-5 py-4">
+          <div className="flex gap-2.5 rounded-lg border border-destructive/40 bg-destructive/[0.07] px-3 py-2.5">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+            <div>
+              <p className="text-sm font-semibold text-foreground">{rejoinRisk.label}</p>
+              <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                {rejoinRisk.detail} The build lane does not wait for underwriting, so reaching this
+                step is not itself an approval.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* The blocker leads the step. Placed above the controls because playing
           the agent cannot clear it — the missing fact is the merchant's. */}

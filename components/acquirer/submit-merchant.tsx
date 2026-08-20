@@ -15,6 +15,7 @@ import {
   recommendedKit,
   volumeBandsFor,
 } from "@/lib/comparables"
+import { stepById } from "@/lib/acquirer-data"
 
 const SECTORS = [
   "Hospitality",
@@ -238,8 +239,11 @@ export function SubmitMerchant({
               <span className="text-sm font-semibold text-foreground">
                 Ingenico agent
               </span>
+              {/* Read off the pipeline, not typed. As a literal this was a
+                  second place the step's label lived, free to disagree with
+                  the rail after the lanes were renumbered. */}
               <span className="mt-0.5 text-[11px] font-medium text-primary">
-                Step 01 · Augment
+                {stepById(1).code} {stepById(1).name} · {stepById(1).band}
               </span>
             </div>
           </div>

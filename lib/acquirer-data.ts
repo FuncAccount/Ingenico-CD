@@ -31,10 +31,26 @@ const acquirerTool = (name: string): Tool => ({ name, owner: "acquirer" })
 const ingenicoTool = (name: string): Tool => ({ name, owner: "ingenico" })
 const externalTool = (name: string): Tool => ({ name, owner: "external" })
 
+/** Which track a step sits on once the journey forks.
+ *
+ *  Underwriting runs AT THE SAME TIME as the kit is ordered and built — that is
+ *  how time to delivery is compressed in practice — so the pipeline is not one
+ *  line. `spine` steps are the shared backbone (capture, then ship onwards);
+ *  `risk` and `build` are the two parallel lanes between the fork and the
+ *  rejoin at Ship. */
+export type Lane = "spine" | "risk" | "build"
+
 export interface PipelineStep {
   id: StepId
-  code: string // "01".."09"
+  /** Display label ONLY — never an index. Numbers ("01".."04") mark a position
+   *  on the spine; letters ("R", "B1".."B4") mark a lane, where no single
+   *  sequence exists to be Nth in. Deliberately decoupled from `id`, which is a
+   *  stable key: 63 artefact cases and every fixture event are addressed by
+   *  `id`, so renumbering those to match the new labels would silently
+   *  re-point the entire artefact layer. */
+  code: string
   name: string
+  lane: Lane
   band: Band
   // Does the acquirer have a hands-on role at this step?
   acquirerRole: "owns" | "signs-off" | "approves" | "watch"
@@ -66,7 +82,8 @@ export const PIPELINE: PipelineStep[] = [
   {
     id: 1,
     code: "01",
-    name: "Submit",
+    name: "Merchant capture",
+    lane: "spine",
     band: "Augment",
     acquirerRole: "owns",
     blurb: "Acquirer owns the customer and decides whether the application goes forward.",
@@ -100,12 +117,16 @@ export const PIPELINE: PipelineStep[] = [
         output: "application.draft → fields populated, gaps named",
       },
     ],
-    handback: "The decision is yours. Confirming hands the application to underwriting.",
+    // Confirming now releases BOTH lanes, not just underwriting. Saying only
+    // "hands it to underwriting" would describe the old sequential pipeline
+    // and hide the very thing that compresses the timeline.
+    handback: "The decision is yours. Confirming starts underwriting and the kit build at the same time.",
   },
   {
     id: 2,
-    code: "02",
+    code: "R",
     name: "Underwrite",
+    lane: "risk",
     band: "Augment",
     acquirerRole: "signs-off",
     blurb: "Agent verifies identity, parses documents and scores risk. Acquirer signs the regulated decision.",
@@ -150,8 +171,9 @@ export const PIPELINE: PipelineStep[] = [
   },
   {
     id: 3,
-    code: "03",
+    code: "B1",
     name: "Order",
+    lane: "build",
     band: "Assist",
     acquirerRole: "approves",
     blurb: "Agent proposes the terminal order. Acquirer approves and confirms.",
@@ -189,8 +211,9 @@ export const PIPELINE: PipelineStep[] = [
   },
   {
     id: 4,
-    code: "04",
+    code: "B2",
     name: "Branding",
+    lane: "build",
     band: "Augment",
     acquirerRole: "approves",
     blurb: "Agent prepares receipts and on-device branding. Acquirer approves the look.",
@@ -230,8 +253,9 @@ export const PIPELINE: PipelineStep[] = [
   },
   {
     id: 5,
-    code: "05",
+    code: "B3",
     name: "Configure",
+    lane: "build",
     band: "Automate",
     acquirerRole: "watch",
     blurb: "Agent builds the device profile and loads the merchant configuration.",
@@ -271,8 +295,9 @@ export const PIPELINE: PipelineStep[] = [
   },
   {
     id: 6,
-    code: "06",
+    code: "B4",
     name: "Test",
+    lane: "build",
     band: "Automate",
     acquirerRole: "watch",
     blurb: "Agent runs the full test suite on each terminal before dispatch.",
@@ -308,8 +333,9 @@ export const PIPELINE: PipelineStep[] = [
   },
   {
     id: 7,
-    code: "07",
+    code: "02",
     name: "Ship",
+    lane: "spine",
     band: "Automate",
     acquirerRole: "watch",
     blurb: "Agent books logistics and tracks delivery to the merchant.",
@@ -348,8 +374,9 @@ export const PIPELINE: PipelineStep[] = [
   },
   {
     id: 8,
-    code: "08",
+    code: "03",
     name: "Install",
+    lane: "spine",
     band: "Assist",
     acquirerRole: "watch",
     blurb: "Agent guides the merchant through install and activation in their language.",
@@ -385,8 +412,9 @@ export const PIPELINE: PipelineStep[] = [
   },
   {
     id: 9,
-    code: "09",
+    code: "04",
     name: "Go-live",
+    lane: "spine",
     band: "Automate",
     acquirerRole: "watch",
     blurb: "Agent detects the first live payment and writes records back to the acquirer.",
@@ -428,6 +456,61 @@ export function stepById(id: StepId): PipelineStep {
   return PIPELINE.find((s) => s.id === id)!
 }
 
+/** How far a merchant has got, ON THE LANE THE STEP BELONGS TO.
+ *
+ *  Replaces the bare `step.id < currentStep` comparison, which could only
+ *  describe one line of travel. Under the fork the risk lane advances on its
+ *  own clock, so asking `currentStep` about Underwrite would report a file as
+ *  finished purely because the kit had moved on — the exact false claim the
+ *  parallel model exists to avoid.
+ *
+ *  Ship (the rejoin) is the one step that answers to both lanes, so it is
+ *  reported as reachable only when the build has arrived AND risk has cleared;
+ *  see `shipRisk` for the warning shown when it has not. */
+export function laneState(
+  merchant: Pick<Merchant, "currentStep" | "riskLane">,
+  step: PipelineStep,
+): "done" | "active" | "upcoming" {
+  if (step.lane === "risk") {
+    // A referred file is emphatically NOT done — it is active work that has
+    // stalled, and collapsing it into "done" would file a rejection alongside
+    // an approval.
+    return merchant.riskLane === "cleared" ? "done" : "active"
+  }
+  if (step.id < merchant.currentStep) return "done"
+  if (step.id === merchant.currentStep) return "active"
+  return "upcoming"
+}
+
+/** The first spine step after the fork — where the lanes meet again.
+ *
+ *  Derived, not written down as `7`: the rejoin is a property of the lane
+ *  layout, and a hardcoded id would quietly point at the wrong step the moment
+ *  a lane gained or lost one. */
+export const REJOIN_STEP: StepId = PIPELINE.filter(
+  (s) => s.lane === "spine" && s.id > Math.min(...PIPELINE.filter((x) => x.lane !== "spine").map((x) => x.id)),
+)[0].id
+
+/** The rejoin condition at Ship, stated rather than inferred.
+ *
+ *  Returns null when there is nothing to warn about, so a caller cannot render
+ *  an empty banner and imply a check that found nothing wrong. */
+export function shipRisk(merchant: Pick<Merchant, "riskLane">): { label: string; detail: string } | null {
+  if (merchant.riskLane === "cleared") return null
+  if (merchant.riskLane === "referred") {
+    return {
+      label: "Underwriting referred for review",
+      detail:
+        "This file was sent back and has not been approved. Shipping now puts hardware with a merchant the acquirer has not accepted.",
+    }
+  }
+  return {
+    label: "Underwriting still in flight",
+    detail:
+      "The build lane has arrived at Ship first. Shipping now puts hardware with a merchant whose file is not yet approved.",
+  }
+}
+
 export type MerchantStatus =
   | "On track"
   | "Needs sign-off"
@@ -458,7 +541,20 @@ export interface Merchant {
   size: string // annual card volume band
   terminals: string // ordered device summary
   terminalCount: number
+  /** Position on the BUILD/SPINE path only — not on the risk lane.
+   *
+   *  Before the fork this was the whole journey, so "past step 2" implied
+   *  underwriting had cleared. It no longer does: a merchant can be at B3
+   *  Configure with their file still open. Read `riskLane` for that. */
   currentStep: StepId
+  /** Where underwriting has got to, independently of the build.
+   *
+   *  REQUIRED, and deliberately without a default. The old model only carried
+   *  `underwriting` on merchants parked at step 2 because position implied the
+   *  verdict; once the lanes run in parallel that inference is gone. A default
+   *  of "cleared" would assert an approval nobody gave, on precisely the
+   *  merchants whose file was never opened. */
+  riskLane: "in-flight" | "cleared" | "referred"
   status: MerchantStatus
   submitted: string
   // underwriting detail (used on the sign-off screen)
@@ -498,6 +594,7 @@ export const MERCHANTS: Merchant[] = [
     size: "£2.4m / yr",
     terminals: "3× A920 + softPOS",
     terminalCount: 4,
+    riskLane: "in-flight",
     currentStep: 2,
     status: "Needs sign-off",
     submitted: "2 days ago",
@@ -523,6 +620,7 @@ export const MERCHANTS: Merchant[] = [
     size: "€5.1m / yr",
     terminals: "8× Move 5000",
     terminalCount: 8,
+    riskLane: "in-flight",
     currentStep: 2,
     status: "Needs sign-off",
     submitted: "1 day ago",
@@ -548,6 +646,7 @@ export const MERCHANTS: Merchant[] = [
     size: "€1.2m / yr",
     terminals: "2× Desk 5000",
     terminalCount: 2,
+    riskLane: "cleared",
     currentStep: 4,
     status: "Needs sign-off",
     submitted: "4 days ago",
@@ -567,6 +666,7 @@ export const MERCHANTS: Merchant[] = [
     size: "€3.8m / yr",
     terminals: "6× A920 + 2× softPOS",
     terminalCount: 8,
+    riskLane: "cleared",
     currentStep: 8,
     status: "On track",
     submitted: "9 days ago",
@@ -586,6 +686,7 @@ export const MERCHANTS: Merchant[] = [
     size: "€6.7m / yr",
     terminals: "12× Desk 5000",
     terminalCount: 12,
+    riskLane: "cleared",
     currentStep: 6,
     status: "On track",
     submitted: "6 days ago",
@@ -603,6 +704,7 @@ export const MERCHANTS: Merchant[] = [
     size: "€0.9m / yr",
     terminals: "2× A920",
     terminalCount: 2,
+    riskLane: "cleared",
     currentStep: 3,
     status: "Exception",
     submitted: "3 days ago",
@@ -621,6 +723,7 @@ export const MERCHANTS: Merchant[] = [
     size: "kr 22m / yr",
     terminals: "5× Move 5000",
     terminalCount: 5,
+    riskLane: "cleared",
     currentStep: 7,
     status: "On track",
     submitted: "8 days ago",
@@ -637,6 +740,7 @@ export const MERCHANTS: Merchant[] = [
     size: "€1.8m / yr",
     terminals: "4× softPOS",
     terminalCount: 4,
+    riskLane: "cleared",
     currentStep: 9,
     status: "Live",
     submitted: "12 days ago",
@@ -653,6 +757,7 @@ export const MERCHANTS: Merchant[] = [
     size: "£0.6m / yr",
     terminals: "1× A920",
     terminalCount: 1,
+    riskLane: "cleared",
     currentStep: 5,
     status: "On track",
     submitted: "5 days ago",
@@ -669,6 +774,7 @@ export const MERCHANTS: Merchant[] = [
     size: "€4.4m / yr",
     terminals: "3× Move 5000 + softPOS",
     terminalCount: 4,
+    riskLane: "cleared",
     currentStep: 9,
     status: "Live",
     submitted: "14 days ago",
@@ -685,6 +791,7 @@ export const MERCHANTS: Merchant[] = [
     size: "€9.2m / yr",
     terminals: "6× Desk 5000",
     terminalCount: 6,
+    riskLane: "cleared",
     currentStep: 6,
     status: "On track",
     submitted: "7 days ago",
@@ -701,6 +808,7 @@ export const MERCHANTS: Merchant[] = [
     size: "€2.1m / yr",
     terminals: "4× A920",
     terminalCount: 4,
+    riskLane: "cleared",
     currentStep: 8,
     status: "On track",
     submitted: "10 days ago",
@@ -729,6 +837,7 @@ export const MERCHANTS: Merchant[] = [
     size: "£680k / yr",
     terminals: "2× A920",
     terminalCount: 2,
+    riskLane: "in-flight",
     currentStep: 1,
     status: "On track",
     submitted: "3 hours ago",
@@ -747,6 +856,7 @@ export const MERCHANTS: Merchant[] = [
     size: "£940k / yr",
     terminals: "2× A920 + softPOS",
     terminalCount: 3,
+    riskLane: "in-flight",
     currentStep: 1,
     status: "Needs sign-off",
     submitted: "1 day ago",
@@ -769,6 +879,7 @@ export const MERCHANTS: Merchant[] = [
     size: "€1.5m / yr",
     terminals: "3× Desk 5000",
     terminalCount: 3,
+    riskLane: "referred",
     currentStep: 2,
     status: "With merchant",
     submitted: "6 days ago",
@@ -806,6 +917,7 @@ export const MERCHANTS: Merchant[] = [
     size: "£3.1m / yr",
     terminals: "6× A920 + 4× Move 5000",
     terminalCount: 10,
+    riskLane: "cleared",
     currentStep: 3,
     status: "Needs sign-off",
     submitted: "5 days ago",
@@ -827,6 +939,7 @@ export const MERCHANTS: Merchant[] = [
     size: "€2.7m / yr",
     terminals: "6× A920",
     terminalCount: 6,
+    riskLane: "cleared",
     currentStep: 6,
     status: "Exception",
     submitted: "12 days ago",
@@ -847,6 +960,7 @@ export const MERCHANTS: Merchant[] = [
     size: "€4.6m / yr",
     terminals: "10× A920 + 2× Desk 5000",
     terminalCount: 12,
+    riskLane: "cleared",
     currentStep: 7,
     status: "Exception",
     submitted: "16 days ago",
@@ -868,6 +982,7 @@ export const MERCHANTS: Merchant[] = [
     size: "€1.1m / yr",
     terminals: "2× Move 5000",
     terminalCount: 2,
+    riskLane: "cleared",
     currentStep: 8,
     status: "With merchant",
     submitted: "18 days ago",
