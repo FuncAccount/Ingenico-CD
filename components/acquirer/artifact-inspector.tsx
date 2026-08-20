@@ -12,6 +12,7 @@ import {
   FileText,
   Info,
   Loader2,
+  Mail,
   Pencil,
   Wrench,
 } from "lucide-react"
@@ -875,59 +876,215 @@ function TxnsView({ artifact }: { artifact: Extract<Artifact, { kind: "txns" }> 
  * greyed-out "unrecognised · low confidence" chip would sit quietly in a list of
  * ticks and get scrolled past, which is the one outcome this panel is here for.
  */
-function IntakeView({ artifact }: { artifact: Extract<Artifact, { kind: "intake" }> }) {
-  const typed = artifact.rows.filter((r) => r.classified !== null).length
-  const flagged = artifact.rows.length - typed
+/** Section heading inside the dossier. The panel carries four distinct
+ *  registers, and without labelled bands they read as one long list. */
+function DossierSection({
+  label,
+  count,
+  children,
+}: {
+  label: string
+  count?: string
+  children: React.ReactNode
+}) {
+  return (
+    <section className="mt-3.5 first:mt-0">
+      <p className="mb-1.5 flex items-baseline justify-between gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        <span>{label}</span>
+        {count && <span className="font-mono text-[11px] normal-case tracking-normal">{count}</span>}
+      </p>
+      {children}
+    </section>
+  )
+}
+
+/**
+ * The whole document pass on one page.
+ *
+ * Replaces five panels. The order is deliberate and answers the acquirer's
+ * questions in the order they ask them: what is MISSING (the only thing they
+ * can act on), what ARRIVED, what we LEARNED. Status first, evidence after —
+ * the reverse buried the one actionable fact under four screens of ticks.
+ */
+function DossierView({ artifact }: { artifact: Extract<Artifact, { kind: "dossier" }> }) {
+  const [chased, setChased] = useState(false)
+
+  const outstanding = artifact.required.filter((r) => r.received === null)
+  const unclassified = artifact.files.filter((f) => f.classified === null)
+  // Anything needing a human, from BOTH sources. An unrecognised file and a
+  // never-delivered document are different problems with the same consequence,
+  // and a panel that counted only one of them would report a file as ready
+  // while a row on it still said "confirm what this is".
+  const openItems = outstanding.length + unclassified.length
+
   return (
     <Shell title={artifact.title} note={artifact.note}>
-      <div className="space-y-2">
-        {artifact.rows.map((r) => (
-          <div
-            key={r.filename}
-            className={cn(
-              "flex gap-2.5 rounded-xl border p-3",
-              r.classified === null
-                ? "border-warning/45 bg-warning/[0.07]"
-                : "border-border/70 bg-white/60",
-            )}
-          >
-            <span
-              className={cn(
-                "mt-0.5 shrink-0",
-                r.classified === null ? "text-warning-foreground" : "text-muted-foreground",
-              )}
+      {/* WHAT IS OUTSTANDING, and the one button that resolves it. Placed first
+          because it is the only part of this panel anyone can act on. */}
+      {artifact.chase && (
+        <div className="rounded-xl border border-warning/45 bg-warning/[0.07] p-3">
+          <p className="flex items-center gap-2 text-sm font-semibold text-foreground">
+            <AlertTriangle className="h-4 w-4 shrink-0 text-warning" />
+            {artifact.chase.items.length} document
+            {artifact.chase.items.length === 1 ? "" : "s"} outstanding
+          </p>
+          <ul className="mt-1.5 space-y-1">
+            {artifact.chase.items.map((i) => (
+              <li key={i} className="flex gap-2 text-xs leading-relaxed text-muted-foreground">
+                <span aria-hidden className="text-warning">
+                  •
+                </span>
+                {i}
+              </li>
+            ))}
+          </ul>
+          <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
+            {artifact.chase.note}
+          </p>
+          {chased ? (
+            /* States what was sent, to whom and what happens next. A button
+               that flips to a bare tick claims success without saying what
+               actually left the building. */
+            <p className="mt-2 flex items-start gap-2 rounded-lg border border-border bg-white/70 px-2.5 py-2 text-xs leading-relaxed text-muted-foreground">
+              <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-success" />
+              <span>
+                <span className="font-semibold text-foreground">Request sent</span> — one message
+                covering all {artifact.chase.items.length} via the {artifact.chase.channel}. The
+                agent follows up automatically; the file stays blocked until they land.
+              </span>
+            </p>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setChased(true)}
+              className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
             >
-              {r.classified === null ? (
-                <AlertTriangle className="h-4 w-4" />
-              ) : (
-                <FileText className="h-4 w-4" />
-              )}
-            </span>
-            <div className="min-w-0 flex-1">
-              <p className="truncate font-mono text-[11px] text-muted-foreground">{r.filename}</p>
-              {r.classified === null ? (
-                <>
-                  <p className="mt-0.5 text-sm font-medium text-warning-foreground">Unrecognised</p>
-                  <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">{r.review}</p>
-                </>
-              ) : (
-                <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1">
-                  <p className="text-sm font-medium text-foreground">{r.classified}</p>
-                  <span className="rounded bg-secondary px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-                    {r.confidence} confidence
+              <Mail className="h-3.5 w-3.5" />
+              Chase all {artifact.chase.items.length} via {artifact.chase.channel}
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* REQUIRED SET. Received rows name the file that satisfied them, so this
+          list and the file list below are provably the same set. */}
+      <DossierSection
+        label="Required documents"
+        count={`${artifact.required.length - outstanding.length} of ${artifact.required.length}`}
+      >
+        <div className="overflow-hidden rounded-xl border border-border/70 bg-white/60">
+          {artifact.required.map((r) => (
+            <div
+              key={r.label}
+              className="flex items-baseline justify-between gap-3 border-b border-border/40 px-3 py-2 last:border-0"
+            >
+              <span className="min-w-0 text-xs text-foreground">{r.label}</span>
+              {r.received ? (
+                <span className="flex shrink-0 items-center gap-1.5">
+                  <span className="truncate font-mono text-[11px] text-muted-foreground">
+                    {r.received}
                   </span>
-                </div>
+                  <Check className="h-3.5 w-3.5 shrink-0 text-success" />
+                </span>
+              ) : (
+                <span className="shrink-0 text-[11px] font-semibold uppercase tracking-wide text-warning-foreground">
+                  Outstanding
+                </span>
               )}
             </div>
-          </div>
-        ))}
-      </div>
-      {/* Derived from the rows above, so the summary cannot outlive them. */}
+          ))}
+        </div>
+      </DossierSection>
+
+      {/* FILES RECEIVED, with the quality verdict on the same row as the type —
+          two questions about one piece of paper. */}
+      <DossierSection label="Files received" count={`${artifact.files.length}`}>
+        <div className="space-y-1.5">
+          {artifact.files.map((f) => (
+            <div
+              key={f.filename}
+              className={cn(
+                "flex gap-2.5 rounded-xl border p-2.5",
+                f.classified === null
+                  ? "border-warning/45 bg-warning/[0.07]"
+                  : "border-border/70 bg-white/60",
+              )}
+            >
+              <span
+                className={cn(
+                  "mt-0.5 shrink-0",
+                  f.classified === null ? "text-warning" : "text-muted-foreground",
+                )}
+              >
+                {f.classified === null ? (
+                  <AlertTriangle className="h-4 w-4" />
+                ) : (
+                  <FileText className="h-4 w-4" />
+                )}
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="truncate font-mono text-[11px] text-muted-foreground">{f.filename}</p>
+                {f.classified === null ? (
+                  <>
+                    <p className="mt-0.5 text-sm font-medium text-warning-foreground">
+                      Unrecognised
+                    </p>
+                    <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                      {f.review}
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <p className="mt-0.5 text-sm font-medium text-foreground">{f.classified}</p>
+                    {f.quality && (
+                      <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                        {f.quality.evidence}
+                      </p>
+                    )}
+                  </>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      </DossierSection>
+
+      {/* WHAT THE BUNDLE TOLD US — the part that survives once the paperwork is
+          filed. Each row names its document; corroborated rows say so, because
+          one source and two agreeing sources are different claims. */}
+      <DossierSection label="Key findings" count={`${artifact.findings.length} fields`}>
+        <div className="overflow-hidden rounded-xl border border-border/70 bg-white/60">
+          {artifact.findings.map((f) => (
+            <div key={f.label} className="border-b border-border/40 px-3 py-2 last:border-0">
+              <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
+                <span className="text-xs text-muted-foreground">{f.label}</span>
+                {f.value === null ? (
+                  <span className="text-xs font-medium text-warning-foreground">Not on file</span>
+                ) : (
+                  <span className="flex items-center gap-1.5 text-sm font-medium text-foreground">
+                    {f.value}
+                    {f.corroborated && (
+                      <span
+                        title="Confirmed by more than one document"
+                        className="rounded bg-success/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-success"
+                      >
+                        2 sources
+                      </span>
+                    )}
+                  </span>
+                )}
+              </div>
+              <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">{f.source}</p>
+            </div>
+          ))}
+        </div>
+      </DossierSection>
+
+      {/* Counted off the sections above, so the summary cannot outlive them. */}
       <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground">
-        {artifact.rows.length} files received · {typed} typed
-        {flagged > 0
-          ? ` · ${flagged} needs your confirmation before the bundle is complete`
-          : " · nothing left to identify"}
+        {openItems === 0
+          ? "Nothing outstanding. The bundle is complete and the file can be scored."
+          : `${openItems} item${openItems === 1 ? "" : "s"} need${openItems === 1 ? "s" : ""} resolving before the file can be scored.`}
       </p>
     </Shell>
   )
@@ -1571,8 +1728,8 @@ export function ArtifactInspector(props: Props) {
       return <TariffView artifact={artifact} />
     case "records":
       return <RecordsView artifact={artifact} />
-    case "intake":
-      return <IntakeView artifact={artifact} />
+    case "dossier":
+      return <DossierView artifact={artifact} />
     case "checks":
       return <ChecksView artifact={artifact} />
     case "txns":

@@ -33,6 +33,22 @@ export const SCORE_THE_RISK_TASK: number =
     /score the risk/i.test(t.label),
   ) ?? -1
 
+export const CAPTURE_STEP = 1
+
+/**
+ * Index of capture's document pass — the task that assembles the bundle and is
+ * therefore the one that comes up short when the required set is incomplete.
+ *
+ * Derived from the label for the same reason as `SCORE_THE_RISK_TASK` above,
+ * and this step has just been reorganised once (five document tasks collapsed
+ * into one), which is exactly the edit a literal index would have survived
+ * while silently pointing at the registry lookup.
+ */
+export const DOCUMENT_PASS_TASK: number =
+  PIPELINE.find((s) => s.id === CAPTURE_STEP)?.tasks.findIndex((t) =>
+    /document bundle/i.test(t.label),
+  ) ?? -1
+
 function pastUnderwriting(merchant: Merchant): boolean {
   // Reads the RISK LANE, not the build position. `currentStep > 2` was sound
   // while the pipeline was a single file, but the lanes now run in parallel:

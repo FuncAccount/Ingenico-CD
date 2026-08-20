@@ -156,32 +156,24 @@ export const PIPELINE: PipelineStep[] = [
     ],
     integration:
       "The agent reads and writes your CRM through Ingenico's integration. The merchant record stays in your system — nothing is re-keyed into a second one.",
+    /* ONE task for the whole document pass.
+    
+       This was five — classify, extract, quality, checklist, reconcile — and the
+       split was wrong twice over. They are not five decisions but five internal
+       passes of a single act, none separately actionable: nobody chases a
+       merchant because "extraction" finished. Worse, it scattered the answer, so
+       "what is missing?" sat on a different panel from "what arrived?" and from
+       "what did we learn?" — three sides of one question, on three screens.
+    
+       The tasks that survive are the ones with genuinely different sources and
+       different failure modes: the register is independent of the applicant, the
+       website is an inference, the kit is a recommendation, the draft is a write. */
     tasks: [
       {
-        label: "Classify uploaded documents",
-        detail: "Sorts each uploaded file by type and flags anything unlabelled or misnamed.",
-        output: "doc.classify → 5 files sorted, 1 unrecognised",
-      },
-      {
-        label: "Extract the data",
-        detail: "Reads the fields out of each document so nothing is re-typed.",
-        output: "doc.extract → fields lifted, each tagged to its document",
-      },
-      {
-        label: "Check document quality",
-        detail: "Confirms each document is legible, in date and the correct type.",
-        output: "doc.qa → legibility + currency checked",
-      },
-      {
-        label: "Match the required checklist",
+        label: "Process the document bundle",
         detail:
-          "Checks what was received against the required set for this merchant type and calls out gaps.",
-        output: "doc.checklist → received vs required",
-      },
-      {
-        label: "Reconcile across sources",
-        detail: "Checks the documents agree with each other and with the application.",
-        output: "reconcile → cross-document field match",
+          "Classifies each file, reads the fields out of it, checks it is legible and in date, matches the required set, and reconciles the documents against each other.",
+        output: "doc.process → classified, extracted, checked, reconciled",
       },
       {
         label: "Enrich from public registries",

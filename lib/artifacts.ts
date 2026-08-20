@@ -22,7 +22,14 @@ import { exceptionOnStep } from "@/lib/exceptions"
 import { countryOf, distanceKm } from "@/lib/geo"
 // No cycle: `underwriting` only reaches back to `acquirer-data`.
 import { outstandingDocuments } from "@/lib/underwriting"
-import { recordedScore, riskAssessment, SCORE_THE_RISK_TASK, UNDERWRITING_STEP } from "@/lib/underwriting"
+import {
+  CAPTURE_STEP,
+  DOCUMENT_PASS_TASK,
+  recordedScore,
+  riskAssessment,
+  SCORE_THE_RISK_TASK,
+  UNDERWRITING_STEP,
+} from "@/lib/underwriting"
 
 /* ------------------------------------------------------------------ money */
 
@@ -527,13 +534,54 @@ export interface TableArtifact {
  * classification — it is no classification at all. Modelling it as a confidence
  * score would have let an unrecognised file render as a typed document with a
  * weak tag, which is the one row on this panel a human has to act on.
+ *
+ * The `confidence` field this type used to carry is GONE with that reasoning
+ * followed through: every classified row was "high", so the tag distinguished
+ * nothing while implying a scale the data never populated.
+ *
+ * Classification and quality are one row rather than two panels. They are two
+ * questions about the same piece of paper, and reading them apart is what let a
+ * legible, in-date, WRONG-TYPE document look fine on both screens.
  */
-export type IntakeRow = {
+export type DossierFile = {
   filename: string
 } & (
-  | { classified: string; confidence: "high" | "medium"; review?: never }
-  | { classified: null; confidence?: never; review: string }
+  | {
+      classified: string
+      /** Quality verdict, REQUIRED once the type is known: a document can be
+       *  cleanly classified and still be out of date, and that is precisely
+       *  the failure a separate quality panel used to let through. */
+      quality: { state: "pass" | "warn"; evidence: string }
+      review?: never
+    }
+  | {
+      classified: null
+      /** No quality verdict is possible before the type is known — judging
+       *  whether a document is "in date" means nothing until you know what
+       *  document it is, and a tick here would report a check that never ran. */
+      quality?: never
+      review: string
+    }
 )
+
+export type DossierRequirement = {
+  label: string
+  /** `received` names the file that satisfied it, so this list and the file
+   *  list above are provably the same set rather than two hand-kept ones. */
+  received: string | null
+}
+
+export type DossierFinding = {
+  label: string
+  value: string | null
+  /** Which document the value came out of, or which documents agreed. This is
+   *  what an underwriter re-checks first — it separates a figure the applicant
+   *  asserted from one their bank printed. */
+  source: string
+  /** True where the value was confirmed by more than one document. A single
+   *  source and a corroborated one are different claims about the same field. */
+  corroborated?: boolean
+}
 
 export type ExperimentVariant = {
   key: "A" | "B"
@@ -686,9 +734,42 @@ export type Artifact =
    *  kind from `records` (a field and its value) and `checks` (a test and its
    *  verdict): this answers "what did we receive, and does the agent know what
    *  it is" — a classification, which can legitimately come back empty. */
-  | { kind: "intake"; title: string; note: string; rows: IntakeRow[] }
+
   | { kind: "checks"; title: string; note: string; rows: CheckRow[] }
   | { kind: "txns"; title: string; note: string; rows: TxnRow[] }
+  /** The whole document pass on one page: what arrived, what is required and
+   *  still missing, what the agent learned, and the chase.
+   *
+   *  Replaces five separate panels (intake / extracted / quality / checklist /
+   *  reconciliation). Those were five views of one bundle, and splitting them
+   *  put "what is missing" on a different screen from "what arrived" — so the
+   *  reader had to assemble the file's actual status themselves. */
+  | {
+      kind: "dossier"
+      title: string
+      note: string
+      /** Every file received, with the type assigned and its quality verdict.
+       *  Classification and legibility are merged per row on purpose: they are
+       *  two questions about the same piece of paper, and a document can be
+       *  cleanly classified yet out of date. */
+      files: DossierFile[]
+      /** The required set. `received` rows name the file that satisfied them,
+       *  so the checklist and the file list cannot disagree. */
+      required: DossierRequirement[]
+      /** What the bundle actually TOLD us — the extracted fields and the
+       *  cross-document agreement, which is the part that survives once the
+       *  paperwork is filed. */
+      findings: DossierFinding[]
+      /** Present only when something is outstanding. Absent means there is
+       *  nothing to chase, which is why this is optional rather than a chase
+       *  block that renders disabled — a dead button on a complete file
+       *  invites the reader to look for a problem that is not there. */
+      chase?: {
+        items: string[]
+        channel: string
+        note: string
+      }
+    }
   | { kind: "table"; title: string; note: string; table: TableArtifact }
   /** A proposed A/B test. A decision surface, not a read-out: the agent
    *  proposes running one, and the acquirer either runs it or overrules it by
@@ -759,21 +840,28 @@ export function traceFor(
     /* Capture. Each line is derived from the same call its panel renders — a
        trace exists to let someone check a result, so one that disagrees with
        its own artefact is worse than none. */
-    case "1.3": {
+    /* The whole document pass in one line, matching the one panel it now
+       produces. Counts the files and the required set off the same call the
+       dossier renders. */
+    case "1.0": {
       const missing = outstandingDocuments(merchant)
-      return `doc.checklist → 4 of ${4 + missing.length} required received${
+      const art = artifactFor(1, 0, merchant)
+      const files = art?.kind === "dossier" ? art.files.length : 0
+      const unclassified =
+        art?.kind === "dossier" ? art.files.filter((f) => f.classified === null).length : 0
+      return `doc.process → ${files} files, ${unclassified} unrecognised, 4 of ${4 + missing.length} required received${
         missing.length ? `, outstanding: ${missing.join(", ")}` : ", none outstanding"
       }`
     }
-    case "1.5": {
+    case "1.1": {
       const reg = registryFor(merchant)
       return reg
         ? `registry.enrich → ${reg.name} ${reg.number} confirmed, directors matched, tax id ok`
         : `registry.enrich → no register on file for ${countryOf(merchant.location)}, nothing corroborated`
     }
-    case "1.6":
+    case "1.2":
       return `web.research → ${websiteFor(merchant)} read, sector=${merchant.sector} corroborated, 0 restricted categories`
-    case "1.7": {
+    case "1.3": {
       const { peers, home, crossBorderOnly } = bookPeersByDistance(
         merchant.location,
         merchant.sector,
@@ -830,14 +918,18 @@ export function traceFor(
      * carried two deliberate gaps — the trace was contradicting its own
      * artefact, and claiming completeness is the worst thing to be wrong
      * about on a form somebody is about to sign. */
-    case "1.3": {
-      const art = artifactFor(1, 3, merchant)
+    /* The drafted record. This was a SECOND `case "1.3"` in the same switch —
+       unreachable behind the checklist case above it — and `case "1.2"` fell
+       through to `order.build`, so capture's quality task printed an
+       order-build trace. Renumbering surfaced both: the draft is now 1.4 and
+       reachable, and 1.2 belongs to web research above. */
+    case "1.4": {
+      const art = artifactFor(1, 4, merchant)
       if (art?.kind !== "records") return null
       const filled = art.rows.filter((r) => r.value !== null).length
       const gaps = art.rows.length - filled
       return `application.draft → ${filled}/${art.rows.length} fields populated, ${gaps} awaiting downstream`
     }
-    case "1.2":
     case "3.0":
       return `order.build → ${active.map((l) => `${l.qty}× ${l.name}`).join(", ")}`
     case "3.1": {
@@ -1184,6 +1276,28 @@ export function blockingFinding(
       }
     }
   }
+  /* Capture stops on the SAME documents, and until now only underwriting said
+   * so — capture's header read "Complete · 5/5 tasks" directly above its own
+   * dossier saying the file could not be scored. The step where the bundle is
+   * assembled is the first place the gap is visible and the only one with the
+   * chase on it, so it has to report the block rather than let a downstream
+   * step carry the news.
+   *
+   * `taskIndex` points at the document pass: that is the task that ran and came
+   * up short, and a green tick on it would make the stronger claim. Same
+   * `outstandingDocuments` call as the dossier and the chase, so the badge, the
+   * panel and the request cannot disagree about what is missing. */
+  if (stepId === CAPTURE_STEP) {
+    const missing = outstandingDocuments(merchant)
+    if (missing.length > 0) {
+      return {
+        headline: `Bundle incomplete — ${missing.length} document${missing.length === 1 ? "" : "s"} outstanding`,
+        detail:
+          "The agent classified, read and reconciled everything supplied, then stopped: the required set is short. The rest of capture ran on what is here, and the file cannot be scored until the remainder lands.",
+        taskIndex: DOCUMENT_PASS_TASK,
+      }
+    }
+  }
   // Task indices are small and contiguous; 8 covers the longest step.
   for (let t = 0; t < 8; t++) {
     const a = artifactFor(stepId, t, merchant)
@@ -1218,148 +1332,142 @@ export function artifactFor(
      * is enriched. Everything below is DERIVED from the merchant — filenames are
      * the one exception, since a merchant's own file naming is arbitrary by
      * nature and that is exactly why task 1 has to classify it. */
-    case "1.0":
-      return {
-        kind: "intake",
-        title: "Document intake",
-        note: "Every file the merchant sent, and the type the agent assigned it. Nothing here is taken on the filename.",
-        rows: [
-          { filename: "incorporation_cert.pdf", classified: "Incorporation certificate", confidence: "high" },
-          { filename: "utility_mar.pdf", classified: "Proof of address", confidence: "high" },
-          { filename: "passport_scan.jpg", classified: "Director ID", confidence: "high" },
-          { filename: "statement.pdf", classified: "Bank statement", confidence: "high" },
-          {
-            filename: "img_4471.jpg",
-            classified: null,
-            review: "No document type matched. Confirm what this is, or ask the merchant to re-send it.",
-          },
-        ],
-      }
-    /* Every field is tagged to the DOCUMENT it came out of, not just to
-     * "the merchant". Which paper a value was lifted from is what an
-     * underwriter re-checks first, and it is the difference between a figure
-     * the applicant asserted and one their bank printed. */
-    case "1.1": {
+    /* THE DOCUMENT DOSSIER — one panel for the whole bundle.
+     *
+     * Was five artefacts across five tasks. The failure was not that each was
+     * wrong, it was that the file's actual status existed nowhere: the missing
+     * documents were on one panel, the files received on another, the fields
+     * learned on a third. An acquirer opening this step wants one answer —
+     * where does this application stand, and what do I do next — and had to
+     * build it from three screens.
+     *
+     * Everything here derives from the merchant, so the four sections cannot
+     * contradict each other or the chase. */
+    case "1.0": {
       const reg = registryFor(merchant)
-      return {
-        kind: "records",
-        title: "Extracted fields",
-        note: "Read out of the documents by the agent. Nothing on this list was typed by you or by the merchant into a form.",
-        rows: [
-          { label: "Legal name", value: merchant.name, source: "from incorporation certificate" },
-          {
-            /* Read here, CONFIRMED at task 6. The two are different claims about
-               the same value, and this panel must only make the first one — a
-               number lifted off the applicant's own certificate is not yet
-               corroborated, and saying "confirmed" three tasks early would credit
-               the registry check before it ran. */
-            label: "Company number",
-            value: reg?.number ?? null,
-            source: reg
-              ? "from incorporation certificate, not yet corroborated"
-              : "the certificate carries one, but this country has no register rule on file",
-            ...(reg
-              ? {}
-              : {
-                  resolution: {
-                    owner: "Acquirer",
-                    when: "key it in before sign-off",
-                    blocking: false,
-                  },
-                }),
-          },
-          { label: "Registered address", value: merchant.location, source: "from proof of address" },
-          { label: "Settlement account", value: maskedAccountFor(merchant), source: "from bank statement" },
-          { label: "Directors", value: "2 named", source: "from incorporation certificate" },
-        ],
-      }
-    }
-    /* Quality is a SEPARATE pass from extraction: a field can be read cleanly
-     * off a document that is out of date, and a proof of address six months old
-     * is a compliance failure whatever the agent managed to lift from it. */
-    case "1.2":
-      return {
-        kind: "checks",
-        title: "Document quality",
-        note: "Legibility, currency and type, per document. Each row names what was actually checked.",
-        rows: [
-          {
-            label: "Incorporation certificate",
+      const missing = outstandingDocuments(merchant)
+
+      /* The bundle as received. Quality is merged INTO the row rather than
+         living on a separate panel: "which document is this" and "is it any
+         good" are two questions about the same piece of paper, and reading
+         them apart is what let a legible, in-date, wrong-type document look
+         fine on both screens. */
+      const files: DossierFile[] = [
+        {
+          filename: "incorporation_cert.pdf",
+          classified: "Incorporation certificate",
+          quality: {
             state: "pass",
             evidence: "Legible, in date, matches the expected certificate layout",
           },
-          {
-            label: "Proof of address",
-            state: "pass",
-            evidence: "Legible, dated within the last 3 months",
-          },
-          { label: "Director ID", state: "pass", evidence: "Legible, in date, photo page captured" },
-          {
-            label: "Bank statement",
+        },
+        {
+          filename: "utility_mar.pdf",
+          classified: "Proof of address",
+          quality: { state: "pass", evidence: "Legible, dated within the last 3 months" },
+        },
+        {
+          filename: "passport_scan.jpg",
+          classified: "Director ID",
+          quality: { state: "pass", evidence: "Legible, in date, photo page captured" },
+        },
+        {
+          filename: "statement.pdf",
+          classified: "Bank statement",
+          quality: {
             state: "pass",
             evidence: "Legible, dated within the last 3 months, account holder matches the legal name",
           },
-        ],
-      }
-    /* The checklist is DERIVED from the merchant's own outstanding-document
-     * list, never typed. A hand-written "second owner ID outstanding" would go
-     * on asserting itself for merchants whose file is missing something else
-     * entirely — and this is the panel underwriting reads to know whether the
-     * chase has anything left in it. */
-    case "1.3": {
-      const missing = outstandingDocuments(merchant)
-      const required = [
-        "Incorporation certificate",
-        "Proof of address",
-        "Director / beneficial-owner ID",
-        "Bank statement",
+        },
+        {
+          // No quality verdict on purpose: until the type is known there is
+          // nothing to check it against, and a tick here would report a check
+          // that never ran.
+          filename: "img_4471.jpg",
+          classified: null,
+          review: "No document type matched. Confirm what this is, or ask the merchant to re-send it.",
+        },
       ]
+
+      /* Required vs received, derived from the merchant's own outstanding list.
+         A hand-written "second owner ID outstanding" would go on asserting
+         itself for merchants whose file is short of something else entirely. */
+      const required: DossierRequirement[] = [
+        { label: "Incorporation certificate", received: "incorporation_cert.pdf" },
+        { label: "Proof of address", received: "utility_mar.pdf" },
+        { label: "Director / beneficial-owner ID", received: "passport_scan.jpg" },
+        { label: "Bank statement", received: "statement.pdf" },
+        ...missing.map<DossierRequirement>((label) => ({ label, received: null })),
+      ]
+
+      /* What the bundle TOLD us. Extraction and reconciliation merged: a field
+         read off one document and the same field agreeing across two are the
+         same claim at different strengths, so `corroborated` carries that
+         rather than a second panel repeating the list. */
+      const findings: DossierFinding[] = [
+        {
+          label: "Legal name",
+          value: merchant.name,
+          source: "Incorporation certificate, matched on the bank statement",
+          corroborated: true,
+        },
+        {
+          label: "Company number",
+          value: reg?.number ?? null,
+          // Read here, CONFIRMED against the register at the next task. Saying
+          // "confirmed" now would credit a check that has not run.
+          source: reg
+            ? "Incorporation certificate — not yet corroborated independently"
+            : "The certificate carries one, but this country has no register rule on file",
+        },
+        {
+          label: "Registered address",
+          value: merchant.location,
+          source: "Proof of address, matched on the certificate",
+          corroborated: true,
+        },
+        {
+          label: "Settlement account",
+          value: maskedAccountFor(merchant),
+          source: "Bank statement",
+        },
+        { label: "Directors", value: "2 named", source: "Incorporation certificate" },
+        {
+          label: "Trading name",
+          value: "Matches the registered entity",
+          source: "Website footer vs incorporation certificate",
+          corroborated: true,
+        },
+      ]
+
       return {
-        kind: "checks",
-        title: "Required documents",
+        kind: "dossier",
+        title: "Document dossier",
         note:
           missing.length > 0
-            ? `The required set for this merchant type. ${missing.length} still outstanding — requested from the merchant.`
-            : "The required set for this merchant type. Everything needed to open the file is here.",
-        rows: [
-          ...required.map<CheckRow>((label) => ({ label, state: "pass", evidence: "Received" })),
-          ...missing.map<CheckRow>((label) => ({
-            label,
-            state: "warn",
-            evidence: "Outstanding — requested from the merchant",
-          })),
-        ],
+            ? `${files.length} files received. ${missing.length} required ${missing.length === 1 ? "document is" : "documents are"} still outstanding — the file cannot be scored until they arrive.`
+            : `${files.length} files received. Everything required to open the file is here.`,
+        files,
+        required,
+        findings,
+        // Absent when nothing is outstanding, rather than a disabled block. A
+        // dead chase button on a complete file invites the reader to hunt for a
+        // problem that is not there.
+        ...(missing.length > 0
+          ? {
+              chase: {
+                items: missing,
+                channel: "merchant portal",
+                note: "Sends one request for everything outstanding. One message, not one per document — a merchant who gets three emails about one pile of paperwork answers none of them.",
+              },
+            }
+          : {}),
       }
     }
-    /* Reconciliation is what makes the bundle worth more than its parts: any one
-     * document can be internally perfect and still disagree with the next one. */
-    case "1.4":
-      return {
-        kind: "checks",
-        title: "Cross-source consistency",
-        note: "The documents checked against each other and against the application, field by field.",
-        rows: [
-          {
-            label: "Legal name",
-            state: "pass",
-            evidence: `"${merchant.name}" matches across the certificate and the bank statement`,
-          },
-          {
-            label: "Registered address",
-            state: "pass",
-            evidence: `${merchant.location} matches on the certificate and the proof of address`,
-          },
-          {
-            label: "Trading name",
-            state: "pass",
-            evidence: "The name used on the website matches the registered entity",
-          },
-        ],
-      }
     /* Registry enrichment is the first INDEPENDENT source on this step —
      * everything before it came from the applicant. Saying which register
      * confirmed it is the whole value; "confirmed" on its own is unre-runnable. */
-    case "1.5": {
+    case "1.1": {
       const reg = registryFor(merchant)
       if (!reg) {
         return {
@@ -1402,7 +1510,7 @@ export function artifactFor(
      * kept as its own panel, and its note says so, because an inference filed
      * alongside extracted and registry-confirmed fields would inherit their
      * standing — and this one is a reading of a website, not a record. */
-    case "1.6":
+    case "1.2":
       return {
         kind: "records",
         title: "Web research",
@@ -1458,7 +1566,7 @@ export function artifactFor(
      * `LIVE_BOOK`, the acquirer's live estate, which is both deep enough to
      * answer locally and the population actually being described: merchants
      * running this kit TODAY, which an unapproved application is not. */
-    case "1.7": {
+    case "1.3": {
       const { home, local, peers, crossBorderOnly } = bookPeersByDistance(
         merchant.location,
         merchant.sector,
@@ -1504,7 +1612,7 @@ export function artifactFor(
      * registration against the register (task 6), so leaving those rows empty
      * would have this panel reporting fields missing that three tasks above it
      * on the same step had just filled. */
-    case "1.8": {
+    case "1.4": {
       const vat = vatFor(merchant)
       const reg = registryFor(merchant)
       return {
