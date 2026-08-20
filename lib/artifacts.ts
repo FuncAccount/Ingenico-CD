@@ -895,7 +895,21 @@ export type Artifact =
       cohortGap: string
       illustrative: string
     }
-  | { kind: "document"; title: string; note: string; filename: string; lines: string[] }
+  | {
+      kind: "document"
+      title: string
+      note: string
+      filename: string
+      lines: string[]
+      /**
+       * Present when the document is an outbound communication rather than a
+       * file to keep. A notice that goes to the merchant is a statement made
+       * under the acquirer's name, so the body is editable and the send is
+       * theirs — the same rule as the drafted application, applied to prose
+       * instead of fields.
+       */
+      handoff?: ArtifactHandoff
+    }
   // The three below are decision surfaces rather than read-outs: the acquirer
   // changes something here, and the change is what the sign-off then rests on.
   | { kind: "risk"; title: string; note: string }
@@ -2652,8 +2666,18 @@ export function artifactFor(
       return {
         kind: "document",
         title: "Go-live notice",
-        note: "Sent to you and to the merchant. The same text to both, so neither is told something the other is not.",
+        // Was "Sent to you and to the merchant" — past tense, on a draft that
+        // nobody had sent. This is the one artefact that leaves the company
+        // entirely, so it was also the worst place to assume the send.
+        note: "Drafted for you and the merchant — the same text to both, so neither is told something the other is not. Nothing has gone out yet.",
         filename: `go-live-${merchant.id.replace("m-", "")}.pdf`,
+        handoff: {
+          system: "the merchant",
+          action: "Send the notice",
+          commits:
+            "This goes to the merchant and to you, over your name. It is the message that tells them they can take payment.",
+          delivers: "The text above, as written, to the merchant's registered contact and your own inbox.",
+        },
         lines: [
           `${merchant.name} is live.`,
           ``,
@@ -2663,7 +2687,12 @@ export function artifactFor(
           `Settlement    Daily, 23:00 local — first settlement one working day`,
           `              after the first live payment.`,
           ``,
-          `The onboarding record has been written back to your CRM. Fleet`,
+          // Was "The onboarding record has been written back to your CRM."
+          // That write is now a button on the Write-back artefact, so this
+          // line could go out to a merchant asserting a CRM entry that nobody
+          // had made. A notice must not vouch for a step taken on a different
+          // screen — it names where the record sits, not that it arrived.
+          `Your onboarding record closes against ${ACQUIRER.name}. Fleet`,
           `monitoring passes to Ingenico operations from this point; the`,
           `merchant relationship does not.`,
         ],

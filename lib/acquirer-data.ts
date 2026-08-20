@@ -84,8 +84,21 @@ export interface PipelineStep {
   name: string
   lane: Lane
   band: Band
-  // Does the acquirer have a hands-on role at this step?
-  acquirerRole: "owns" | "signs-off" | "approves" | "watch"
+  /**
+   * Does the acquirer have a hands-on role at this step?
+   *
+   * `releases` is deliberately NOT `signs-off`. A sign-off is a judgement on
+   * the substance — the acquirer reads the analysis and takes the regulated
+   * decision — and it gates the sign-off queue. A release is narrower: the
+   * work is settled and the only question left is whether it leaves for
+   * another system. Folding the two together would have put Go-live into the
+   * decision queue as though a determination were outstanding, when what is
+   * actually outstanding is a dispatch.
+   *
+   * It is not `watch` either, which is what it used to be — `watch` means the
+   * step completes without the acquirer, and Go-live no longer does.
+   */
+  acquirerRole: "owns" | "signs-off" | "approves" | "releases" | "watch"
   blurb: string
   // What the agent is doing, in one line, for the cockpit header.
   agentMission: string
@@ -593,9 +606,12 @@ export const PIPELINE: PipelineStep[] = [
     name: "Go-live",
     lane: "spine",
     band: "Automate",
-    acquirerRole: "watch",
-    blurb: "Agent detects the first live payment and writes records back to the acquirer.",
-    agentMission: "Confirm the merchant is live and reconcile everything back to your systems.",
+    // Was "watch". The step now ends on two acquirer-released commits — the
+    // CRM write and the merchant notice — so it does not complete unattended,
+    // which is precisely what `watch` asserts.
+    acquirerRole: "releases",
+    blurb: "Agent detects the first live payment and prepares the closing record and notice for your release.",
+    agentMission: "Confirm the merchant is live, reconcile to your systems, and put the closing record and notice in front of you.",
     tools: [
       ingenicoTool("Transaction stream"),
       acquirerTool("Acquirer ledger"),
@@ -616,16 +632,25 @@ export const PIPELINE: PipelineStep[] = [
       },
       {
         label: "Write back",
-        detail: "Pushes the completed onboarding record into your systems.",
-        output: "records.writeback → onboarding record synced",
+        // "Pushes … into your systems" / "synced" described a write no control
+        // performed. The agent assembles the closing record; releasing it into
+        // the system of record is the acquirer's act, on the artefact.
+        detail: "Assembles the closing record for your CRM and holds it for you to release.",
+        output: "records.writeback → closing record assembled, held for your release",
       },
       {
         label: "Close the loop",
-        detail: "Notifies you and the merchant that the account is fully live.",
-        output: "notify.golive → acquirer + merchant notified",
+        // The same defect, in its worst instance: this notice leaves the
+        // company. "notified" claimed the merchant had already been told.
+        detail: "Drafts the go-live notice to you and the merchant, for you to send.",
+        output: "notify.golive → notice drafted, awaiting your send",
       },
     ],
-    handback: "Fully automated. The merchant is live and everything is reconciled to you.",
+    // Was "Fully automated." — on the one step that both writes to the system
+    // of record and messages the customer, which made it the least true and
+    // most consequential claim in the pipeline.
+    handback:
+      "Automated up to the two commits: the CRM write and the merchant notice are yours to release.",
   },
 ]
 

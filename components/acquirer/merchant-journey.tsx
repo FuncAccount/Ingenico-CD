@@ -53,6 +53,7 @@ import { StepGate } from "@/components/acquirer/step-gate"
 import { ownerOf, waitingOn, type HandoffState } from "@/lib/handoffs"
 import { blockers, checkBrand, defaultTheme, type BrandTheme } from "@/lib/branding"
 import { defaultAcceptance, type AcceptanceState } from "@/lib/scheme-acceptance"
+import { pendingReleases, type Releases } from "@/lib/releases"
 import { edgeResolved, outstandingDocuments, type EdgeResolution } from "@/lib/underwriting"
 import { useLiveMerchant } from "@/components/acquirer/demo-provider"
 import { exceptionDetailMissing, exceptionOnStep } from "@/lib/exceptions"
@@ -608,6 +609,11 @@ function StepCockpit({
     defaultAcceptance(merchant),
   )
 
+  // What the acquirer has actually released. Lifted for a third reason on top
+  // of survival: the step badge has to read it, or it reports "Complete" over
+  // a dispatch nobody has sent.
+  const [releases, setReleases] = useState<Releases>({})
+
   // The order draft is shared by the basket, stock, delivery and pricing
   // artefacts, so changing a quantity moves every downstream figure.
   const [draft, setDraft] = useState<OrderDraft>(() => ({
@@ -823,6 +829,19 @@ function StepCockpit({
     return n
   }, [step.id, merchant, step.tasks.length])
 
+  // Commits this step has PREPARED that the acquirer has not released yet.
+  //
+  // Third instance of one defect, now in its most consequential form: the
+  // badge said "Complete · 4/4 tasks" over a CRM write and a merchant notice
+  // that were both still sitting there unsent. The agent finishing its work
+  // and the work having left are different claims, and on the step that closes
+  // the file the difference is a customer either being told they are live or
+  // not. Counted off the artefacts, like the two above it.
+  const heldReleases = useMemo(
+    () => pendingReleases(step.id, merchant, completed, releases),
+    [step.id, merchant, completed, releases],
+  )
+
   // What stops the acquirer's own decision on THIS step. Different steps are
   // blocked by different things, so this is computed per step rather than by
   // one shared "is everything fine" flag that could not name its own blocker.
@@ -959,7 +978,13 @@ function StepCockpit({
                           // green would assert a result nobody has returned.
                           outstandingChecks > 0
                           ? "bg-muted-foreground/60"
-                          : "bg-success"
+                          : // A held release is not an alarm either — nothing
+                            // has gone wrong, the acquirer simply has not
+                            // pressed it yet — but green would claim the step
+                            // had finished, which is the thing it has not done.
+                            heldReleases > 0
+                            ? "bg-primary"
+                            : "bg-success"
                     : blocker
                       ? "bg-destructive"
                       : "bg-muted-foreground/60",
@@ -983,7 +1008,12 @@ function StepCockpit({
                         // stuck, and that is a third thing.
                         outstandingChecks > 0
                         ? `${outstandingChecks} awaiting`
-                        : "Complete"
+                        : // Named as YOURS, not as a bare count: an
+                          // outstanding check is waiting on someone else,
+                          // whereas this is waiting on the reader.
+                          heldReleases > 0
+                          ? `${heldReleases} to release`
+                          : "Complete"
                 : // "Ready" on a blocked step is a false all-clear: this is the
                   // one step that cannot be run to completion.
                   blocker
@@ -1203,6 +1233,11 @@ function StepCockpit({
               {Math.max(0, Math.min(completed, step.tasks.length) - haltedCount)}/
               {step.tasks.length} tasks
               {haltedCount > 0 && " · 1 halted"}
+              {/* Appended rather than deducted from the count: unlike a halted
+                  task, a task awaiting release DID run and did produce its
+                  artefact. Shrinking the numerator would deny the agent work
+                  it actually did; the outstanding thing is the dispatch. */}
+              {heldReleases > 0 && ` · ${heldReleases} to release`}
             </>
           )}
         </span>
@@ -1358,6 +1393,10 @@ function StepCockpit({
               onEdge={setEdge}
               acceptance={acceptance}
               onAcceptance={setAcceptance}
+              stepId={step.id}
+              taskIndex={selected}
+              releases={releases}
+              onReleases={setReleases}
             />
         </div>
       </div>

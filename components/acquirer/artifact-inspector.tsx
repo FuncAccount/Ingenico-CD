@@ -24,7 +24,8 @@ import { SchemeDesk } from "@/components/acquirer/scheme-desk"
 import type { AcceptanceState } from "@/lib/scheme-acceptance"
 import type { BrandTheme } from "@/lib/branding"
 import type { EdgeResolution } from "@/lib/underwriting"
-import type { Merchant } from "@/lib/acquirer-data"
+import type { Merchant, StepId } from "@/lib/acquirer-data"
+import { releaseKey, type ReleaseRecord, type Releases } from "@/lib/releases"
 import { formatRate, projectSignUp, type Projection } from "@/lib/tariff-model"
 import { fmtDateTime } from "@/lib/handoffs"
 import {
@@ -92,6 +93,21 @@ interface Props {
    *  outlives the panel and has to survive stepping away and back. */
   acceptance: AcceptanceState
   onAcceptance: (s: AcceptanceState) => void
+  /** Which artefact this is, so a release can be recorded against it. The
+   *  record is held by the journey, not the footer: the step badge reads it,
+   *  and it has to survive stepping away from the panel. */
+  stepId: StepId
+  taskIndex: number
+  releases: Releases
+  onReleases: React.Dispatch<React.SetStateAction<Releases>>
+}
+
+/** The release record plus the slot this artefact occupies in it. Bundled so a
+ *  view that merely forwards it to the footer takes one prop, not three. */
+interface ReleaseSlot {
+  slot: string
+  releases: Releases
+  onReleases: React.Dispatch<React.SetStateAction<Releases>>
 }
 
 /* ------------------------------------------------------------ small parts */
@@ -664,7 +680,13 @@ function PricingView({ draft, note, title }: Props & { note: string; title: stri
 
 /* ------------------------------------------------------- generic artefacts */
 
-function RecordsView({ artifact }: { artifact: Extract<Artifact, { kind: "records" }> }) {
+function RecordsView({
+  artifact,
+  release,
+}: {
+  artifact: Extract<Artifact, { kind: "records" }>
+  release: ReleaseSlot
+}) {
   // Where an edit is the acquirer's to make, the control must say WHERE the
   // change lands. A bare "Edit" on a panel that cannot write would be a
   // control that does nothing — worse than no control, because the reader
@@ -828,6 +850,9 @@ function RecordsView({ artifact }: { artifact: Extract<Artifact, { kind: "record
         <HandoffFooter
           handoff={artifact.handoff}
           readiness={readiness}
+          slot={release.slot}
+          releases={release.releases}
+          onReleases={release.onReleases}
           // Re-keyed on the merchant's own record so a push receipt cannot
           // follow the reader onto the next merchant's identical panel.
           signature={JSON.stringify(artifact.rows.map((r) => edits[r.label] ?? r.value))}
@@ -855,14 +880,24 @@ function HandoffFooter({
   handoff,
   readiness,
   signature,
+  slot,
+  releases,
+  onReleases,
 }: {
   handoff: ArtifactHandoff
   readiness: PushReadiness
   /** The content that was sent. Compared against the live rows to notice an
    *  edit made after the push. */
   signature: string
+  /** Where to record the release. Held by the journey rather than here: local
+   *  state died on every task switch, so a commit already released came back
+   *  looking unreleased, and the step badge could not see it at all. */
+  slot: string
+  releases: Releases
+  onReleases: React.Dispatch<React.SetStateAction<Releases>>
 }) {
-  const [sent, setSent] = useState<{ atIso: string; signature: string; edited: number; gaps: number } | null>(null)
+  const sent: ReleaseRecord | null = releases[slot] ?? null
+  const setSent = (rec: ReleaseRecord) => onReleases((r) => ({ ...r, [slot]: rec }))
   const blocked = readiness.blockers.length > 0
   const stale = sent !== null && sent.signature !== signature
 
@@ -898,9 +933,13 @@ function HandoffFooter({
         // would believe the destination holds the value in front of them.
         <p className="mb-2 flex items-start gap-1.5 rounded-lg bg-warning/15 px-2 py-1.5 text-[11px] leading-relaxed text-warning-foreground">
           <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" />
+          {/* Reworded so the system name is never sentence-initial: `system`
+              is sometimes a proper noun ("Northgate Acquiring CRM") and
+              sometimes a noun phrase ("the merchant"), and starting a sentence
+              with it produced "Edited after sending. the merchant still…". */}
           <span>
-            Edited after sending. {handoff.system} still holds the version sent at{" "}
-            {fmtDateTime(sent!.atIso)} — send again to bring it up to date.
+            Edited after sending — {handoff.system} still holds the version sent at{" "}
+            {fmtDateTime(sent!.atIso)}. Send again to bring it up to date.
           </span>
         </p>
       )}
@@ -1873,18 +1912,75 @@ function TableView({ artifact }: { artifact: Extract<Artifact, { kind: "table" }
   )
 }
 
-function DocumentView({ artifact }: { artifact: Extract<Artifact, { kind: "document" }> }) {
+function DocumentView({
+  artifact,
+  release,
+}: {
+  artifact: Extract<Artifact, { kind: "document" }>
+  release: ReleaseSlot
+}) {
+  const drafted = artifact.lines.join("\n")
+  // Only a document that GOES somewhere is editable. A certificate or a
+  // retained file is a record of what happened, and letting someone retype it
+  // would turn evidence into a notepad.
+  const sendable = artifact.handoff !== undefined
+  const [body, setBody] = useState<string | null>(null)
+  const current = body ?? drafted
+  const isChanged = current.trim() !== drafted.trim()
+  const readiness: PushReadiness = {
+    edited: isChanged ? ["Notice text"] : [],
+    gaps: [],
+    // An empty notice is not a short notice. Sending one would tell the
+    // merchant nothing while recording that they had been told.
+    blockers: current.trim() === "" ? ["The notice is empty — write it, or restore the draft"] : [],
+  }
+
   return (
-    <Shell title={artifact.title} note={artifact.note}>
+    <Shell title={artifact.title} note={artifact.note} editable={sendable}>
       <div className="overflow-hidden rounded-xl border border-border/70 bg-white/60">
-        <div className="flex items-center gap-2 border-b border-border/60 px-3 py-2">
-          <FileText className="h-3.5 w-3.5 text-primary" />
-          <span className="font-mono text-[11px] text-muted-foreground">{artifact.filename}</span>
+        <div className="flex items-center justify-between gap-2 border-b border-border/60 px-3 py-2">
+          <span className="flex min-w-0 items-center gap-2">
+            <FileText className="h-3.5 w-3.5 shrink-0 text-primary" />
+            <span className="truncate font-mono text-[11px] text-muted-foreground">
+              {artifact.filename}
+            </span>
+          </span>
+          {isChanged && (
+            <button
+              type="button"
+              onClick={() => setBody(null)}
+              className="shrink-0 text-[11px] font-medium text-primary underline-offset-2 hover:underline"
+            >
+              Restore the agent&apos;s draft
+            </button>
+          )}
         </div>
-        <pre className="whitespace-pre-wrap px-3 py-3 font-mono text-[11px] leading-relaxed text-foreground">
-          {artifact.lines.join("\n")}
-        </pre>
+        {sendable ? (
+          <textarea
+            value={current}
+            onChange={(e) => setBody(e.target.value)}
+            spellCheck={false}
+            rows={Math.max(10, current.split("\n").length + 1)}
+            aria-label={`${artifact.title} text`}
+            className="w-full resize-y bg-transparent px-3 py-3 font-mono text-[11px] leading-relaxed text-foreground outline-none focus:bg-white"
+          />
+        ) : (
+          <pre className="whitespace-pre-wrap px-3 py-3 font-mono text-[11px] leading-relaxed text-foreground">
+            {drafted}
+          </pre>
+        )}
       </div>
+
+      {artifact.handoff && (
+        <HandoffFooter
+          handoff={artifact.handoff}
+          readiness={readiness}
+          signature={current}
+          slot={release.slot}
+          releases={release.releases}
+          onReleases={release.onReleases}
+        />
+      )}
     </Shell>
   )
 }
@@ -1915,6 +2011,12 @@ export function ArtifactInspector(props: Props) {
     )
   }
 
+  const release: ReleaseSlot = {
+    slot: releaseKey(props.stepId, props.taskIndex),
+    releases: props.releases,
+    onReleases: props.onReleases,
+  }
+
   switch (artifact.kind) {
     case "basket":
       return <BasketView {...props} title={artifact.title} note={artifact.note} />
@@ -1929,7 +2031,7 @@ export function ArtifactInspector(props: Props) {
     case "tariff":
       return <TariffView artifact={artifact} />
     case "records":
-      return <RecordsView artifact={artifact} />
+      return <RecordsView artifact={artifact} release={release} />
     case "dossier":
       return <DossierView artifact={artifact} />
     case "checks":
@@ -1941,7 +2043,7 @@ export function ArtifactInspector(props: Props) {
     case "experiment":
       return <ExperimentView artifact={artifact} />
     case "document":
-      return <DocumentView artifact={artifact} />
+      return <DocumentView artifact={artifact} release={release} />
     case "acceptance":
       return (
         <Shell title={artifact.title} note={artifact.note}>
