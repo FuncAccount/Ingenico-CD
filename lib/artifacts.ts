@@ -20,7 +20,7 @@ import { MODELS, configProfile, orderLines, type ModelId } from "@/lib/devices"
 import { defaultAcceptance, liveSchemeLabel } from "@/lib/scheme-acceptance"
 import { exceptionOnStep } from "@/lib/exceptions"
 import { countryOf, distanceKm } from "@/lib/geo"
-import { riskAssessment, SCORE_THE_RISK_TASK, UNDERWRITING_STEP } from "@/lib/underwriting"
+import { recordedScore, riskAssessment, SCORE_THE_RISK_TASK, UNDERWRITING_STEP } from "@/lib/underwriting"
 
 /* ------------------------------------------------------------------ money */
 
@@ -482,9 +482,23 @@ export interface TxnRow {
 
 export interface CheckRow {
   label: string
-  state: "pass" | "warn" | "fail"
-  /** What was actually compared — a green tick with no comparison is decoration. */
+  /** `running` is a FOURTH state, not a styling of pass. A check still out with
+   *  a provider has no result, and rendering it as a tick would report a
+   *  verdict nobody has returned — the whole point of the KYC panel is that the
+   *  file progresses while individual checks are still open. */
+  state: "pass" | "warn" | "fail" | "running"
+  /** What was actually compared — a green tick with no comparison is
+   *  decoration. For a `running` row, what is outstanding and with whom. */
   evidence: string
+}
+
+/** One line of a commercial tariff. */
+export interface TariffRow {
+  label: string
+  value: string
+  /** Why the agent landed on it. A rate with no rationale cannot be argued
+   *  with, and this is a number the acquirer is expected to overrule. */
+  basis: string
 }
 
 export interface TableArtifact {
@@ -504,6 +518,25 @@ export type Artifact =
    *  reappearing on a consignment already in transit. */
   | { kind: "consignment"; title: string; note: string }
   | { kind: "pricing"; title: string; note: string }
+  /** The MERCHANT's commercial tariff — what they pay to accept payments.
+   *
+   *  Deliberately NOT the `pricing` kind above, which is the price of the
+   *  terminal ORDER. Two different bills to two different payers; sharing a
+   *  kind would have put the hardware invoice and the merchant's rate card
+   *  behind the same renderer and invited exactly that confusion.
+   *
+   *  `illustrative` is required, not optional: every figure here is modelled,
+   *  and a projection that forgets to say so is read as a quote. */
+  | {
+      kind: "tariff"
+      title: string
+      note: string
+      rows: TariffRow[]
+      /** The modelled consequence of the bundle, stated as a RANGE — a single
+       *  conversion number would imply a precision the model does not have. */
+      projection: { label: string; range: string; basis: string }
+      illustrative: string
+    }
   | {
       kind: "records"
       title: string
@@ -1081,34 +1114,117 @@ export function artifactFor(
       }
     }
 
-    /* 02 Underwrite */
-    case "2.0":
+    /* R1 KYC (id 10) — compliance. Split out of Underwrite, and these two
+       screening artefacts came with it: they were always answering "is this
+       entity legitimate", never "can we carry the exposure". */
+    case "10.0":
       return {
         kind: "checks",
-        title: "Identity and screening",
+        title: "Entity verification",
         note: "Each check names what it compared, so a pass can be re-run rather than taken on trust.",
         rows: [
           { label: "Registry match", state: uw?.identity ? "pass" : "warn", evidence: uw?.identity ?? "No registry response on file" },
-          { label: "Sanctions / PEP", state: "pass", evidence: "Screened against EU + OFAC consolidated lists" },
+          { label: "Directors", state: "pass", evidence: "All listed directors matched to the filing" },
           { label: "Beneficial ownership", state: uw?.edgeCase ? "warn" : "pass", evidence: uw?.edgeCase ?? "All owners above 25% identified" },
         ],
       }
-    case "2.1":
+    case "10.1":
       return {
         kind: "checks",
-        title: "Principal screening",
+        title: "Sanctions and PEP screening",
         note: "Run against every beneficial owner above 25%, not just the applicant.",
         rows: [
           { label: "Sanctions", state: "pass", evidence: "EU, OFAC and UK HMT consolidated lists — no match" },
           { label: "PEP", state: "pass", evidence: "No politically exposed person among the named owners" },
+        ],
+      }
+    case "10.2":
+      return {
+        kind: "checks",
+        title: "Identity verification",
+        note: "Document-to-person matching for each named owner.",
+        rows: [
+          { label: "Photo ID", state: "pass", evidence: "2 of 2 owners matched to a valid document" },
+          { label: "Address", state: "pass", evidence: "Residential address confirmed against the credit file" },
           {
-            label: "Adverse media",
+            label: "Liveness",
+            // The one row left OPEN, and the reason this panel exists: the
+            // build lane is still moving behind it. A tick here would make the
+            // parallel design invisible by showing a lane with nothing left
+            // running.
+            state: "running",
+            evidence: "Second owner's selfie check is with the provider — typically clears within the hour",
+          },
+        ],
+      }
+    case "10.3":
+      return {
+        kind: "checks",
+        title: "Adverse media",
+        note: "Five-year window. Only material findings are escalated — volume is not evidence.",
+        rows: [
+          {
+            label: "Media scan",
             state: uw?.edgeCase ? "warn" : "pass",
             evidence: uw?.edgeCase ?? "No adverse media returned in the 5-year window",
           },
         ],
       }
-    case "2.2": {
+
+    /* R2 Pricing (id 11) — the commercial model. */
+    case "11.0":
+      return {
+        kind: "table",
+        title: "Modelled economics",
+        note: "Revenue by method at the merchant's expected mix. Modelled from sector benchmarks, not a quote.",
+        table: {
+          columns: ["Method", "Share of volume", "Rate", "Revenue / yr"],
+          rows: [
+            ["Card present", "62%", "1.40%", "£20,832"],
+            ["Card not present", "9%", "1.75%", "£3,780"],
+            ["Wallet", "26%", "0.90%", "£5,616"],
+            ["Account-to-account", "3%", "0.35%", "£252"],
+            ["Blended", "100%", "1.27%", "£30,480"],
+          ],
+        },
+      }
+    case "11.1":
+      return {
+        kind: "tariff",
+        title: "Recommended tariff",
+        note: "The bundle the agent would offer this merchant type. Every line is yours to overrule.",
+        rows: [
+          { label: "Monthly fee", value: "£19", basis: "Median for single-site hospitality on your book" },
+          { label: "Setup fee", value: "£0", basis: "Waived — the upfront fee is the sharpest lever on sign-up" },
+          { label: "Card present", value: "1.40%", basis: "Your standard band for this risk category" },
+          { label: "Card not present", value: "1.75%", basis: "Higher chargeback exposure on remote sales" },
+          { label: "Wallet", value: "0.90%", basis: "Lower scheme cost passes through to the merchant" },
+        ],
+        projection: {
+          label: "Modelled sign-up rate",
+          range: "58–71%",
+          basis: "Range, not a point: conversion moves sharply by merchant type and this bundle has not been tested on this segment.",
+        },
+        illustrative: "Illustrative. Modelled from comparable merchants — not an offer, and not a commitment to a rate.",
+      }
+    case "11.2":
+      return {
+        kind: "table",
+        title: "Proposed A/B test",
+        note: "Pricing is a speed-versus-risk trade. The agent proposes a test rather than asserting one right answer.",
+        table: {
+          columns: ["Variant", "Setup fee", "Monthly", "Modelled sign-up", "Modelled 12m revenue"],
+          rows: [
+            ["A — waive setup", "£0", "£19", "58–71%", "£28,400–£34,700"],
+            ["B — charge setup", "£99", "£15", "41–56%", "£24,100–£32,900"],
+          ],
+        },
+      }
+
+    /* R3 Underwriting (id 2) — credit risk. Keeps id 2 through the split, so
+       these cases keep their keys; only the TASK INDEXES moved, because the two
+       screening tasks left for KYC. */
+    case "2.0": {
       const missing = uw?.documentsOutstanding ?? []
       return {
         kind: "records",
@@ -1152,13 +1268,56 @@ export function artifactFor(
     // The score is what the regulated sign-off rests on, so it is decomposed
     // rather than quoted. The old prose memo that restated the score and the
     // edge case is deleted: it was a second copy of both claims, free to drift.
-    case "2.3":
+    case "2.1":
       return {
         kind: "risk",
         title: "Risk score",
         note: "Every factor behind the number, and what each was measured against.",
       }
-    case "2.4":
+    case "2.2": {
+      // The exposure the acquirer would actually carry. Rendered as a record
+      // rather than a new kind, because that is what it is: a small set of
+      // stated values, each with a source, plus a named place the decision can
+      // be taken instead. The `editable` slot carries the externalise
+      // affordance — this step plugs into an acquirer's own underwriting tool
+      // where they run one, and saying so is the difference between an offer
+      // and a replacement.
+      const scored = recordedScore(merchant) !== null
+      return {
+        kind: "records",
+        title: "Exposure and acceptance limit",
+        note: "What the acquirer would be left carrying if this merchant took payment and disappeared.",
+        editable: {
+          label: "Integrate your own model",
+          where: "Your underwriting service, over API — this recommendation is replaced by yours",
+        },
+        rows: [
+          {
+            label: "Risk category",
+            value: scored ? "Standard retail" : null,
+            source: scored ? "your credit policy — category rules" : "cannot be assigned on an unscored file",
+          },
+          {
+            label: "Recommended daily limit",
+            // Withheld, not zeroed. A limit of £0 reads as a decision to accept
+            // nothing, which is a rejection nobody made.
+            value: scored ? "£14,000 / day" : null,
+            source: scored ? "modelled on expected volume ÷ settlement cycle" : "no limit can be set until the file is scored",
+          },
+          {
+            label: "Settlement exposure window",
+            value: "2 working days",
+            source: "your settlement cycle for this merchant type",
+          },
+          {
+            label: "Fuller review required",
+            value: "No — not a deferred-delivery category",
+            source: "your credit policy — high-risk category list",
+          },
+        ],
+      }
+    }
+    case "2.3":
       return {
         kind: "edge",
         title: "Escalated for your judgement",

@@ -64,10 +64,35 @@ export const STEP_HANDOFFS: Record<StepId, Handoff[]> = {
         "You are accepting this merchant as your customer and the recommended device mix as the basis of the order.",
     },
   ],
+  // The risk lane. KYC (10) and Pricing (11) run BEFORE Underwriting (2)
+  // despite the ids — see StepId.
+  10: [
+    {
+      party: "acquirer",
+      ask: "Clear the compliance screening, or judge an escalated hit.",
+      action: "Clear KYC",
+      commits:
+        "You are accepting the entity as screened under your own AML policy. Anything the agent escalated stays yours to judge — it does not clear itself.",
+    },
+  ],
+  11: [
+    {
+      party: "acquirer",
+      ask: "Set the commercial terms for this merchant.",
+      action: "Set pricing",
+      commits:
+        "You are fixing the monthly, setup and per-transaction rates this merchant will be billed. Ingenico applies them; it does not set or discount them.",
+    },
+  ],
+  // The document chase stays HERE rather than moving to KYC with the identity
+  // items, because this is the step that cannot proceed without them and the
+  // list spans both (an ownership statement AND a bank statement). Splitting it
+  // would send the merchant two competing emails for one pile of paperwork.
+  // The ask no longer says "for KYB" — that step now exists separately.
   2: [
     {
       party: "merchant",
-      ask: "Supply the incorporation and ownership documents for KYB.",
+      ask: "Supply the documents underwriting needs to score the file.",
       subject: "Documents needed to complete your merchant application",
       items: [
         "Certificate of incorporation",

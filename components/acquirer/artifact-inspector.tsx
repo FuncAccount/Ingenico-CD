@@ -868,15 +868,29 @@ function ChecksView({ artifact }: { artifact: Extract<Artifact, { kind: "checks"
     pass: "text-success",
     warn: "text-warning",
     fail: "text-destructive",
+    running: "text-primary",
   } as const
   return (
     <Shell title={artifact.title} note={artifact.note}>
       <div className="space-y-2">
         {artifact.rows.map((r) => (
-          <div key={r.label} className="flex gap-2.5 rounded-xl border border-border/70 bg-white/60 p-3">
+          <div
+            key={r.label}
+            className={cn(
+              "flex gap-2.5 rounded-xl border p-3",
+              r.state === "running"
+                ? "border-primary/40 bg-primary/[0.05]"
+                : "border-border/70 bg-white/60",
+            )}
+          >
             <span className={cn("mt-0.5 shrink-0", tone[r.state])}>
               {r.state === "pass" ? (
                 <Check className="h-4 w-4" />
+              ) : r.state === "running" ? (
+                // A spinner, not a tick and not a warning: a check still out
+                // with a provider has NO verdict, and borrowing either icon
+                // would report one it has not returned.
+                <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" />
               ) : (
                 <AlertTriangle className="h-4 w-4" />
               )}
@@ -888,6 +902,15 @@ function ChecksView({ artifact }: { artifact: Extract<Artifact, { kind: "checks"
           </div>
         ))}
       </div>
+      {/* The non-blocking claim, stated only when a check is ACTUALLY open. A
+          fixed footer would keep asserting "still running" over a panel of
+          ticks. */}
+      {open > 0 && (
+        <p className="mt-2.5 text-[11px] leading-relaxed text-muted-foreground">
+          {open} of {artifact.rows.length} still running. The build lane keeps moving while these
+          resolve — only Ship waits on the outcome.
+        </p>
+      )}
     </Shell>
   )
 }

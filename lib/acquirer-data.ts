@@ -4,7 +4,11 @@
 
 export type Band = "Augment" | "Assist" | "Automate"
 
-export type StepId = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9
+/** Stable keys, NOT positions. 10 and 11 are KYC and Pricing, which were split
+ *  out of Underwriting (2) and sit BEFORE it on the risk lane — the numbers are
+ *  out of running order on purpose, because 63 artefact cases and every fixture
+ *  event are addressed by id. Read order from the PIPELINE array. */
+export type StepId = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11
 
 // A single unit of work the agent performs inside a step, with the artefact
 // it produced. This is what the acquirer "plays" through on the journey.
@@ -122,35 +126,116 @@ export const PIPELINE: PipelineStep[] = [
     // and hide the very thing that compresses the timeline.
     handback: "The decision is yours. Confirming starts underwriting and the kit build at the same time.",
   },
+  /* The risk lane, in running order: KYC → Pricing → Underwriting.
+   *
+   *  KYC and Underwriting were ONE step called "Underwrite", which conflated two
+   *  unrelated questions — is this entity legitimate (compliance), and can we
+   *  carry its financial exposure (credit). They fail for different reasons, are
+   *  cleared by different teams and have different remedies, so a single verdict
+   *  over both could only ever name one of them.
+   *
+   *  Underwriting KEEPS id 2 through the split. The ids on this lane therefore
+   *  run 10 → 11 → 2, which looks wrong and is deliberate: 63 artefact cases and
+   *  every fixture event are keyed on `id`, so renumbering to make the lane read
+   *  tidily would silently re-point the whole artefact layer. Order lives in the
+   *  array. */
   {
-    id: 2,
-    code: "R",
-    name: "Underwrite",
+    id: 10,
+    code: "R1",
+    name: "KYC",
     lane: "risk",
     band: "Augment",
     acquirerRole: "signs-off",
-    blurb: "Agent verifies identity, parses documents and scores risk. Acquirer signs the regulated decision.",
-    agentMission: "Do the full underwriting analysis and surface anything a human must weigh in on.",
+    blurb: "Agent screens the entity and its owners. Compliance, not credit — the two are separate calls.",
+    agentMission: "Clear the straightforward majority automatically and escalate only genuine hits.",
     tools: [
       externalTool("Companies House"),
       acquirerTool("KYC / KYB platform"),
       acquirerTool("Sanctions & PEP screening"),
-      ingenicoTool("Document AI"),
-      acquirerTool("Risk model"),
+      acquirerTool("Adverse media"),
     ],
     integration:
-      "Your KYC, screening and risk model remain the system of record — every check below runs inside them, against your policy and your thresholds. Ingenico supplies the agent that drives them and assembles the result, not the verdict.",
+      "If you already run a KYC provider, the agent calls it over your existing contract rather than replacing it. Your platform stays the system of record; Ingenico supplies the orchestration and reads the results back.",
     tasks: [
       {
-        label: "Verify the business",
-        detail: "Confirms the legal entity and directors against the company registry.",
+        label: "Verify the entity",
+        detail: "Confirms the legal entity and its directors against the company registry.",
         output: "kyb.verify → entity active, 2 directors matched ok",
       },
       {
-        label: "Screen the principals",
-        detail: "Runs sanctions, PEP and adverse-media checks on every beneficial owner.",
-        output: "screen.pep_sanctions → 0 sanctions, 0 PEP, 1 media note",
+        label: "Screen sanctions and PEP",
+        detail: "Checks every beneficial owner above 25% against the consolidated lists.",
+        output: "screen.pep_sanctions → 0 sanctions, 0 PEP",
       },
+      {
+        label: "Verify identity",
+        detail: "Matches submitted identity documents to the named owners.",
+        output: "identity.verify → 2 of 2 owners matched",
+      },
+      {
+        label: "Scan adverse media",
+        detail: "Searches the five-year window and flags only material findings.",
+        output: "media.scan → 1 note raised for review",
+      },
+    ],
+    // The non-blocking point, said once and in the right place: this lane runs
+    // beside the build, so a KYC still in flight does not stop the kit.
+    handback:
+      "Compliance sign-off is yours. The build lane keeps moving while this resolves — only Ship waits on it.",
+  },
+  {
+    id: 11,
+    code: "R2",
+    name: "Pricing",
+    lane: "risk",
+    band: "Augment",
+    acquirerRole: "owns",
+    blurb: "Acquirer sets the commercial model: monthly fee, setup fee and per-transaction rates by method.",
+    agentMission: "Recommend a tariff for this merchant type and show what it costs in sign-ups.",
+    tools: [
+      acquirerTool("Pricing book"),
+      ingenicoTool("Sector benchmarks"),
+      ingenicoTool("Conversion model"),
+    ],
+    integration:
+      "Rates are written back to your pricing book. Website offers and bank-channel promotions stay yours to set — the agent proposes within the bands you allow, it does not discount on your behalf.",
+    tasks: [
+      {
+        label: "Model the economics",
+        detail: "Projects revenue per method against the merchant's expected mix and volume.",
+        output: "econ.model → blended 1.31% on £2.4m/yr",
+      },
+      {
+        label: "Recommend a tariff",
+        detail: "Proposes monthly, setup and per-transaction rates for this merchant type.",
+        output: "tariff.recommend → £19/mo, £0 setup, card 1.4% / wallet 0.9%",
+      },
+      {
+        label: "Propose an A/B test",
+        detail: "Suggests a variant to test, because conversion moves sharply with the upfront fee.",
+        output: "experiment.propose → setup £0 vs £99, split 50/50",
+      },
+    ],
+    handback:
+      "The commercial call is yours. Pricing is a speed-versus-risk trade — the agent shows both sides rather than picking for you.",
+  },
+  {
+    id: 2,
+    code: "R3",
+    name: "Underwriting",
+    lane: "risk",
+    band: "Augment",
+    acquirerRole: "signs-off",
+    blurb: "Agent models the financial exposure and recommends a limit. Acquirer signs the regulated decision.",
+    agentMission: "Size the exposure this merchant creates and put a defensible limit behind it.",
+    tools: [
+      ingenicoTool("Document AI"),
+      acquirerTool("Risk model"),
+      acquirerTool("Credit policy"),
+    ],
+    integration:
+      "Your risk model remains the system of record and your thresholds decide the outcome. If you already underwrite in your own tool, this step plugs into it over API — the in-context model is there for acquirers who do not run one.",
+    tasks: [
       {
         label: "Parse the documents",
         detail: "Extracts and cross-checks figures across every uploaded document.",
@@ -160,6 +245,11 @@ export const PIPELINE: PipelineStep[] = [
         label: "Score the risk",
         detail: "Combines all signals into a single risk score and band.",
         output: "risk.score → 18 / 100  band=LOW",
+      },
+      {
+        label: "Set the acceptance limit",
+        detail: "Recommends the daily exposure the acquirer would carry, and why.",
+        output: "limit.recommend → £14,000/day  (category: standard retail)",
       },
       {
         label: "Flag edge cases",
@@ -456,6 +546,37 @@ export function stepById(id: StepId): PipelineStep {
   return PIPELINE.find((s) => s.id === id)!
 }
 
+/** The risk lane's state — a verdict AND, when the lane is still open, WHERE.
+ *
+ *  A bare verdict was enough while the lane was one step. Now it runs
+ *  KYC → Pricing → Underwriting, and "in-flight" alone cannot say which of the
+ *  three is open: rendering it against all of them would claim three concurrent
+ *  checks on a sequential lane. Worse for "referred", where the position IS the
+ *  meaning — a sanctions hit at KYC and a credit referral at Underwriting are
+ *  different events with different remedies, and painting the whole lane red
+ *  would assert that Pricing was also sent back.
+ *
+ *  So the position rides on the non-cleared arms only. A union rather than an
+ *  optional field: `cleared` needs no position (every step is done), and an
+ *  optional `at` would let an open lane exist with nowhere to point. */
+export type RiskLane =
+  | { verdict: "cleared" }
+  | { verdict: "in-flight"; at: StepId }
+  | { verdict: "referred"; at: StepId }
+
+/** The risk lane in running order.
+ *
+ *  Order comes from the PIPELINE array, NEVER from `id`: the lane's ids are
+ *  10 → 11 → 2, deliberately non-monotonic so that splitting Underwrite in
+ *  three kept its id — and with it the artefact cases and fixture events keyed
+ *  on it. Any `a.id < b.id` comparison across this lane is therefore wrong. */
+export const RISK_LANE: PipelineStep[] = PIPELINE.filter((s) => s.lane === "risk")
+
+/** Position of a risk step within its lane. -1 for anything not on it. */
+function riskIndex(id: StepId): number {
+  return RISK_LANE.findIndex((s) => s.id === id)
+}
+
 /** How far a merchant has got, ON THE LANE THE STEP BELONGS TO.
  *
  *  Replaces the bare `step.id < currentStep` comparison, which could only
@@ -472,10 +593,19 @@ export function laneState(
   step: PipelineStep,
 ): "done" | "active" | "upcoming" {
   if (step.lane === "risk") {
+    const lane = merchant.riskLane
+    if (lane.verdict === "cleared") return "done"
+    // Compared by LANE POSITION, not by id — see RISK_LANE. The steps ahead of
+    // the open one are genuinely finished (you cannot price a merchant whose
+    // KYC has not run), and the ones behind it have not started.
+    const here = riskIndex(step.id)
+    const open = riskIndex(lane.at)
+    if (here < open) return "done"
     // A referred file is emphatically NOT done — it is active work that has
     // stalled, and collapsing it into "done" would file a rejection alongside
     // an approval.
-    return merchant.riskLane === "cleared" ? "done" : "active"
+    if (here === open) return "active"
+    return "upcoming"
   }
   if (step.id < merchant.currentStep) return "done"
   if (step.id === merchant.currentStep) return "active"
@@ -487,25 +617,35 @@ export function laneState(
  *  Derived, not written down as `7`: the rejoin is a property of the lane
  *  layout, and a hardcoded id would quietly point at the wrong step the moment
  *  a lane gained or lost one. */
-export const REJOIN_STEP: StepId = PIPELINE.filter(
-  (s) => s.lane === "spine" && s.id > Math.min(...PIPELINE.filter((x) => x.lane !== "spine").map((x) => x.id)),
-)[0].id
+export const REJOIN_STEP: StepId = (() => {
+  // By ARRAY POSITION, not by id. The old version compared ids, which only
+  // worked while they happened to ascend; the risk lane now runs 10 → 11 → 2,
+  // so "the first spine step with a bigger id than the fork" is meaningless.
+  const forkAt = PIPELINE.findIndex((s) => s.lane !== "spine")
+  return PIPELINE.slice(forkAt).find((s) => s.lane === "spine")!.id
+})()
 
 /** The rejoin condition at Ship, stated rather than inferred.
  *
  *  Returns null when there is nothing to warn about, so a caller cannot render
  *  an empty banner and imply a check that found nothing wrong. */
 export function shipRisk(merchant: Pick<Merchant, "riskLane">): { label: string; detail: string } | null {
-  if (merchant.riskLane === "cleared") return null
-  if (merchant.riskLane === "referred") {
+  const lane = merchant.riskLane
+  if (lane.verdict === "cleared") return null
+  // The OPEN STEP is named, not the lane. "Underwriting referred" was accurate
+  // while the lane was one step; it would now report a sanctions hit at KYC as
+  // a credit decision, sending the acquirer to the wrong screen and the wrong
+  // remedy.
+  const open = stepById(lane.at).name
+  if (lane.verdict === "referred") {
     return {
-      label: "Underwriting referred for review",
+      label: `${open} referred for review`,
       detail:
         "This file was sent back and has not been approved. Shipping now puts hardware with a merchant the acquirer has not accepted.",
     }
   }
   return {
-    label: "Underwriting still in flight",
+    label: `${open} still in flight`,
     detail:
       "The build lane has arrived at Ship first. Shipping now puts hardware with a merchant whose file is not yet approved.",
   }
@@ -547,14 +687,14 @@ export interface Merchant {
    *  underwriting had cleared. It no longer does: a merchant can be at B3
    *  Configure with their file still open. Read `riskLane` for that. */
   currentStep: StepId
-  /** Where underwriting has got to, independently of the build.
+  /** Where the risk lane has got to, independently of the build.
    *
    *  REQUIRED, and deliberately without a default. The old model only carried
    *  `underwriting` on merchants parked at step 2 because position implied the
    *  verdict; once the lanes run in parallel that inference is gone. A default
    *  of "cleared" would assert an approval nobody gave, on precisely the
    *  merchants whose file was never opened. */
-  riskLane: "in-flight" | "cleared" | "referred"
+  riskLane: RiskLane
   status: MerchantStatus
   submitted: string
   // underwriting detail (used on the sign-off screen)
@@ -594,7 +734,9 @@ export const MERCHANTS: Merchant[] = [
     size: "£2.4m / yr",
     terminals: "3× A920 + softPOS",
     terminalCount: 4,
-    riskLane: "in-flight",
+    // Its timeline already records identity verified and a risk score, so the
+    // lane is past KYC and Pricing and sitting on the credit decision.
+    riskLane: { verdict: "in-flight", at: 2 },
     currentStep: 2,
     status: "Needs sign-off",
     submitted: "2 days ago",
@@ -620,7 +762,7 @@ export const MERCHANTS: Merchant[] = [
     size: "€5.1m / yr",
     terminals: "8× Move 5000",
     terminalCount: 8,
-    riskLane: "in-flight",
+    riskLane: { verdict: "in-flight", at: 2 },
     currentStep: 2,
     status: "Needs sign-off",
     submitted: "1 day ago",
@@ -646,7 +788,7 @@ export const MERCHANTS: Merchant[] = [
     size: "€1.2m / yr",
     terminals: "2× Desk 5000",
     terminalCount: 2,
-    riskLane: "cleared",
+    riskLane: { verdict: "cleared" },
     currentStep: 4,
     status: "Needs sign-off",
     submitted: "4 days ago",
@@ -666,7 +808,7 @@ export const MERCHANTS: Merchant[] = [
     size: "€3.8m / yr",
     terminals: "6× A920 + 2× softPOS",
     terminalCount: 8,
-    riskLane: "cleared",
+    riskLane: { verdict: "cleared" },
     currentStep: 8,
     status: "On track",
     submitted: "9 days ago",
@@ -686,7 +828,7 @@ export const MERCHANTS: Merchant[] = [
     size: "€6.7m / yr",
     terminals: "12× Desk 5000",
     terminalCount: 12,
-    riskLane: "cleared",
+    riskLane: { verdict: "cleared" },
     currentStep: 6,
     status: "On track",
     submitted: "6 days ago",
@@ -704,7 +846,7 @@ export const MERCHANTS: Merchant[] = [
     size: "€0.9m / yr",
     terminals: "2× A920",
     terminalCount: 2,
-    riskLane: "cleared",
+    riskLane: { verdict: "cleared" },
     currentStep: 3,
     status: "Exception",
     submitted: "3 days ago",
@@ -723,7 +865,7 @@ export const MERCHANTS: Merchant[] = [
     size: "kr 22m / yr",
     terminals: "5× Move 5000",
     terminalCount: 5,
-    riskLane: "cleared",
+    riskLane: { verdict: "cleared" },
     currentStep: 7,
     status: "On track",
     submitted: "8 days ago",
@@ -740,7 +882,7 @@ export const MERCHANTS: Merchant[] = [
     size: "€1.8m / yr",
     terminals: "4× softPOS",
     terminalCount: 4,
-    riskLane: "cleared",
+    riskLane: { verdict: "cleared" },
     currentStep: 9,
     status: "Live",
     submitted: "12 days ago",
@@ -757,7 +899,7 @@ export const MERCHANTS: Merchant[] = [
     size: "£0.6m / yr",
     terminals: "1× A920",
     terminalCount: 1,
-    riskLane: "cleared",
+    riskLane: { verdict: "cleared" },
     currentStep: 5,
     status: "On track",
     submitted: "5 days ago",
@@ -774,7 +916,7 @@ export const MERCHANTS: Merchant[] = [
     size: "€4.4m / yr",
     terminals: "3× Move 5000 + softPOS",
     terminalCount: 4,
-    riskLane: "cleared",
+    riskLane: { verdict: "cleared" },
     currentStep: 9,
     status: "Live",
     submitted: "14 days ago",
@@ -791,7 +933,7 @@ export const MERCHANTS: Merchant[] = [
     size: "€9.2m / yr",
     terminals: "6× Desk 5000",
     terminalCount: 6,
-    riskLane: "cleared",
+    riskLane: { verdict: "cleared" },
     currentStep: 6,
     status: "On track",
     submitted: "7 days ago",
@@ -808,7 +950,7 @@ export const MERCHANTS: Merchant[] = [
     size: "€2.1m / yr",
     terminals: "4× A920",
     terminalCount: 4,
-    riskLane: "cleared",
+    riskLane: { verdict: "cleared" },
     currentStep: 8,
     status: "On track",
     submitted: "10 days ago",
@@ -837,7 +979,8 @@ export const MERCHANTS: Merchant[] = [
     size: "£680k / yr",
     terminals: "2× A920",
     terminalCount: 2,
-    riskLane: "in-flight",
+    // Intake three hours ago — screening has only just opened.
+    riskLane: { verdict: "in-flight", at: 10 },
     currentStep: 1,
     status: "On track",
     submitted: "3 hours ago",
@@ -856,7 +999,11 @@ export const MERCHANTS: Merchant[] = [
     size: "£940k / yr",
     terminals: "2× A920 + softPOS",
     terminalCount: 3,
-    riskLane: "in-flight",
+    // A small, clean file: screening cleared automatically, so the lane has
+    // moved on to the commercial terms while the kit is still being confirmed.
+    // This is the one fixture sitting at Pricing — without it the middle step
+    // of the lane is never seen in an active state.
+    riskLane: { verdict: "in-flight", at: 11 },
     currentStep: 1,
     status: "Needs sign-off",
     submitted: "1 day ago",
@@ -879,7 +1026,10 @@ export const MERCHANTS: Merchant[] = [
     size: "€1.5m / yr",
     terminals: "3× Desk 5000",
     terminalCount: 3,
-    riskLane: "referred",
+    // Referred on CREDIT, not compliance — the position is the point. Veterinary
+    // work carries deferred-payment exposure, which is a limit question, and
+    // sending the reader to KYC would be the wrong screen and the wrong remedy.
+    riskLane: { verdict: "referred", at: 2 },
     currentStep: 2,
     status: "With merchant",
     submitted: "6 days ago",
@@ -917,7 +1067,7 @@ export const MERCHANTS: Merchant[] = [
     size: "£3.1m / yr",
     terminals: "6× A920 + 4× Move 5000",
     terminalCount: 10,
-    riskLane: "cleared",
+    riskLane: { verdict: "cleared" },
     currentStep: 3,
     status: "Needs sign-off",
     submitted: "5 days ago",
@@ -939,7 +1089,7 @@ export const MERCHANTS: Merchant[] = [
     size: "€2.7m / yr",
     terminals: "6× A920",
     terminalCount: 6,
-    riskLane: "cleared",
+    riskLane: { verdict: "cleared" },
     currentStep: 6,
     status: "Exception",
     submitted: "12 days ago",
@@ -960,7 +1110,7 @@ export const MERCHANTS: Merchant[] = [
     size: "€4.6m / yr",
     terminals: "10× A920 + 2× Desk 5000",
     terminalCount: 12,
-    riskLane: "cleared",
+    riskLane: { verdict: "cleared" },
     currentStep: 7,
     status: "Exception",
     submitted: "16 days ago",
@@ -982,7 +1132,7 @@ export const MERCHANTS: Merchant[] = [
     size: "€1.1m / yr",
     terminals: "2× Move 5000",
     terminalCount: 2,
-    riskLane: "cleared",
+    riskLane: { verdict: "cleared" },
     currentStep: 8,
     status: "With merchant",
     submitted: "18 days ago",

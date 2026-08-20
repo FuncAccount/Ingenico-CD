@@ -13,6 +13,7 @@
 // cannot disagree about who owes what.
 
 import {
+  laneState,
   MERCHANTS,
   PIPELINE,
   stepById,
@@ -46,7 +47,7 @@ const OTHER_BOOKS: Merchant[] = [
     size: "€1.8m / yr",
     terminals: "2× A920",
     terminalCount: 2,
-    riskLane: "cleared",
+    riskLane: { verdict: "cleared" },
     currentStep: 6,
     status: "On track",
     submitted: "5 days ago",
@@ -63,7 +64,7 @@ const OTHER_BOOKS: Merchant[] = [
     size: "kr 9.2m / yr",
     terminals: "4× A920 + softPOS",
     terminalCount: 5,
-    riskLane: "cleared",
+    riskLane: { verdict: "cleared" },
     currentStep: 5,
     status: "On track",
     submitted: "4 days ago",
@@ -80,7 +81,7 @@ const OTHER_BOOKS: Merchant[] = [
     size: "€890k / yr",
     terminals: "2× A920",
     terminalCount: 2,
-    riskLane: "cleared",
+    riskLane: { verdict: "cleared" },
     currentStep: 7,
     status: "On track",
     submitted: "11 days ago",
@@ -97,7 +98,9 @@ const OTHER_BOOKS: Merchant[] = [
     size: "€3.3m / yr",
     terminals: "8× A920",
     terminalCount: 8,
-    riskLane: "in-flight",
+    // Its own events say identity is verified and documents are parsed, so the
+    // lane is past KYC and sitting on the credit decision.
+    riskLane: { verdict: "in-flight", at: 2 },
     currentStep: 2,
     status: "Needs sign-off",
     submitted: "1 day ago",
@@ -114,7 +117,7 @@ const OTHER_BOOKS: Merchant[] = [
     size: "£1.2m / yr",
     terminals: "3× A920",
     terminalCount: 3,
-    riskLane: "cleared",
+    riskLane: { verdict: "cleared" },
     currentStep: 8,
     status: "On track",
     submitted: "14 days ago",
@@ -141,7 +144,8 @@ const OTHER_BOOKS: Merchant[] = [
     size: "kr 6.4m / yr",
     terminals: "3× A920",
     terminalCount: 3,
-    riskLane: "in-flight",
+    // Intake only 8 hours ago, so the risk lane has barely opened.
+    riskLane: { verdict: "in-flight", at: 10 },
     currentStep: 1,
     status: "On track",
     submitted: "8 hours ago",
@@ -162,7 +166,7 @@ const OTHER_BOOKS: Merchant[] = [
     size: "€2.9m / yr",
     terminals: "5× A920 + 3× Move 5000",
     terminalCount: 8,
-    riskLane: "cleared",
+    riskLane: { verdict: "cleared" },
     currentStep: 3,
     status: "On track",
     submitted: "4 days ago",
@@ -182,7 +186,7 @@ const OTHER_BOOKS: Merchant[] = [
     size: "€740k / yr",
     terminals: "2× Desk 5000",
     terminalCount: 2,
-    riskLane: "cleared",
+    riskLane: { verdict: "cleared" },
     currentStep: 5,
     status: "Exception",
     submitted: "9 days ago",
@@ -201,7 +205,7 @@ const OTHER_BOOKS: Merchant[] = [
     size: "€520k / yr",
     terminals: "1× A920",
     terminalCount: 1,
-    riskLane: "cleared",
+    riskLane: { verdict: "cleared" },
     currentStep: 8,
     status: "With merchant",
     submitted: "21 days ago",
@@ -221,7 +225,7 @@ const OTHER_BOOKS: Merchant[] = [
     size: "Kč 18m / yr",
     terminals: "4× A920",
     terminalCount: 4,
-    riskLane: "cleared",
+    riskLane: { verdict: "cleared" },
     currentStep: 9,
     status: "Live",
     submitted: "27 days ago",
@@ -302,7 +306,11 @@ export function acquirerOf(m: Merchant): string {
 export type IngenicoRole = "inbound" | "owned" | "field"
 
 export function ingenicoRole(step: StepId): IngenicoRole {
-  if (step === 1 || step === 2 || step === 4) return "inbound"
+  // 10 KYC and 11 Pricing joined the risk lane when Underwrite (2) was split.
+  // Both are decided in the acquirer's own systems, so they are inbound for the
+  // same reason 2 always was — omitting them would have filed two acquirer
+  // decisions under Ingenico's own work and put a service level on them.
+  if (step === 1 || step === 2 || step === 4 || step === 10 || step === 11) return "inbound"
   if (step === 8) return "field"
   return "owned"
 }
@@ -488,10 +496,14 @@ export function automationCensus(rows: EstateRow[]): AutomationCensus {
   let stepsCleared = 0
   let unattended = 0
   for (const r of rows) {
-    // Steps strictly before the current one are done. The current step is
-    // still in flight, so counting it would credit work not yet finished.
     for (const step of PIPELINE) {
-      if (step.id >= r.merchant.currentStep) continue
+      // Asks the step's OWN lane whether it is finished. The old
+      // `step.id >= currentStep` test read every step off the build position,
+      // which since the split would never credit KYC or Pricing at all (ids 10
+      // and 11 sit above every currentStep) while still crediting Underwriting
+      // whenever the kit had moved on — undercounting one lane and overclaiming
+      // the other. Only "done" counts; an in-flight step is not cleared work.
+      if (laneState(r.merchant, step) !== "done") continue
       stepsCleared += 1
       if (step.band === "Automate") unattended += 1
     }
