@@ -214,11 +214,16 @@ export function MerchantJourney({
           {/* THE FORK. Two columns side by side, because the whole point is
               that neither waits for the other — stacking them vertically is
               what made the old rail assert an order that does not exist. */}
-          <div className="relative mt-1 flex gap-2">
-            {/* the split: one line in, two lines out */}
-            <span aria-hidden className="absolute -top-1.5 left-4 h-1.5 w-px bg-primary/60" />
+          {/* Labels sit ABOVE the arch so its arrowheads land on the step
+              circles themselves — pointing an arrow at a caption reads as the
+              branch stopping short of the thing it feeds. */}
+          <div className="flex gap-2 pt-1">
+            <LaneHeader label="Risk" />
+            <LaneHeader label="Build" />
+          </div>
+          <ForkArch />
+          <div className="relative flex gap-2">
             <div className="min-w-0 flex-1">
-              <LaneHeader label="Risk" />
               {riskLane.map((step) => (
                 <StepRow
                   key={step.id}
@@ -232,7 +237,6 @@ export function MerchantJourney({
               ))}
             </div>
             <div className="min-w-0 flex-1">
-              <LaneHeader label="Build" />
               {buildLane.map((step, i) => (
                 <StepRow
                   key={step.id}
@@ -247,9 +251,11 @@ export function MerchantJourney({
             </div>
           </div>
 
-          <p className="px-1 pb-1 pt-2 text-[10px] leading-relaxed text-muted-foreground">
+          <p className="px-1 pt-1.5 text-[10px] leading-relaxed text-muted-foreground">
             Both lanes run at the same time and rejoin at Ship.
           </p>
+
+          <RejoinArch />
 
           {/* Rejoined spine. */}
           {spine.after.map((step, i) => (
@@ -272,6 +278,70 @@ export function MerchantJourney({
           onOpenSignoff={() => onOpenSignoff(current)}
         />
       </div>
+    </div>
+  )
+}
+
+/* The fork drawn as a real branch.
+ *
+ *  GEOMETRY, so the arms actually meet the step circles: each lane column is
+ *  `flex-1` inside a `gap-2` (8px) row, and each circle is `w-8` (32px), so the
+ *  left circle's centre sits at 16px and the right at `50% + 4px + 16px`. The
+ *  arms are pinned to exactly those two x positions — anything hand-tuned drifts
+ *  the moment the rail is resized.
+ *
+ *  Built from a bordered box with rounded corners rather than an SVG: an SVG
+ *  would need either a fixed viewBox (wrong at other widths) or
+ *  `preserveAspectRatio="none"`, which stretches the arrowheads into wedges.
+ *  A border arch scales cleanly at any width. */
+const LEFT_ARM = "left-4" // 16px = centre of the left lane's circle
+const RIGHT_ARM = "right-[calc(50%-20px)]" // mirrors 50% + 4px gap + 16px radius
+
+/** Arrowhead. A CSS border triangle, not a glyph — U+25BE renders as tofu in
+ *  this font stack. */
+function ArrowDown({ className }: { className?: string }) {
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        "absolute h-0 w-0 border-l-[3.5px] border-r-[3.5px] border-t-[5px] border-l-transparent border-r-transparent border-t-border",
+        className,
+      )}
+    />
+  )
+}
+
+/** One line in, two lines out — the split into the parallel lanes. */
+function ForkArch() {
+  return (
+    <div aria-hidden className="relative h-6">
+      <div
+        className={cn(
+          "absolute bottom-1.5 top-0 rounded-t-[14px] border-l border-r border-t border-border",
+          LEFT_ARM,
+          RIGHT_ARM,
+        )}
+      />
+      <ArrowDown className={cn("bottom-0 -translate-x-1/2", LEFT_ARM)} />
+      <ArrowDown className={cn("bottom-0 translate-x-1/2", RIGHT_ARM)} />
+    </div>
+  )
+}
+
+/** Two lines in, one line out — the lanes merging back onto the spine at Ship.
+ *  Mirrors the fork so the regroup is as visible as the split; the build lane's
+ *  arm sweeps left and both continue down into Ship's circle at 16px. */
+function RejoinArch() {
+  return (
+    <div aria-hidden className="relative h-6">
+      <div
+        className={cn(
+          "absolute bottom-1.5 top-0 rounded-br-[14px] border-b border-r border-border",
+          LEFT_ARM,
+          RIGHT_ARM,
+        )}
+      />
+      <ArrowDown className={cn("bottom-0 -translate-x-1/2", LEFT_ARM)} />
     </div>
   )
 }
@@ -363,7 +433,7 @@ function StepRow({
  *  and the reader has to infer why they sit side by side. */
 function LaneHeader({ label }: { label: string }) {
   return (
-    <p className="px-1 pb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+    <p className="min-w-0 flex-1 px-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
       {label}
     </p>
   )
