@@ -1369,6 +1369,119 @@ export function taskDetail(stepId: StepId, taskIndex: number, merchant: Merchant
   return SOFTWARE_ONLY_DETAIL[`${stepId}.${taskIndex}`] ?? fallback
 }
 
+import { blockers, type BrandRule } from "./branding"
+
+/**
+ * A failure recorded inside a COMPLETED task's own artefact.
+ *
+ * Distinct from a halt, and the two must not merge. A halted task produced
+ * nothing — the agent reached it and refused. An exception is the opposite
+ * shape: the task ran, produced its output, and that output records something
+ * that fails. Both are wrong to render as a green tick, but for different
+ * reasons, and a reader needs to know which they are looking at.
+ *
+ * This exists because the tick was the only thing on the row making a claim
+ * about the RESULT, and it was hard-wired to "the agent got this far". Branding
+ * showed it plainest: `4/4 tasks`, four green ticks, and the panel beside them
+ * badged `1 blocking` — the row asserting a pass while its own evidence denied
+ * it. Derived per artefact kind rather than flagged by hand, so no step can
+ * report clean over a failure it is itself displaying.
+ *
+ * Advisories are deliberately NOT exceptions. A `warn` is information; if every
+ * shade of imperfection turned the tick red, red would stop meaning anything.
+ */
+export interface TaskException {
+  headline: string
+  detail: string
+}
+
+/**
+ * Inputs an artefact cannot supply for itself.
+ *
+ * REQUIRED, not optional, and that is the point: the brand rules are computed
+ * from the live editable theme, so if this were optional a caller could omit it
+ * and every branding task would silently come back clean — a false all-clear is
+ * worse than the bug being fixed. Making it required turns the omission into a
+ * compile error.
+ */
+export interface ExceptionContext {
+  brandRules: BrandRule[]
+}
+
+export function taskException(
+  stepId: StepId,
+  taskIndex: number,
+  merchant: Merchant,
+  ctx: ExceptionContext,
+): TaskException | null {
+  // A task that cannot run here has no result to fail. Left out, a skipped
+  // task would inherit the verdict of an artefact describing work nobody did.
+  if (taskSkipped(stepId, taskIndex, merchant)) return null
+  const a = artifactFor(stepId, taskIndex, merchant)
+  if (!a) return null
+
+  switch (a.kind) {
+    case "checks": {
+      // `running` is not counted: a check still out with a provider has no
+      // verdict, and treating silence as a failure invents one.
+      const failed = a.rows.filter((r) => r.state === "fail")
+      if (failed.length === 0) return null
+      return {
+        headline: `${failed.length} of ${a.rows.length} checks failed`,
+        detail: `${failed[0].label} — ${failed[0].evidence}`,
+      }
+    }
+    case "txns": {
+      const blocking = a.rows.filter((r) => r.state === "fail" && r.fix?.blocking)
+      if (blocking.length === 0) return null
+      const first = blocking[0]
+      return {
+        headline: `${blocking.length} of ${a.rows.length} declined`,
+        detail: `${first.ref} on ${first.unit} — ${first.result}. ${first.fix!.owner} clears it before this step can pass.`,
+      }
+    }
+    case "records": {
+      if (a.outcome?.state !== "fail") return null
+      return { headline: a.outcome.headline, detail: a.outcome.detail }
+    }
+    case "brand": {
+      // The `assets` face renders the inventory and no rules at all, so it
+      // reports nothing to fail. The other two both display the gate, which is
+      // why the theme task carries the exception as well as the checks task:
+      // the blocking rule is on screen under both of their ticks.
+      if (a.focus === "assets") return null
+      const failed = blockers(ctx.brandRules)
+      if (failed.length === 0) return null
+      return {
+        headline: `${failed.length} blocking brand rule${failed.length === 1 ? "" : "s"}`,
+        // `problem` states what is WRONG; `label` states the condition that
+        // would satisfy the rule, so falling back to it would describe the
+        // passing case in a sentence reporting a failure.
+        detail: `${failed[0].label} — ${failed[0].problem ?? failed[0].detail}`,
+      }
+    }
+    default:
+      return null
+  }
+}
+
+/** Every exception in a step, keyed by the task whose artefact records it.
+ *  One census, read by the row icons, the counter and the step badge, so the
+ *  three cannot disagree about how many there are. */
+export function taskExceptions(
+  stepId: StepId,
+  merchant: Merchant,
+  taskCount: number,
+  ctx: ExceptionContext,
+): Map<number, TaskException> {
+  const out = new Map<number, TaskException>()
+  for (let i = 0; i < taskCount; i++) {
+    const e = taskException(stepId, i, merchant, ctx)
+    if (e) out.set(i, e)
+  }
+  return out
+}
+
 /**
  * A finding in a step's own artefacts that stops the step being complete.
  *
@@ -1382,6 +1495,7 @@ export function taskDetail(stepId: StepId, taskIndex: number, merchant: Merchant
 export function blockingFinding(
   stepId: StepId,
   merchant: Merchant,
+  ctx: ExceptionContext,
 ): { headline: string; detail: string; taskIndex?: number } | null {
   // Underwriting halts at "Score the risk" when a mandatory document is
   // missing. `taskIndex` is carried so the row that REFUSED shows the halt
@@ -1420,19 +1534,18 @@ export function blockingFinding(
       }
     }
   }
-  // Task indices are small and contiguous; 8 covers the longest step.
-  for (let t = 0; t < 8; t++) {
-    const a = artifactFor(stepId, t, merchant)
-    if (a?.kind !== "txns") continue
-    const blocking = a.rows.filter((r) => r.state === "fail" && r.fix?.blocking)
-    if (blocking.length === 0) continue
-    const first = blocking[0]
-    return {
-      headline: `${blocking.length} of ${a.rows.length} declined`,
-      detail: `${first.ref} on ${first.unit} — ${first.result}. ${first.fix!.owner} clears it before this step can pass.`,
-    }
-  }
-  return null
+  /* Everything else comes from the per-task census, so the badge and the ticks
+   * beneath it are reading one source. This used to inspect `txns` alone,
+   * which is why a failing brand rule or a failed check left the step reporting
+   * "Complete" — the step-level statement could only see one of the four ways
+   * an artefact records a failure. Task indices are small and contiguous; 8
+   * covers the longest step.
+   *
+   * NO `taskIndex` is carried: that field means "the agent stopped here", and
+   * these tasks ran to completion and produced their artefacts. Passing it
+   * would redraw them as halted and claim the step never got past them. */
+  const first = [...taskExceptions(stepId, merchant, 8, ctx).values()][0]
+  return first ?? null
 }
 
 /** Resolve the artefact a given task produced. Returning null is a real

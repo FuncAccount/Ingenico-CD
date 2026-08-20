@@ -40,6 +40,7 @@ import {
   artifactFor,
   artifactOutcome,
   blockingFinding,
+  taskExceptions,
   defaultBasket,
   taskDetail,
   taskSkipped,
@@ -832,9 +833,38 @@ function StepCockpit({
   const skippedCount = step.tasks.filter((_, i) => taskSkipped(step.id, i, merchant)).length
   const runnableCount = step.tasks.length - skippedCount
 
+  // The brand rules are computed from the LIVE theme, not a stored field, so a
+  // failing rule clears the moment the acquirer fixes the design and returns if
+  // they undo it. Anything derived from a frozen copy would keep reporting a
+  // failure the screen beside it had already resolved.
+  const exceptionCtx = useMemo(() => ({ brandRules: checkBrand(theme) }), [theme])
+
   // Read out of this step's own artefacts. A step can finish every task and
   // still not have passed — the run is what turns the finding up.
-  const finding = useMemo(() => blockingFinding(step.id, merchant), [step.id, merchant])
+  const finding = useMemo(
+    () => blockingFinding(step.id, merchant, exceptionCtx),
+    [step.id, merchant, exceptionCtx],
+  )
+
+  // Per-task census of failures the artefacts themselves record. Same call the
+  // step badge resolves through, so a row cannot show a tick under a badge
+  // reporting a finding, nor the reverse.
+  const exceptions = useMemo(
+    () => taskExceptions(step.id, merchant, step.tasks.length, exceptionCtx),
+    [step.id, merchant, step.tasks.length, exceptionCtx],
+  )
+
+  // Counted with the ROW'S OWN predicate rather than the map's size, so the
+  // header cannot report a number the list does not show: an artefact exists
+  // whether or not the agent has reached it, and a task that failed or halted
+  // already states a stronger outcome on its row.
+  const exceptionCount = useMemo(
+    () =>
+      [...exceptions.keys()].filter(
+        (i) => i < completed && blocker?.taskIndex !== i && finding?.taskIndex !== i,
+      ).length,
+    [exceptions, completed, blocker, finding],
+  )
   // A halted task ran and produced nothing. Counting it as complete gave
   // "5/5 tasks" directly above a panel saying the run had stopped.
   const haltedCount = finding?.taskIndex !== undefined ? 1 : 0
@@ -1250,6 +1280,8 @@ function StepCockpit({
                 {/* Clamped for the same reason as the halted branch below. */}
                 {Math.max(0, Math.min(completed, step.tasks.length) - skippedCount)}/
                 {runnableCount} tasks · {skippedCount} skipped
+                {exceptionCount > 0 &&
+                  ` · ${exceptionCount} exception${exceptionCount === 1 ? "" : "s"}`}
               </>
             )
           ) : (
@@ -1261,6 +1293,12 @@ function StepCockpit({
               {Math.max(0, Math.min(completed, step.tasks.length) - haltedCount)}/
               {step.tasks.length} tasks
               {haltedCount > 0 && " · 1 halted"}
+              {/* Appended, never deducted. Unlike a halted task, a task with an
+                  exception ran and produced its artefact — shrinking the
+                  numerator would deny work the agent actually did. What is
+                  wrong is the result, and that is what the suffix names. */}
+              {exceptionCount > 0 &&
+                ` · ${exceptionCount} exception${exceptionCount === 1 ? "" : "s"}`}
               {/* Appended rather than deducted from the count: unlike a halted
                   task, a task awaiting release DID run and did produce its
                   artefact. Shrinking the numerator would deny the agent work
@@ -1292,6 +1330,15 @@ function StepCockpit({
             // A tick here would credit the agent with a score it declined to
             // compute — the exact claim this stop exists to prevent.
             const isHalted = finding?.taskIndex === i && !isRunning
+            // The task RAN, produced its artefact, and that artefact records a
+            // failure. Gated on `isDone` because before the task runs there is
+            // no result to report — the artefacts are derived from the merchant
+            // and exist whether or not the agent has reached them, so an
+            // ungated read would condemn work nobody has started. Ranked below
+            // failed and halted: those already state a stronger outcome, and
+            // two verdicts on one row is worse than the tick was.
+            const exception =
+              isDone && !isFailed && !isHalted && !isSkipped ? exceptions.get(i) : undefined
             const isPending = i >= completed && !isRunning && !isFailed && !isHalted
             const art = artifactFor(step.id, i, merchant)
             const outcome = artifactOutcome(art)
@@ -1315,11 +1362,13 @@ function StepCockpit({
                         ? "border-destructive/45 bg-destructive/15 text-destructive"
                         : isHalted
                           ? "border-destructive/45 bg-destructive/15 text-destructive"
-                          : isDone
-                            ? "border-success/40 bg-success/15 text-success"
-                            : isRunning
-                              ? "border-primary bg-primary/15 text-primary"
-                              : "border-border bg-secondary text-muted-foreground",
+                          : exception
+                            ? "border-destructive/45 bg-destructive/15 text-destructive"
+                            : isDone
+                              ? "border-success/40 bg-success/15 text-success"
+                              : isRunning
+                                ? "border-primary bg-primary/15 text-primary"
+                                : "border-border bg-secondary text-muted-foreground",
                   )}
                 >
                   {isSkipped ? (
@@ -1328,6 +1377,8 @@ function StepCockpit({
                     <AlertTriangle className="h-3.5 w-3.5" />
                   ) : isHalted ? (
                     <Pause className="h-3.5 w-3.5" />
+                  ) : exception ? (
+                    <AlertTriangle className="h-3.5 w-3.5" />
                   ) : isDone ? (
                     <Check className="h-3.5 w-3.5" />
                   ) : isRunning ? (
@@ -1358,6 +1409,18 @@ function StepCockpit({
                       Halted · {finding!.headline}
                     </p>
                   )}
+                  {/* Named "Exception", not "Failed": the task did its job and
+                      the thing it examined is what fell short. The detail is on
+                      the row rather than behind the click, because a red mark
+                      whose reason is hidden only tells you to go looking. */}
+                  {exception && (
+                    <p className="mt-1 text-xs font-medium leading-relaxed text-destructive">
+                      Exception · {exception.headline}
+                      <span className="block font-normal text-muted-foreground">
+                        {exception.detail}
+                      </span>
+                    </p>
+                  )}
                   {/* The verdict, on the row. Naming the artefact told you
                       where to look but not what it found, so "did the load
                       work?" needed a click. GATED ON `isDone`: a headline like
@@ -1366,7 +1429,10 @@ function StepCockpit({
                       withheld when the task failed, halted or was skipped,
                       each of which already states its own outcome above and
                       would otherwise be contradicted by the artefact's. */}
-                  {isDone && !isSkipped && !isFailed && !isHalted && outcome && (
+                  {/* `!exception` too: a records artefact whose own outcome is
+                      the failure would otherwise print the same verdict twice,
+                      once as an exception and once as its headline. */}
+                  {isDone && !isSkipped && !isFailed && !isHalted && !exception && outcome && (
                     <p
                       className={cn(
                         "mt-1 text-xs font-medium leading-relaxed",
