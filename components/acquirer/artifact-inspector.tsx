@@ -34,6 +34,7 @@ import {
   promiseDate,
   deliveryGeo,
   warehousesByDistance,
+  consignmentFacts,
   fmtDate,
   isoDate,
   eur,
@@ -485,6 +486,109 @@ function DeliveryView({ merchant, draft, onDraft, note, title }: Props & { note:
   )
 }
 
+/* ----------------------------------------------------------- consignment */
+
+/** The ship-stage twin of `DeliveryView`. Same journey, no controls: the
+ *  service level and the date were settled at step 03 and the goods are with
+ *  the carrier, so everything here is REPORTED. It carries no `editable` flag,
+ *  which is what keeps the "Yours to change" badge off a panel where nothing
+ *  is. */
+function ConsignmentView({ merchant, draft, note, title }: Props & { note: string; title: string }) {
+  const f = consignmentFacts(merchant)
+  const service = SERVICE_LEVELS.find((s) => s.id === draft.serviceId)!
+
+  const points = useMemo(() => {
+    if (!f.geo) return []
+    const list: MapPoint[] = [{ lat: f.geo.lat, lng: f.geo.lng, label: f.geo.label, role: "destination" }]
+    if (f.origin) {
+      list.unshift({ lat: f.origin.wh.lat, lng: f.origin.wh.lng, label: f.origin.wh.name, role: "origin" })
+    }
+    return list
+  }, [f.geo, f.origin])
+
+  return (
+    <Shell title={title} note={note}>
+      {f.geo ? (
+        <>
+          <div className="h-52 overflow-hidden rounded-xl border border-border/70">
+            <DeliveryMap points={points} />
+          </div>
+          <div className="mt-3 flex gap-2 rounded-xl border border-border/70 bg-white/60 p-3">
+            <MapPin className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-foreground">{f.geo.label}</p>
+              <p className="text-xs text-muted-foreground">{f.geo.address}</p>
+              {f.origin && (
+                <p className="mt-1 font-mono text-[11px] text-muted-foreground">
+                  from {f.origin.wh.name} · {f.origin.distanceKm} km
+                </p>
+              )}
+            </div>
+          </div>
+        </>
+      ) : (
+        <div className="rounded-xl border border-border/70 bg-white/60 p-4">
+          <Absent>No delivery point on file for this merchant, so no route can be drawn.</Absent>
+        </div>
+      )}
+
+      <div className="mt-4 rounded-xl border border-border/70 bg-white/60 p-3">
+        <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+          Agreed at order
+        </p>
+        <Row>
+          <span className="text-xs text-muted-foreground">Service level</span>
+          <span className="text-sm font-medium text-foreground">
+            {service.label} · {service.workingDays} working day{service.workingDays === 1 ? "" : "s"}
+          </span>
+        </Row>
+        <Row>
+          <span className="text-xs text-muted-foreground">Committed date</span>
+          {/* Read straight off the order draft, NOT recomputed. The editor ran
+              `promiseDate(..., new Date())`, so this line used to re-derive an
+              "earliest" date from TODAY and drift a day at a time away from the
+              thing the note says it is measured against. */}
+          {draft.requestedIso ? (
+            <span className="font-mono text-sm font-semibold tabular-nums text-foreground">
+              {fmtDate(new Date(`${draft.requestedIso}T00:00:00`))}
+            </span>
+          ) : (
+            <Absent>No date was set at order</Absent>
+          )}
+        </Row>
+      </div>
+
+      <div className="mt-3 rounded-xl border border-border/70 bg-white/60 p-3">
+        <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+          Booked by Ingenico
+        </p>
+        <Row>
+          <span className="text-xs text-muted-foreground">Carrier</span>
+          <span className="text-sm font-medium text-foreground">{f.carrier}</span>
+        </Row>
+        <Row>
+          <span className="text-xs text-muted-foreground">Collection reference</span>
+          <span className="font-mono text-sm text-foreground">{f.collectionRef}</span>
+        </Row>
+        <Row>
+          <span className="text-xs text-muted-foreground">Parcels in transit</span>
+          <span className="font-mono text-sm tabular-nums text-foreground">{f.parcels}</span>
+        </Row>
+      </div>
+
+      {/* A live carrier feed is not wired up. Saying "in transit" and stopping
+          would let the reader assume the absence of an exception IS a clean
+          run, so the gap is named rather than left to be inferred. */}
+      <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground">
+        Per-parcel scan events and a confirmed arrival time come from the carrier through Ingenico, and
+        are not on this record yet. To move the date or the service level, raise it with Ingenico
+        logistics in the handoff below — it cannot be changed here once the consignment is with the
+        carrier.
+      </p>
+    </Shell>
+  )
+}
+
 /* --------------------------------------------------------------- pricing */
 
 function PricingView({ draft, note, title }: Props & { note: string; title: string }) {
@@ -871,6 +975,8 @@ export function ArtifactInspector(props: Props) {
       return <StockView {...props} title={artifact.title} note={artifact.note} />
     case "delivery":
       return <DeliveryView {...props} title={artifact.title} note={artifact.note} />
+    case "consignment":
+      return <ConsignmentView {...props} title={artifact.title} note={artifact.note} />
     case "pricing":
       return <PricingView {...props} title={artifact.title} note={artifact.note} />
     case "records":

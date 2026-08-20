@@ -323,7 +323,10 @@ export const PIPELINE: PipelineStep[] = [
       {
         label: "Book the carrier",
         detail: "Selects a carrier and books collection from the warehouse.",
-        output: "ship.book → carrier=DPD, pickup booked",
+        // Unreachable while the derived trace covers 7.x, but it named a
+        // DIFFERENT carrier (DPD) from the one every artefact on this step
+        // reports — a fallback that contradicts the thing it stands in for.
+        output: "ship.book → carrier=DHL Freight, pickup booked",
       },
       {
         label: "Print labels",

@@ -409,6 +409,23 @@ export function licenceUnits(merchant: Merchant): DeviceUnit[] {
   return deviceUnits(merchant).filter((u) => !u.physical)
 }
 
+/** What Ingenico logistics booked. One source, because the carrier name and the
+ *  collection reference are quoted by the booking artefact, the trace line AND
+ *  the tracking view — three copies of one fact on a single step, which is
+ *  exactly how the config record came to list a scheme the acceptance desk
+ *  said was off. */
+export function consignmentFacts(merchant: Merchant) {
+  const geo = deliveryGeo(merchant)
+  const nearest = geo ? warehousesByDistance(geo)[0] : null
+  return {
+    carrier: "DHL Freight",
+    collectionRef: `DHL-${tidBase(merchant.id)}`,
+    parcels: physicalUnits(merchant).length,
+    geo,
+    origin: nearest,
+  }
+}
+
 /** One sentence naming what the licence lines are excluded FROM, used wherever
  *  a physical-only count would otherwise look like a missing device. */
 function licenceNote(merchant: Merchant, excludedFrom: string): string {
@@ -479,6 +496,13 @@ export type Artifact =
   | { kind: "basket"; title: string; note: string }
   | { kind: "stock"; title: string; note: string }
   | { kind: "delivery"; title: string; note: string }
+  /** The ship-stage view of the SAME journey the `delivery` artefact planned —
+   *  read-only, because by then the decision is spent and the goods are moving.
+   *  A separate kind rather than a flag on `delivery`: the two answer different
+   *  questions ("what shall we ask for?" vs "what is Ingenico doing?"), and a
+   *  boolean would have left the order-time editor one prop away from
+   *  reappearing on a consignment already in transit. */
+  | { kind: "consignment"; title: string; note: string }
   | { kind: "pricing"; title: string; note: string }
   | {
       kind: "records"
@@ -697,7 +721,8 @@ export function traceFor(
     case "7.3": {
       const n = physicalUnits(merchant).length
       if (n === 0) return "ship.skip → software-only order, nothing to despatch"
-      if (taskIndex === 0) return `ship.book → carrier=DHL Freight, ${n} parcel(s), pickup booked`
+      if (taskIndex === 0)
+        return `ship.book → carrier=${consignmentFacts(merchant).carrier}, ${n} parcel(s), pickup booked`
       if (taskIndex === 1) return `label.print → ${n} labels, 1 manifest`
       if (taskIndex === 2) return `dispatch.confirm → ${n} parcels in transit`
       return `track.notify → merchant emailed tracking for ${n} parcel(s)`
@@ -1487,8 +1512,8 @@ export function artifactFor(
 
     /* 07 Ship — the step where the physical/licence split first bites. */
     case "7.0": {
-      const geo = deliveryGeo(merchant)
-      const nearest = geo ? warehousesByDistance(geo)[0] : null
+      const f = consignmentFacts(merchant)
+      const nearest = f.origin
       const phys = physicalUnits(merchant)
       if (phys.length === 0) return softwareOnly(merchant, "shipment")
       return {
@@ -1496,7 +1521,7 @@ export function artifactFor(
         title: "Carrier booking",
         note: "The collection, not the promise. The date this has to meet is on the Delivery artefact at step 03 — restating it here would give it a second place to drift.",
         rows: [
-          { label: "Carrier", value: "DHL Freight", source: "framework agreement, road lane" },
+          { label: "Carrier", value: f.carrier, source: "framework agreement, road lane" },
           {
             label: "Collection from",
             value: nearest ? `${nearest.wh.name}, ${nearest.wh.city}` : null,
@@ -1505,7 +1530,7 @@ export function artifactFor(
           { label: "Parcels booked", value: String(phys.length), source: "one per physical unit" },
           {
             label: "Collection reference",
-            value: `DHL-${tidBase(merchant.id)}`,
+            value: f.collectionRef,
             source: "carrier API",
           },
           { label: "Collection window", value: null, source: "carrier confirms the slot the evening before" },
@@ -1550,9 +1575,14 @@ export function artifactFor(
     case "7.3":
       if (physicalUnits(merchant).length === 0) return softwareOnly(merchant, "shipment")
       return {
-        kind: "delivery",
+        kind: "consignment",
         title: "Tracking",
-        note: "The consignment in flight, against the date committed at order.",
+        // Was `kind: "delivery"`, which rendered the ORDER-TIME EDITOR here:
+        // service-level buttons and a date picker, on a step whose own trace
+        // reads `dispatch.confirm → parcels in transit`. Shipping is Ingenico's
+        // to execute and the choice was spent at step 03, so offering it again
+        // was a control that could not act on anything in front of it.
+        note: "What Ingenico has done with the consignment, against the date committed at order. Shipping is theirs to execute — nothing here is yours to change.",
       }
 
     /* 08 Install */
