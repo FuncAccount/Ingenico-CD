@@ -58,10 +58,15 @@ export const STEP_HANDOFFS: Record<StepId, Handoff[]> = {
   1: [
     {
       party: "acquirer",
-      ask: "Confirm the recommended setup before it becomes an application.",
+      ask: "Confirm the shaped profile and recommended setup before it becomes an application.",
       action: "Confirm setup",
+      /* Names the INFERENCE explicitly. Capture now reads documents, corroborates
+         them against the register, and reads the merchant's website — and only
+         that last one is a judgement rather than a record. This is the moment
+         the acquirer takes ownership of it, so it has to be stated here rather
+         than left in a panel they may not have opened. */
       commits:
-        "You are accepting this merchant as your customer and the recommended device mix as the basis of the order.",
+        "You are accepting this merchant as your customer, the business profile the agent inferred from web research, and the recommended device mix as the basis of the order.",
     },
   ],
   // The risk lane. KYC (10) and Pricing (11) run BEFORE Underwriting (2)

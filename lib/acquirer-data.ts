@@ -51,11 +51,13 @@ export interface InputSource {
   name: string
   origin: SourceOrigin
   /**
-   * `primary` is the material the application is built FROM; `enrichment` is
-   * corroboration layered on top. Drawn differently on purpose — a flat row of
-   * equal pills would say the registry and the merchant's own paperwork carry
-   * the same weight, when the whole point of enrichment is that it is
-   * independent of the party being assessed.
+   * `primary` is the material the application is built FROM. Only primary
+   * sources are rendered: an enrichment source is, in every case so far, also
+   * a tool the agent operates, so listing it here as well printed the same
+   * name twice on adjacent rows. The value is kept in the union because a
+   * corroborating source that is NOT a tool is a real possibility (a document
+   * the acquirer holds outside any system), and it should be filed honestly
+   * when one appears rather than promoted to primary.
    */
   role: "primary" | "enrichment"
   detail: string
@@ -137,32 +139,19 @@ export const PIPELINE: PipelineStep[] = [
       externalTool("Public registries"),
       externalTool("Web research"),
     ],
-    /* Capture is dominated by DOCUMENTS, not typed fields. The merchant hands
-       over a bundle; everything else on this step exists to corroborate it. */
+    /* Capture is dominated by DOCUMENTS, not typed fields: the merchant hands
+       over a bundle, and everything else on this step exists to corroborate it.
+    
+       Only the primary source is listed. The three enrichment sources — CRM,
+       registries, web research — are all in `tools` above, and carrying them
+       here too printed each name twice on adjacent rows. Corroboration is
+       stated in `agentMission` and evidenced per-task instead. */
     sources: [
       {
         name: "Uploaded documents",
         origin: "merchant",
         role: "primary",
         detail: "The bundle the merchant supplied — incorporation, address, ID, bank statement",
-      },
-      {
-        name: "Merchant CRM",
-        origin: "acquirer",
-        role: "enrichment",
-        detail: "Anything already on file for this applicant in your own system",
-      },
-      {
-        name: "Public registries",
-        origin: "external",
-        role: "enrichment",
-        detail: "Registration, directors and tax ID, independent of the applicant",
-      },
-      {
-        name: "Web research",
-        origin: "external",
-        role: "enrichment",
-        detail: "What the business says it does in public, to corroborate the stated sector",
       },
     ],
     integration:
@@ -220,12 +209,12 @@ export const PIPELINE: PipelineStep[] = [
     // Confirming now releases BOTH lanes, not just underwriting. Saying only
     // "hands it to underwriting" would describe the old sequential pipeline
     // and hide the very thing that compresses the timeline.
-    // Keeps the parallel-lane claim (confirming releases BOTH lanes, which is
-    // what compresses the timeline) and adds the inference caveat: the business
-    // profile read off the open web is the one thing here the agent GUESSED, so
-    // it must be named at the point of confirmation rather than buried in a panel.
-    handback:
-      "Confirm the shaped profile and recommended setup before it becomes an application — including the business profile inferred from web research. Confirming starts underwriting and the kit build at the same time.",
+    // NOTE: `handback` is currently rendered NOWHERE — the surface that actually
+    // asks for confirmation is `STEP_HANDOFFS` in lib/handoffs.ts, and that is
+    // where the web-inference caveat had to go. Left as-is deliberately: editing
+    // unread copy would look like the claim had been updated when nothing on
+    // screen changed.
+    handback: "The decision is yours. Confirming starts underwriting and the kit build at the same time.",
   },
   /* The risk lane, in running order: KYC → Pricing → Underwriting.
    *
