@@ -129,7 +129,14 @@ export function DelegationTrace({
           />
           <div
             className={cn(
-              "rounded-lg border border-dashed px-3 py-2.5",
+              // SOLID, not dashed. Dashed now belongs to the purple demo
+              // controls that fabricate evidence, and this box reports a real
+              // round trip the product performs — a dashed edge beside the
+              // words "Returned its result" invites reading a genuine provider
+              // reply as a simulated one. "Outside our boundary" is already
+              // carried by the indent, the elbow and the corner arrow, which is
+              // a stronger statement than a border style anyway.
+              "rounded-lg border px-3 py-2.5",
               // Amber only while it is genuinely out. Otherwise neutral: the
               // party is external whether or not anyone is waiting, and
               // colouring the arrangement would make "not ours" look like a
@@ -205,7 +212,9 @@ export function DelegationTrace({
  */
 export function DelegationChip({ delegate, beat }: { delegate: Delegation; beat: Beat }) {
   return (
-    <span className="mt-1 inline-flex max-w-full items-center gap-1.5 rounded-md border border-dashed border-border bg-secondary/50 px-2 py-0.5 text-[11px] text-muted-foreground">
+    // Solid for the same reason as the panel box: a real handoff must not
+    // borrow the demo controls' dashed edge.
+    <span className="mt-1 inline-flex max-w-full items-center gap-1.5 rounded-md border border-border bg-secondary/50 px-2 py-0.5 text-[11px] text-muted-foreground">
       {beat === "sent" ? (
         <PulseDot />
       ) : (

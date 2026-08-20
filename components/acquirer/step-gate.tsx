@@ -6,7 +6,6 @@ import {
   Building2,
   CheckCircle2,
   Clock,
-  Inbox,
   AlertTriangle,
   Mail,
   Send,
@@ -591,17 +590,20 @@ function IngenicoPanel({
 
       {/* The acquirer does not report Ingenico's work, so this is not an
           approval — it stands in for the inbound feed this prototype has no
-          connection to, and is labelled as such rather than dressed as a
-          control the acquirer would really have. */}
-      <button
-        onClick={() =>
+          connection to.
+
+          Uses `DemoInbound` rather than its own grey dashed button. It was
+          hand-rolled here while the merchant panel below called the shared
+          component, so two controls that fabricate an inbound reply in exactly
+          the same way rendered in two different liveries — and grey dashed is
+          the app's own "empty / not yet" vocabulary, so the one control that
+          forges evidence was wearing product colours. */}
+      <DemoInbound
+        label={`Simulate inbound: ${handoff.team} responds`}
+        onTrigger={() =>
           onChange({ ...state, requestedIso: requested, returnedIso: new Date().toISOString() })
         }
-        className="inline-flex items-center gap-2 rounded-lg border border-dashed border-border bg-transparent px-3 py-1.5 text-[11px] font-medium text-muted-foreground transition-colors hover:border-foreground/30 hover:text-foreground"
-      >
-        <Inbox className="h-3.5 w-3.5" />
-        Simulate inbound: {handoff.team} responds
-      </button>
+      />
     </div>
   )
 }
