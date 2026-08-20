@@ -686,79 +686,6 @@ export type DossierFinding = {
   corroborated?: boolean
 }
 
-export type ExperimentVariant = {
-  key: "A" | "B"
-  /** Short name, e.g. "Waive setup". The key is rendered separately. */
-  label: string
-  terms: { label: string; value: string }[]
-  /** True for the variant that IS the tariff recommended one card up. Shipping
-   *  the other one contradicts that card, and the interface has to say so —
-   *  a pricing decision that silently disagrees with the rates above it is how
-   *  two numbers for the same merchant reach the merchant. */
-  matchesRecommendedTariff: boolean
-}
-
-export type ExperimentMetric = {
-  key: string
-  label: string
-  unit: "pct" | "gbp"
-  /**
-   * Months before this metric can be READ at all. 0 = observable at the point
-   * of sale. This is the field that makes the trade honest: a metric the model
-   * cannot separate is only worth testing if you can afford to wait out its
-   * horizon, and a 12-month revenue figure cannot be read next quarter no
-   * matter how the cohort fills.
-   */
-  horizonMonths: number
-  a: [number, number]
-  b: [number, number]
-}
-
-/**
- * Where the two modelled bands overlap, or `null` when they are separated.
- *
- * This is the whole reason a test exists. Where the bands are disjoint the
- * model has already answered the question and running a test re-measures
- * something it can state today; where they overlap it genuinely cannot tell
- * the variants apart, and only enrolment can.
- */
-export function metricOverlap(m: ExperimentMetric) {
-  const lo = Math.max(m.a[0], m.b[0])
-  const hi = Math.min(m.a[1], m.b[1])
-  if (hi <= lo) return null
-  const width = hi - lo
-  return {
-    lo,
-    hi,
-    width,
-    // Share of each variant's OWN range, not of some pooled span: the bands
-    // are different widths, so one percentage would flatter the narrower one.
-    shareOfA: width / (m.a[1] - m.a[0]),
-    shareOfB: width / (m.b[1] - m.b[0]),
-  }
-}
-
-/**
- * What the test would and would not buy, derived from the bands rather than
- * asserted, so it cannot drift out of step with the numbers on screen.
- */
-export function experimentReading(a: Extract<Artifact, { kind: "experiment" }>) {
-  const separated = a.metrics.filter((m) => !metricOverlap(m))
-  const unresolved = a.metrics.filter((m) => metricOverlap(m))
-  return {
-    separated,
-    unresolved,
-    /**
-     * Earliest the test could be CALLED: the slowest unresolved metric's
-     * horizon. Null when nothing is unresolved — in which case the honest
-     * answer is that the test buys nothing, not that it resolves instantly.
-     */
-    earliestCallMonths: unresolved.length
-      ? Math.max(...unresolved.map((m) => m.horizonMonths))
-      : null,
-  }
-}
-
 export type Artifact =
   | { kind: "basket"; title: string; note: string }
   | { kind: "stock"; title: string; note: string }
@@ -895,32 +822,6 @@ export type Artifact =
       }
     }
   | { kind: "table"; title: string; note: string; table: TableArtifact }
-  /** A proposed A/B test. A decision surface, not a read-out: the agent
-   *  proposes running one, and the acquirer either runs it or overrules it by
-   *  shipping a variant outright. Rendered as a table it was inert — a
-   *  proposal nobody could accept or decline. */
-  | {
-      kind: "experiment"
-      title: string
-      note: string
-      variants: [ExperimentVariant, ExperimentVariant]
-      metrics: ExperimentMetric[]
-      split: string
-      /** How many of this merchant type the acquirer signs in a week.
-       *
-       *  Deliberately NOT used to compute a time-to-fill — that needs a cohort
-       *  size, which `cohortGap` explains is not available. What it does size
-       *  is the COMMITMENT: at this rate, this many merchants get priced under
-       *  the split before the first reading is possible, which is the part of
-       *  "run the test" that otherwise looks free. */
-      merchantsPerWeek: number
-      /** Why the cohort is NOT sized here. Naming the gap beats printing a
-       *  sample size the pricing book has no variance data to support —
-       *  a fabricated N is far worse than an admitted one, because it arrives
-       *  dressed as arithmetic. */
-      cohortGap: string
-      illustrative: string
-    }
   | {
       kind: "document"
       title: string
@@ -1133,7 +1034,7 @@ export function traceFor(
       const art = artifactFor(5, 3, merchant)
       if (art?.kind !== "records") return null
       const sum = art.rows.find((r) => r.label === "Checksum")?.value
-      return `build.sign → ${deviceUnits(merchant).length} profiles sealed, ${sum ?? "checksum not recorded"}`
+      return `build.sign �� ${deviceUnits(merchant).length} profiles sealed, ${sum ?? "checksum not recorded"}`
     }
     case "6.0": {
       const n = physicalUnits(merchant).length
@@ -2116,62 +2017,6 @@ export function artifactFor(
         },
         illustrative: "Illustrative. Modelled from comparable merchants — not an offer, and not a commitment to a rate.",
       }
-    case "11.2":
-      return {
-        kind: "experiment",
-        title: "Proposed A/B test",
-        note: "Pricing is a speed-versus-risk trade. The agent proposes a test rather than asserting one right answer — but proposing is not deciding, and the call below is yours.",
-        variants: [
-          {
-            key: "A",
-            label: "Waive setup",
-            terms: [
-              { label: "Setup fee", value: "£0" },
-              { label: "Monthly", value: "£19" },
-            ],
-            // Matches the tariff card on the task above: £19/mo, £0 setup.
-            matchesRecommendedTariff: true,
-          },
-          {
-            key: "B",
-            label: "Charge setup",
-            terms: [
-              { label: "Setup fee", value: "£99" },
-              { label: "Monthly", value: "£15" },
-            ],
-            matchesRecommendedTariff: false,
-          },
-        ],
-        /* The two metrics behave completely differently, and that asymmetry is
-           the finding: sign-up is separated and immediate, revenue is
-           overlapping and a year out. Held as numbers so the verdict is
-           computed from the bands rather than typed beside them. */
-        metrics: [
-          {
-            key: "signup",
-            label: "Sign-up rate",
-            unit: "pct",
-            horizonMonths: 0,
-            a: [58, 71],
-            b: [41, 56],
-          },
-          {
-            key: "revenue",
-            label: "12-month revenue per merchant",
-            unit: "gbp",
-            horizonMonths: 12,
-            a: [28400, 34700],
-            b: [24100, 32900],
-          },
-        ],
-        split: "50/50",
-        merchantsPerWeek: 6,
-        cohortGap:
-          "The agent has not sized the cohort. Separating two overlapping revenue bands depends on how much revenue varies between merchants on the same tariff, and the pricing book records billed totals, not that spread.",
-        illustrative:
-          "Illustrative. Bands are modelled from comparable merchants — not an offer, and not a commitment to a rate.",
-      }
-
     /* R3 Underwriting (id 2) — credit risk. Keeps id 2 through the split, so
        these cases keep their keys; only the TASK INDEXES moved, because the two
        screening tasks left for KYC. */

@@ -310,14 +310,12 @@ export const PIPELINE: PipelineStep[] = [
         detail: "Proposes monthly, setup and per-transaction rates for this merchant type.",
         output: "tariff.recommend → £19/mo, £0 setup, card 1.4% / wallet 0.9%",
       },
-      {
-        label: "Propose an A/B test",
-        detail: "Suggests a variant to test, because conversion moves sharply with the upfront fee.",
-        output: "experiment.propose → setup £0 vs £99, split 50/50",
-      },
     ],
+    // "the agent shows both sides" meant the two A/B variants. With the test
+    // removed there is no "both sides" anywhere on this step, so the sentence
+    // would have gone on pointing at something the step no longer contains.
     handback:
-      "The commercial call is yours. Pricing is a speed-versus-risk trade — the agent shows both sides rather than picking for you.",
+      "The commercial call is yours. The agent proposes rates within the bands you allow and shows what they cost in sign-ups — it does not set the price for you.",
   },
   {
     id: 2,
