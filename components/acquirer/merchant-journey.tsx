@@ -987,8 +987,34 @@ function StepCockpit({
           .join("; ")}.`
       }
     }
+
+    // GENERIC BACKSTOP — and the one that actually matters.
+    //
+    // Everything above names a blocker in its own step's terms, which reads
+    // better than anything generic can. But an enumeration only covers the
+    // steps somebody remembered to put on it, and this control COMMITS. Step
+    // 03 was not on the list, so a delivery address that does not resolve to a
+    // serviceable route left "Place the order" fully live — and the order got
+    // placed against it, recorded as "Approved by you" with a timestamp. An
+    // order that cannot be delivered is not a decision anyone is entitled to
+    // take, and the step was already displaying the reason directly above the
+    // button.
+    //
+    // So the last word goes to a rule that cannot be under-listed: if this
+    // step is carrying an unresolved finding, its decision is not available.
+    // Both reads come from the same calls the step badge and the rail marker
+    // use, so the button cannot be live while the header above it says
+    // Finding.
+    //
+    // One read, not two. A recorded exception is now reported by
+    // `blockingFinding` itself, so asking `blocker` separately here would be a
+    // second path to the same claim — and the two could only ever drift apart.
+    // What arrives is the exception's own `summary` and `consequence`, which
+    // is the part the acquirer needs: not merely that something failed, but
+    // what placing anyway would cost.
+    if (finding) return `${finding.headline}. ${finding.detail}`
     return null
-  }, [step.id, merchant, edge, theme])
+  }, [step.id, merchant, edge, theme, finding])
 
   return (
     <div

@@ -19,6 +19,7 @@ import { MODELS, configProfile, orderLines, type ModelId } from "@/lib/devices"
 // constant derived from these would evaluate mid-cycle and read `undefined`.
 import { defaultAcceptance, liveSchemeLabel } from "@/lib/scheme-acceptance"
 import { exceptionOnStep } from "@/lib/exceptions"
+import { streetFor } from "@/lib/addresses"
 import { countryOf, distanceKm } from "@/lib/geo"
 // No cycle: `underwriting` only reaches back to `acquirer-data`.
 import { outstandingDocuments } from "@/lib/underwriting"
@@ -120,19 +121,28 @@ const CITY: Record<string, { lat: number; lng: number }> = {
   "m-marisol": { lat: 39.4699, lng: -0.3763 },
 }
 
-const STREET: Record<string, string> = {
-  "m-atlas": "18 Tib Street, Northern Quarter",
-  "m-verde": "Rua da Prata 62",
-  "m-nordwind": "Eppendorfer Landstraße 77",
-  "m-solmar": "Paseo Marítimo Pablo Ruiz Picasso 21",
-  "m-brightline": "44 Dame Street",
-  "m-tavo": "Via Tortona 27",
-  "m-fjord": "Torgallmenningen 8",
-  "m-lumen": "Overtoom 301",
-  "m-cedar": "9 Victoria Street",
-  "m-havenport": "Quai du Port 14",
-  "m-kessler": "Königstraße 52",
-  "m-marisol": "Carrer de Colón 18",
+/** Whether the address on file resolves to a route the carrier will run.
+ *
+ *  A union rather than a boolean: an unserviceable address is only actionable
+ *  if it says WHY and on whose authority, and a bare `false` would have left
+ *  the panel showing a red state with nothing to correct. */
+export type DeliveryVerdict =
+  | { state: "serviceable" }
+  | { state: "unserviceable"; reason: string; source: string }
+
+/** Read from the logistics exception, which is where the failure is actually
+ *  recorded. Deriving it here rather than in each renderer is what stops the
+ *  trace, the panel and the task tick from disagreeing about one address. */
+export function deliveryVerdict(merchant: Merchant): DeliveryVerdict {
+  const blocked = exceptionOnStep(merchant, 3)
+  // Scoped to the delivery task specifically: a step-3 exception raised against
+  // the basket or the pricing says nothing about whether the carrier can reach
+  // the door, and marking the address unserviceable on its account would invent
+  // a second failure out of the first.
+  if (blocked && blocked.taskIndex === 2) {
+    return { state: "unserviceable", reason: blocked.found, source: blocked.source }
+  }
+  return { state: "serviceable" }
 }
 
 export function deliveryGeo(merchant: Merchant): Geo | null {
@@ -140,7 +150,9 @@ export function deliveryGeo(merchant: Merchant): Geo | null {
   if (!c) return null
   return {
     label: merchant.name,
-    address: `${STREET[merchant.id] ?? "Address on file"}, ${merchant.location}`,
+    // From `lib/addresses.ts`, which the logistics exception reads too, so the
+    // map and the failure it describes can never name different streets.
+    address: `${streetFor(merchant.id)}, ${merchant.location}`,
     ...c,
   }
 }
@@ -750,7 +762,21 @@ export function experimentReading(a: Extract<Artifact, { kind: "experiment" }>) 
 export type Artifact =
   | { kind: "basket"; title: string; note: string }
   | { kind: "stock"; title: string; note: string }
-  | { kind: "delivery"; title: string; note: string }
+  /** `verdict` is REQUIRED, and that is the whole point of it.
+   *
+   *  This artefact used to carry only a title and a note — no result at all —
+   *  so the task that "verifies the delivery address resolves to a serviceable
+   *  route" had nothing to record the answer in. Every surface therefore
+   *  defaulted to success: the trace printed "… serviceable, standard 3d" for a
+   *  merchant whose order was held precisely because the address does not
+   *  resolve, and the step badge read Complete over it. The Test step never had
+   *  this problem because its `txns` artefact carries real fail rows to derive
+   *  from — so the fix is to give this one a verdict too, rather than to teach
+   *  each surface about the exception separately.
+   *
+   *  Optional would have reinstated the bug: an artefact that forgot to state
+   *  its verdict would read as a pass. */
+  | { kind: "delivery"; title: string; note: string; verdict: DeliveryVerdict }
   /** The ship-stage view of the SAME journey the `delivery` artefact planned —
    *  read-only, because by then the decision is spent and the goods are moving.
    *  A separate kind rather than a flag on `delivery`: the two answer different
@@ -1060,10 +1086,19 @@ export function traceFor(
         ? `availability.check → ${stock.shortLines.length} line(s) short, balance to follow`
         : `availability.check → all ${active.length} line(s) showing in stock`
     }
-    case "3.2":
-      return geo
-        ? `logistics.validate → ${geo.address} serviceable, ${service.label.toLowerCase()} ${service.workingDays}d`
-        : `logistics.validate → no delivery point on file`
+    case "3.2": {
+      if (!geo) return `logistics.validate → no delivery point on file`
+      // Derived from the artefact's own verdict, like 6.1 reads its fail rows.
+      // This line used to print "serviceable" unconditionally, so the merchant
+      // whose order was held for an unresolvable address had a machine trace
+      // asserting the opposite two panels above the exception explaining it —
+      // and a trace looks like tool output, so it is the more believable of the
+      // two.
+      const v = deliveryVerdict(merchant)
+      return v.state === "unserviceable"
+        ? `logistics.validate → ${geo.address} NOT serviceable, no route resolved, order held`
+        : `logistics.validate → ${geo.address} serviceable, ${service.label.toLowerCase()} ${service.workingDays}d`
+    }
     case "3.3": {
       const p = priceOrder(lines, service)
       return `pricing.apply → rate card ${RATE_CARD.id}, total ${eur(p.total)}`
@@ -1497,6 +1532,28 @@ export function blockingFinding(
   merchant: Merchant,
   ctx: ExceptionContext,
 ): { headline: string; detail: string; taskIndex?: number } | null {
+  /* A recorded exception outranks everything below it, and until now this
+   * function could not see one at all. `MerchantException` is the most
+   * explicit "this step is stopped" object in the codebase — it names the
+   * attempt, the finding, the source, the consequence and who owns the fix —
+   * and it reached exactly one surface: a red line on the failing task row.
+   * The step badge, the rail marker and the commit gate all read THIS
+   * function, so all three carried on as though the step were clean, and
+   * "Place the order" stayed live over a delivery address that does not
+   * resolve.
+   *
+   * `taskIndex` IS carried here, unlike the census below. These tasks really
+   * did stop: the merchant sits ON this step rather than past it, and the
+   * named task attempted its job and could not complete it. */
+  const stopped = exceptionOnStep(merchant, stepId)
+  if (stopped) {
+    return {
+      headline: stopped.summary,
+      detail: stopped.consequence,
+      taskIndex: stopped.taskIndex,
+    }
+  }
+
   // Underwriting halts at "Score the risk" when a mandatory document is
   // missing. `taskIndex` is carried so the row that REFUSED shows the halt
   // rather than a green tick — running a task and producing its output are
@@ -2234,7 +2291,12 @@ export function artifactFor(
         note: "Indicative, from Ingenico's published stock position. The order desk commits to it once you place the order.",
       }
     case "3.2":
-      return { kind: "delivery", title: "Delivery", note: "Where it ships to, from where, and the earliest date the network can commit to." }
+      return {
+        kind: "delivery",
+        title: "Delivery",
+        note: "Where it ships to, from where, and the earliest date the network can commit to.",
+        verdict: deliveryVerdict(merchant),
+      }
     case "3.3":
       return { kind: "pricing", title: "Order pricing", note: "Derived from the basket and the service level above — no figure here is typed by hand." }
 

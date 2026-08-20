@@ -1,4 +1,5 @@
 import type { Merchant, StepId } from "@/lib/acquirer-data"
+import { streetFor } from "@/lib/addresses"
 
 /**
  * A blocked step, modelled as data rather than prose.
@@ -56,6 +57,18 @@ export interface MerchantException {
   candidates?: Candidate[]
 }
 
+/* Derived from the SAME register the delivery map and trace read, so the
+ * failure cannot name a street the rest of the app has never heard of. These
+ * were typed by hand as "Via Roma 12/A and 12/B in 20121 Milano" while the
+ * register said Via Tortona 27 — the panel was asking someone to correct a
+ * record they would not have been able to find. The two near-matches are the
+ * whole point of this exception, so they are built from the real street, not
+ * asserted beside it. */
+const TAVO_STREET = streetFor("m-tavo") // "Via Tortona 27"
+const TAVO_NUMBER = TAVO_STREET.split(" ").pop()!
+const TAVO_A = `${TAVO_STREET}/A, Milan, IT`
+const TAVO_B = `${TAVO_STREET}/B, Milan, IT`
+
 const EXCEPTIONS: Record<string, MerchantException> = {
   "m-tavo": {
     step: 3,
@@ -64,7 +77,7 @@ const EXCEPTIONS: Record<string, MerchantException> = {
     attempted:
       "Resolve the address on the application to a carrier route, so the order can be released to fulfilment with a committed delivery date.",
     found:
-      "No such street number at that postcode. The carrier database has Via Roma 12/A and 12/B in 20121 Milano, but no plain number 12 — so the address on file cannot be delivered to as written.",
+      `No such street number at that postcode. The carrier database has ${TAVO_A} and ${TAVO_B}, but no plain number ${TAVO_NUMBER} — so the address on file cannot be delivered to as written.`,
     source: "Logistics validation · carrier address database",
     consequence:
       "The order is held before release. Both terminals stay reserved against this merchant, so nothing is lost, but the delivery date does not start counting until the address is corrected.",
@@ -95,19 +108,19 @@ const EXCEPTIONS: Record<string, MerchantException> = {
       },
     ],
     needsHuman: {
-      limit: "The agent will not choose between 12/A and 12/B.",
+      limit: `The agent will not choose between ${TAVO_NUMBER}/A and ${TAVO_NUMBER}/B.`,
       owner: "merchant",
       why:
         "Both are real addresses, so the carrier would accept either — which is exactly why a near-match cannot stand in for the answer. Sending two terminals to the wrong door is a real loss and an unrecoverable one. Only the merchant knows which entrance is theirs.",
     },
     candidates: [
       {
-        value: "Via Roma 12/A, 20121 Milano MI",
+        value: TAVO_A,
         source: "Carrier address database",
         caveat: "Deliverable, but not evidence that this is the merchant's unit.",
       },
       {
-        value: "Via Roma 12/B, 20121 Milano MI",
+        value: TAVO_B,
         source: "Carrier address database",
         caveat: "Also deliverable. The registry does not distinguish between the two.",
       },
