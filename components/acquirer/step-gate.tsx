@@ -187,8 +187,17 @@ export function StepGate({
     onStates((prev) => ({ ...prev, [handoffKey(merchant.id, step, i)]: next }))
   }
 
-  // Step 9 has no handoff at all — nobody is waiting on anything. Saying so
-  // is better than an empty panel, which reads as a section that failed.
+  // Step 9 passes no work to another party. Saying so is better than an empty
+  // panel, which reads as a section that failed.
+  //
+  // A HANDOFF AND A RELEASE ARE NOT THE SAME ABSENCE. A handoff is work given
+  // to someone else; a release is work still sitting with the reader. This
+  // panel used to end "there is nothing to approve and nobody to chase",
+  // which was true of the first and false of the second — and it rendered
+  // directly beneath a live "Send the notice" button. Behind a green tick, it
+  // told the reader the step wanted nothing from them while two commits were
+  // waiting. The claim is now confined to the thing this panel actually
+  // measures: who else is involved.
   if (list.length === 0) {
     return (
       <Frame>
@@ -198,7 +207,8 @@ export function StepGate({
             <p className="text-sm font-medium text-foreground">No handoff on this step</p>
             <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
               The merchant simply trades. The first live payment reconciles itself to your
-              ledger, so there is nothing to approve and nobody to chase.
+              ledger, so nobody else has anything to do here and there is nobody to chase.
+              Anything still open is yours to release, above.
             </p>
           </div>
         </div>

@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import dynamic from "next/dynamic"
 import {
   Minus,
@@ -1927,6 +1927,21 @@ function DocumentView({
   const [body, setBody] = useState<string | null>(null)
   const current = body ?? drafted
   const isChanged = current.trim() !== drafted.trim()
+
+  // Grow the box to its content.
+  //
+  // Sizing by `\n` count under-measures every line that WRAPS, and the notice
+  // has one long settlement line that does. The result was a send control
+  // whose last lines sat below a fold, inside a box with no visible scrollbar
+  // — so the reader could dispatch a message to a customer without having
+  // seen the end of it. Measured off scrollHeight so wrapping is counted.
+  const boxRef = useRef<HTMLTextAreaElement | null>(null)
+  useEffect(() => {
+    const el = boxRef.current
+    if (!el) return
+    el.style.height = "auto"
+    el.style.height = `${el.scrollHeight}px`
+  }, [current, sendable])
   const readiness: PushReadiness = {
     edited: isChanged ? ["Notice text"] : [],
     gaps: [],
@@ -1957,12 +1972,12 @@ function DocumentView({
         </div>
         {sendable ? (
           <textarea
+            ref={boxRef}
             value={current}
             onChange={(e) => setBody(e.target.value)}
             spellCheck={false}
-            rows={Math.max(10, current.split("\n").length + 1)}
             aria-label={`${artifact.title} text`}
-            className="w-full resize-y bg-transparent px-3 py-3 font-mono text-[11px] leading-relaxed text-foreground outline-none focus:bg-white"
+            className="w-full resize-none overflow-hidden bg-transparent px-3 py-3 font-mono text-[11px] leading-relaxed text-foreground outline-none focus:bg-white"
           />
         ) : (
           <pre className="whitespace-pre-wrap px-3 py-3 font-mono text-[11px] leading-relaxed text-foreground">
