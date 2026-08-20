@@ -20,6 +20,8 @@ import { MODELS, configProfile, orderLines, type ModelId } from "@/lib/devices"
 import { defaultAcceptance, liveSchemeLabel } from "@/lib/scheme-acceptance"
 import { exceptionOnStep } from "@/lib/exceptions"
 import { countryOf, distanceKm } from "@/lib/geo"
+// No cycle: `underwriting` only reaches back to `acquirer-data`.
+import { outstandingDocuments } from "@/lib/underwriting"
 import { recordedScore, riskAssessment, SCORE_THE_RISK_TASK, UNDERWRITING_STEP } from "@/lib/underwriting"
 
 /* ------------------------------------------------------------------ money */
@@ -517,6 +519,22 @@ export interface TableArtifact {
   rows: string[][]
 }
 
+/**
+ * One file in the merchant's uploaded bundle, and what the agent made of it.
+ *
+ * `classified` is `string | null` and the null branch REQUIRES a `review`
+ * reason, because "the agent could not tell what this is" is not a low-confidence
+ * classification — it is no classification at all. Modelling it as a confidence
+ * score would have let an unrecognised file render as a typed document with a
+ * weak tag, which is the one row on this panel a human has to act on.
+ */
+export type IntakeRow = {
+  filename: string
+} & (
+  | { classified: string; confidence: "high" | "medium"; review?: never }
+  | { classified: null; confidence?: never; review: string }
+)
+
 export type Artifact =
   | { kind: "basket"; title: string; note: string }
   | { kind: "stock"; title: string; note: string }
@@ -591,6 +609,11 @@ export type Artifact =
        */
       outcome?: { state: "ok" | "warn" | "fail"; headline: string; detail: string }
     }
+  /** The uploaded bundle and the type the agent assigned each file. A separate
+   *  kind from `records` (a field and its value) and `checks` (a test and its
+   *  verdict): this answers "what did we receive, and does the agent know what
+   *  it is" — a classification, which can legitimately come back empty. */
+  | { kind: "intake"; title: string; note: string; rows: IntakeRow[] }
   | { kind: "checks"; title: string; note: string; rows: CheckRow[] }
   | { kind: "txns"; title: string; note: string; rows: TxnRow[] }
   | { kind: "table"; title: string; note: string; table: TableArtifact }
@@ -634,13 +657,24 @@ export function traceFor(
   const geo = deliveryGeo(merchant)
 
   switch (`${stepId}.${taskIndex}`) {
-    case "1.0":
-      return `intake.parse → sector=${merchant.sector} region=${merchant.location.split(", ").pop()} volume_band=${merchant.size}`
-    case "1.1": {
-      // Reads the SAME selection the table renders. Counting every merchant of
-      // this sector in any country made the trace contradict the table above
-      // it — and a trace line exists to let someone check the result, so a
-      // trace that disagrees with its own artifact is worse than none.
+    /* Capture. Each line is derived from the same call its panel renders — a
+       trace exists to let someone check a result, so one that disagrees with
+       its own artefact is worse than none. */
+    case "1.3": {
+      const missing = outstandingDocuments(merchant)
+      return `doc.checklist → 4 of ${4 + missing.length} required received${
+        missing.length ? `, outstanding: ${missing.join(", ")}` : ", none outstanding"
+      }`
+    }
+    case "1.5": {
+      const reg = registryFor(merchant)
+      return reg
+        ? `registry.enrich → ${reg.name} ${reg.number} confirmed, directors matched, tax id ok`
+        : `registry.enrich → no register on file for ${countryOf(merchant.location)}, nothing corroborated`
+    }
+    case "1.6":
+      return `web.research → ${websiteFor(merchant)} read, sector=${merchant.sector} corroborated, 0 restricted categories`
+    case "1.7": {
       const { peers, home, crossBorderOnly } = bookPeersByDistance(
         merchant.location,
         merchant.sector,
@@ -661,7 +695,7 @@ export function traceFor(
           : crossBorderOnly
             ? "cross-border"
             : `geo=${home}`
-      return `match.similar → ${peers.length} live ${merchant.sector.toLowerCase()} merchants, ${scope}${
+      return `recommend.kit → ${peers.length} live ${merchant.sector.toLowerCase()} merchants, ${scope}${
         median === null ? ", no median available" : `, median ${median} terminals`
       }`
     }
@@ -843,6 +877,84 @@ export function localeFor(merchant: Merchant): string | null {
 }
 
 /**
+ * The companies register for the merchant's country, and their number in it.
+ *
+ * Keyed by country because the register is NOT the same institution everywhere:
+ * quoting "Companies House" against an Innsbruck applicant would name a body
+ * that has never heard of them, and the acquirer's whole reason for reading this
+ * panel is to know which authority stands behind the number.
+ *
+ * Returns null for a country with no rule rather than guessing a format, so the
+ * enrichment step reports a gap it can name instead of a plausible fake.
+ */
+export function registryFor(merchant: Merchant): { name: string; number: string } | null {
+  const cc = countryOf(merchant.location)
+  const rule = REGISTRY_RULES[cc]
+  if (!rule) return null
+  // Deterministic per merchant: the same applicant must not be shown a
+  // different registration on every render.
+  let h = 0
+  for (const ch of merchant.id) h = (h * 31 + ch.charCodeAt(0)) % 1_000_000
+  return { name: rule.name, number: rule.format(String(h).padStart(6, "0")) }
+}
+
+const REGISTRY_RULES: Record<string, { name: string; format: (n: string) => string }> = {
+  UK: { name: "Companies House", format: (n) => `0${n}` },
+  IE: { name: "Companies Registration Office", format: (n) => n },
+  DE: { name: "Handelsregister", format: (n) => `HRB ${n}` },
+  AT: { name: "Firmenbuch", format: (n) => `FN ${n} x` },
+  FR: { name: "Registre du commerce", format: (n) => `${n} R.C.S.` },
+  ES: { name: "Registro Mercantil", format: (n) => `B-${n}` },
+  IT: { name: "Registro Imprese", format: (n) => `IT-${n}` },
+  PT: { name: "Registo Comercial", format: (n) => n },
+  NL: { name: "Kamer van Koophandel", format: (n) => `KvK ${n}` },
+  NO: { name: "Brønnøysund register", format: (n) => `NO ${n}` },
+  EE: { name: "Äriregister", format: (n) => n },
+  CZ: { name: "Obchodní rejstřík", format: (n) => `C ${n}` },
+}
+
+/** The site the agent read. `.example` is reserved for exactly this: a domain
+ *  that cannot resolve, so a demo can show which site was reviewed without
+ *  pointing a reader at somebody's real business. */
+export function websiteFor(merchant: Merchant): string {
+  const slug = merchant.name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "")
+    .slice(0, 24)
+  return `${slug}.example`
+}
+
+/**
+ * What the agent concluded the business actually does, in its own words.
+ *
+ * Keyed off the sector rather than restating it: an "inference" that repeats
+ * the applicant's own answer back corroborates nothing, and this row exists to
+ * be compared against the stated sector, not to echo it.
+ */
+export function inferredBusinessFor(merchant: Merchant): string {
+  const BY_SECTOR: Record<string, string> = {
+    Hospitality: "Coffee roasting and sit-in service across a small number of sites",
+    Retail: "Retail of outdoor and ski equipment, in store and online",
+    "Health & Fitness": "Membership gym and personal training",
+    Leisure: "Ticketed visitor attraction with on-site food and retail",
+    Automotive: "Vehicle servicing and parts retail",
+    Grocery: "Convenience grocery with extended opening hours",
+    Professional: "Professional services billed on appointment",
+  }
+  return BY_SECTOR[merchant.sector] ?? `${merchant.sector} trading from ${merchant.location}`
+}
+
+/** A masked settlement account, country-correct and stable per merchant. The
+ *  full number is deliberately never rendered: it is read off the statement to
+ *  prove it was captured, not to be displayed back on a review screen. */
+export function maskedAccountFor(merchant: Merchant): string {
+  const cc = countryOf(merchant.location)
+  let h = 0
+  for (const ch of merchant.id) h = (h * 17 + ch.charCodeAt(0)) % 10_000
+  return `${cc} ** **** **** **** ${String(h).padStart(4, "0")}`
+}
+
+/**
  * The verdict an artefact reached, if it reached one.
  *
  * Exists so the task row and the open panel read the SAME sentence: the row
@@ -1000,27 +1112,227 @@ export function artifactFor(
   const uw = merchant.underwriting
 
   switch (key) {
-    /* 01 Submit */
+    /* 01 Merchant capture.
+     *
+     * Capture is document-led: the merchant hands over a bundle, and tasks 1-5
+     * are the agent reading, quality-checking and reconciling it before anything
+     * is enriched. Everything below is DERIVED from the merchant — filenames are
+     * the one exception, since a merchant's own file naming is arbitrary by
+     * nature and that is exactly why task 1 has to classify it. */
     case "1.0":
       return {
-        kind: "records",
-        title: "Parsed intake",
-        note: "What the agent read out of your submission, before any enrichment.",
+        kind: "intake",
+        title: "Document intake",
+        note: "Every file the merchant sent, and the type the agent assigned it. Nothing here is taken on the filename.",
         rows: [
-          { label: "Legal name", value: merchant.name, source: "your submission" },
-          { label: "Sector", value: merchant.sector, source: "normalised from free text" },
-          { label: "Location", value: merchant.location, source: "your submission" },
-          { label: "Annual card volume", value: merchant.size, source: "banded" },
-          { label: "Devices requested", value: merchant.terminals, source: "your submission" },
+          { filename: "incorporation_cert.pdf", classified: "Incorporation certificate", confidence: "high" },
+          { filename: "utility_mar.pdf", classified: "Proof of address", confidence: "high" },
+          { filename: "passport_scan.jpg", classified: "Director ID", confidence: "high" },
+          { filename: "statement.pdf", classified: "Bank statement", confidence: "high" },
+          {
+            filename: "img_4471.jpg",
+            classified: null,
+            review: "No document type matched. Confirm what this is, or ask the merchant to re-send it.",
+          },
+        ],
+      }
+    /* Every field is tagged to the DOCUMENT it came out of, not just to
+     * "the merchant". Which paper a value was lifted from is what an
+     * underwriter re-checks first, and it is the difference between a figure
+     * the applicant asserted and one their bank printed. */
+    case "1.1": {
+      const reg = registryFor(merchant)
+      return {
+        kind: "records",
+        title: "Extracted fields",
+        note: "Read out of the documents by the agent. Nothing on this list was typed by you or by the merchant into a form.",
+        rows: [
+          { label: "Legal name", value: merchant.name, source: "from incorporation certificate" },
+          {
+            /* Read here, CONFIRMED at task 6. The two are different claims about
+               the same value, and this panel must only make the first one — a
+               number lifted off the applicant's own certificate is not yet
+               corroborated, and saying "confirmed" three tasks early would credit
+               the registry check before it ran. */
+            label: "Company number",
+            value: reg?.number ?? null,
+            source: reg
+              ? "from incorporation certificate, not yet corroborated"
+              : "the certificate carries one, but this country has no register rule on file",
+            ...(reg
+              ? {}
+              : {
+                  resolution: {
+                    owner: "Acquirer",
+                    when: "key it in before sign-off",
+                    blocking: false,
+                  },
+                }),
+          },
+          { label: "Registered address", value: merchant.location, source: "from proof of address" },
+          { label: "Settlement account", value: maskedAccountFor(merchant), source: "from bank statement" },
+          { label: "Directors", value: "2 named", source: "from incorporation certificate" },
+        ],
+      }
+    }
+    /* Quality is a SEPARATE pass from extraction: a field can be read cleanly
+     * off a document that is out of date, and a proof of address six months old
+     * is a compliance failure whatever the agent managed to lift from it. */
+    case "1.2":
+      return {
+        kind: "checks",
+        title: "Document quality",
+        note: "Legibility, currency and type, per document. Each row names what was actually checked.",
+        rows: [
+          {
+            label: "Incorporation certificate",
+            state: "pass",
+            evidence: "Legible, in date, matches the expected certificate layout",
+          },
+          {
+            label: "Proof of address",
+            state: "pass",
+            evidence: "Legible, dated within the last 3 months",
+          },
+          { label: "Director ID", state: "pass", evidence: "Legible, in date, photo page captured" },
+          {
+            label: "Bank statement",
+            state: "pass",
+            evidence: "Legible, dated within the last 3 months, account holder matches the legal name",
+          },
+        ],
+      }
+    /* The checklist is DERIVED from the merchant's own outstanding-document
+     * list, never typed. A hand-written "second owner ID outstanding" would go
+     * on asserting itself for merchants whose file is missing something else
+     * entirely — and this is the panel underwriting reads to know whether the
+     * chase has anything left in it. */
+    case "1.3": {
+      const missing = outstandingDocuments(merchant)
+      const required = [
+        "Incorporation certificate",
+        "Proof of address",
+        "Director / beneficial-owner ID",
+        "Bank statement",
+      ]
+      return {
+        kind: "checks",
+        title: "Required documents",
+        note:
+          missing.length > 0
+            ? `The required set for this merchant type. ${missing.length} still outstanding — requested from the merchant.`
+            : "The required set for this merchant type. Everything needed to open the file is here.",
+        rows: [
+          ...required.map<CheckRow>((label) => ({ label, state: "pass", evidence: "Received" })),
+          ...missing.map<CheckRow>((label) => ({
+            label,
+            state: "warn",
+            evidence: "Outstanding — requested from the merchant",
+          })),
+        ],
+      }
+    }
+    /* Reconciliation is what makes the bundle worth more than its parts: any one
+     * document can be internally perfect and still disagree with the next one. */
+    case "1.4":
+      return {
+        kind: "checks",
+        title: "Cross-source consistency",
+        note: "The documents checked against each other and against the application, field by field.",
+        rows: [
+          {
+            label: "Legal name",
+            state: "pass",
+            evidence: `"${merchant.name}" matches across the certificate and the bank statement`,
+          },
+          {
+            label: "Registered address",
+            state: "pass",
+            evidence: `${merchant.location} matches on the certificate and the proof of address`,
+          },
+          {
+            label: "Trading name",
+            state: "pass",
+            evidence: "The name used on the website matches the registered entity",
+          },
+        ],
+      }
+    /* Registry enrichment is the first INDEPENDENT source on this step —
+     * everything before it came from the applicant. Saying which register
+     * confirmed it is the whole value; "confirmed" on its own is unre-runnable. */
+    case "1.5": {
+      const reg = registryFor(merchant)
+      if (!reg) {
+        return {
+          kind: "checks",
+          title: "Registry enrichment",
+          note: `No companies register is wired up for ${countryOf(merchant.location)}, so nothing here was corroborated independently. The documents stand on their own until someone checks them.`,
+          rows: [
+            {
+              label: "Independent corroboration",
+              state: "warn",
+              evidence: "Not attempted — no register on file for this country",
+            },
+          ],
+        }
+      }
+      return {
+        kind: "checks",
+        title: "Registry enrichment",
+        note: `Corroborated against ${reg.name} — a source independent of the applicant.`,
+        rows: [
           {
             label: "Company number",
-            value: null,
-            source: "not supplied at intake",
-            resolution: {
-              owner: "Agent",
-              when: "looked up at KYC from the registry",
-              blocking: false,
-            },
+            state: "pass",
+            evidence: `${reg.number} confirmed against ${reg.name}`,
+          },
+          {
+            label: "Directors",
+            state: "pass",
+            evidence: `Both names on the certificate matched to the current ${reg.name} filing`,
+          },
+          {
+            label: "Tax ID",
+            state: "pass",
+            evidence: `Validated — ${vatFor(merchant) ?? "no tax rule on file for this country"}`,
+          },
+        ],
+      }
+    }
+    /* The one thing on this step the agent INFERRED rather than read. It is
+     * kept as its own panel, and its note says so, because an inference filed
+     * alongside extracted and registry-confirmed fields would inherit their
+     * standing — and this one is a reading of a website, not a record. */
+    case "1.6":
+      return {
+        kind: "records",
+        title: "Web research",
+        note: "Inferred from the open web, for your confirmation — not a decision.",
+        rows: [
+          {
+            label: "Website reviewed",
+            value: websiteFor(merchant),
+            source: "found from the registered entity name",
+          },
+          {
+            label: "Business the agent inferred",
+            value: inferredBusinessFor(merchant),
+            source: "read off the site's own copy",
+          },
+          {
+            label: "Stated sector",
+            value: `${merchant.sector} — corroborated by the website`,
+            source: "compared against your submission",
+          },
+          {
+            label: "Trading name",
+            value: "Matches the registered entity",
+            source: "site footer vs incorporation certificate",
+          },
+          {
+            label: "Prohibited or restricted categories",
+            value: "None detected on the site",
+            source: "scanned against your restricted-trades list",
           },
         ],
       }
@@ -1047,101 +1359,88 @@ export function artifactFor(
      * `LIVE_BOOK`, the acquirer's live estate, which is both deep enough to
      * answer locally and the population actually being described: merchants
      * running this kit TODAY, which an unapproved application is not. */
-    case "1.1": {
+    case "1.7": {
       const { home, local, peers, crossBorderOnly } = bookPeersByDistance(
         merchant.location,
         merchant.sector,
         distanceKm,
       )
 
-      /* Three merchants are the only one of their sector in the whole book
-       * (Health & Fitness, Leisure, Automotive). They used to render an EMPTY
-       * table under a note asserting "every comparator here is cross-border" —
-       * a description of rows that do not exist. An absence is not a result:
-       * name it instead of drawing an empty frame. */
-      if (peers.length === 0) {
-        return {
-          kind: "records",
-          title: "Look-alike merchants in your book",
-          note: `Nothing to compare against — this is the only ${merchant.sector.toLowerCase()} merchant in your book. Size the kit from the site survey rather than from a comparator.`,
-          rows: [
-            {
-              label: `Other ${merchant.sector.toLowerCase()} merchants`,
-              value: null,
-              source: `none in ${home} or any other market you hold`,
-            },
-          ],
-        }
-      }
+      /* The comparator basis travels WITH the recommendation rather than sitting
+       * in a table of its own. "6× A920" is only defensible because merchants
+       * like this one run that today, and a device mix on one screen with its
+       * evidence on another is a number the reader has to take on trust. Both
+       * are derived from the same call, so the count and the kit cannot drift.
+       *
+       * Three merchants are the only one of their sector in the whole book
+       * (Health & Fitness, Leisure, Automotive). An absence is not a result:
+       * that case says the kit was sized from the survey, rather than implying a
+       * comparator existed. */
+      const basis =
+        peers.length === 0
+          ? `No comparator — this is the only ${merchant.sector.toLowerCase()} merchant in your book, so the mix is sized from the site survey rather than read across from anyone.`
+          : crossBorderOnly
+            ? `Look-alike merchants in your book: ${peers.length}. Your book holds none in ${home}, so every comparator is cross-border — interchange and scheme mix differ, read the sizing with that in mind.`
+            : `Look-alike merchants in your book: ${peers.length} live ${merchant.sector.toLowerCase()} ${
+                peers.length === 1 ? "merchant" : "merchants"
+              } in ${home}${
+                local.length > peers.length ? ` (closest ${peers.length} of ${local.length})` : ""
+              }, ranked by distance from ${merchant.location}.`
 
       return {
-        kind: "table",
-        title: `Look-alike merchants in your book (${peers.length})`,
-        note: crossBorderOnly
-          ? `Live ${merchant.sector.toLowerCase()} merchants, ranked by distance from ${merchant.location}. Your book holds none in ${home}, so every comparator here is cross-border — read the figures with that in mind.`
-          : // State the size of the home-market pool, so a short list reads as
-            // "this is all your book holds" rather than a broken filter.
-            `Live ${merchant.sector.toLowerCase()} merchants in ${home}, ranked by distance from ${merchant.location}. ${
-              local.length > peers.length
-                ? `Closest ${peers.length} of ${local.length}.`
-                : `Your book holds ${local.length}.`
-            } Cross-border merchants are excluded — interchange, scheme mix and regulator all differ, so they do not read across.`,
-        table: {
-          columns: ["Merchant", "Location", "Distance", "Volume", "Devices"],
-          rows: peers.map(({ m, km }) => [
-            m.name,
-            m.location,
-            crossBorderOnly ? `${km} km · cross-border` : `${km} km`,
-            m.size,
-            m.terminals,
-          ]),
-        },
+        kind: "basket",
+        title: "Recommended kit",
+        note: `${basis} Expected annual card volume ${merchant.size}, banded. Adjust the mix before it becomes an order.`,
       }
     }
-    case "1.2":
-      return { kind: "basket", title: "Recommended kit", note: "The proposed device mix, priced. Adjust it before it becomes an order." }
     /* The drafted application record. This task used to produce nothing, and
      * the panel said so — but "wrote to the trace" is exactly the claim an
      * acquirer cannot check, on the one task whose whole point is that the
      * agent filled your form for you. Each row names WHERE the value came
-     * from, so pre-filled is distinguishable from asserted, and the two fields
-     * the agent could not source are carried as named gaps rather than left
-     * out (an omission reads as a complete form). */
-    case "1.3": {
+     * from, so pre-filled is distinguishable from asserted.
+     *
+     * The company number and settlement account used to be carried here as gaps
+     * closing later, at KYC and with the document chase. They are NOT gaps any
+     * more: capture now reads a bank statement (task 2) and corroborates the
+     * registration against the register (task 6), so leaving those rows empty
+     * would have this panel reporting fields missing that three tasks above it
+     * on the same step had just filled. */
+    case "1.8": {
       const vat = vatFor(merchant)
+      const reg = registryFor(merchant)
       return {
         kind: "records",
         title: "Drafted application",
         note: "Written into your CRM, ready for underwriting. Every field is editable — the agent fills it in, it does not commit it.",
         rows: [
-          { label: "Legal name", value: merchant.name, source: "your submission" },
-          { label: "Trading sector", value: merchant.sector, source: "normalised from free text" },
-          { label: "Registered address", value: merchant.location, source: "your submission" },
+          { label: "Legal name", value: merchant.name, source: "from incorporation certificate" },
+          {
+            label: "Trading sector",
+            value: merchant.sector,
+            source: "normalised from free text, corroborated by the website",
+          },
+          { label: "Registered address", value: merchant.location, source: "from proof of address" },
           { label: "Expected annual volume", value: merchant.size, source: "banded from your submission" },
           { label: "Device count", value: `${merchant.terminalCount}`, source: "derived from the recommended kit" },
           { label: "Tax treatment", value: vat, source: vat ? "derived from country" : "country not in the rules table" },
           {
             label: "Company number",
-            value: null,
-            source: "retrieved at underwriting, not at intake",
-            resolution: {
-              owner: "Agent",
-              when: "at KYC · Verify the entity",
-              blocking: false,
-            },
+            value: reg?.number ?? null,
+            source: reg ? `confirmed against ${reg.name}` : "no register on file for this country",
+            ...(reg
+              ? {}
+              : {
+                  resolution: {
+                    owner: "Acquirer",
+                    when: "key it in from the certificate before sign-off",
+                    blocking: false,
+                  },
+                }),
           },
           {
             label: "Settlement account",
-            value: null,
-            source: "collected from the merchant with the KYB documents",
-            resolution: {
-              owner: "Merchant",
-              // Underwriting owns the single document chase — see the handoff
-              // comment on step 2. Pointing this at KYC would name a second,
-              // competing request for the same pile of paperwork.
-              when: "with the document request at Underwriting",
-              blocking: false,
-            },
+            value: maskedAccountFor(merchant),
+            source: "read off the bank statement at capture",
           },
         ],
       }

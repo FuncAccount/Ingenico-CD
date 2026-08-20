@@ -35,6 +35,32 @@ const acquirerTool = (name: string): Tool => ({ name, owner: "acquirer" })
 const ingenicoTool = (name: string): Tool => ({ name, owner: "ingenico" })
 const externalTool = (name: string): Tool => ({ name, owner: "external" })
 
+/**
+ * Where a piece of the application CAME FROM.
+ *
+ * Deliberately not `ToolOwner`. A tool is a system the agent drives and is
+ * owned by us, Ingenico or a third party; a source is provenance, and its most
+ * important value — the merchant themselves — is not a system at all. Reusing
+ * `ToolOwner` would have forced the merchant's own bundle to be filed as
+ * "external", flattening the one distinction an acquirer checks first: did we
+ * take this from the applicant, or corroborate it independently?
+ */
+export type SourceOrigin = "merchant" | "acquirer" | "external"
+
+export interface InputSource {
+  name: string
+  origin: SourceOrigin
+  /**
+   * `primary` is the material the application is built FROM; `enrichment` is
+   * corroboration layered on top. Drawn differently on purpose — a flat row of
+   * equal pills would say the registry and the merchant's own paperwork carry
+   * the same weight, when the whole point of enrichment is that it is
+   * independent of the party being assessed.
+   */
+  role: "primary" | "enrichment"
+  detail: string
+}
+
 /** Which track a step sits on once the journey forks.
  *
  *  Underwriting runs AT THE SAME TIME as the kit is ordered and built — that is
@@ -63,6 +89,14 @@ export interface PipelineStep {
   agentMission: string
   // The tools / systems the agent reaches for at this step.
   tools: Tool[]
+  /**
+   * What the step's output is BUILT FROM, as distinct from `tools`, which is
+   * what the agent operates. A registry legitimately appears in both — it is a
+   * system the agent queries and a provenance class for the fields it returns —
+   * and separating them is what lets the screen answer "where did this value
+   * come from?" without the reader inferring it from a capability list.
+   */
+  sources?: InputSource[]
   /** Only on steps that touch the acquirer's OWN systems. States where the
    *  boundary falls, so the integration is a named arrangement rather than an
    *  inference the reader has to make from the chips. */
@@ -91,40 +125,107 @@ export const PIPELINE: PipelineStep[] = [
     band: "Augment",
     acquirerRole: "owns",
     blurb: "Acquirer owns the customer and decides whether the application goes forward.",
-    agentMission: "Turn a few merchant details into a shaped application and a kit recommendation.",
+    agentMission:
+      "Turn a merchant's documents and a few details into a shaped, corroborated application and a kit recommendation.",
+    // "Merchant CRM" stays a tool as well as a source: task 9 WRITES to it, and
+    // the integration banner directly below asserts the agent reads and writes
+    // it. A chip row with nothing of the acquirer's on it would leave that claim
+    // unsupported by the one row that names whose systems are in play.
     tools: [
+      ingenicoTool("Document AI"),
       acquirerTool("Merchant CRM"),
-      ingenicoTool("Terminal catalog"),
-      ingenicoTool("Sector benchmarks"),
+      externalTool("Public registries"),
+      externalTool("Web research"),
+    ],
+    /* Capture is dominated by DOCUMENTS, not typed fields. The merchant hands
+       over a bundle; everything else on this step exists to corroborate it. */
+    sources: [
+      {
+        name: "Uploaded documents",
+        origin: "merchant",
+        role: "primary",
+        detail: "The bundle the merchant supplied — incorporation, address, ID, bank statement",
+      },
+      {
+        name: "Merchant CRM",
+        origin: "acquirer",
+        role: "enrichment",
+        detail: "Anything already on file for this applicant in your own system",
+      },
+      {
+        name: "Public registries",
+        origin: "external",
+        role: "enrichment",
+        detail: "Registration, directors and tax ID, independent of the applicant",
+      },
+      {
+        name: "Web research",
+        origin: "external",
+        role: "enrichment",
+        detail: "What the business says it does in public, to corroborate the stated sector",
+      },
     ],
     integration:
       "The agent reads and writes your CRM through Ingenico's integration. The merchant record stays in your system — nothing is re-keyed into a second one.",
     tasks: [
       {
-        label: "Read the intake",
-        detail: "Parses the details you entered and normalises sector, geography and expected volume.",
-        output: "intake.parse → sector=Hospitality region=UK volume_band=£2m–5m ok",
+        label: "Classify uploaded documents",
+        detail: "Sorts each uploaded file by type and flags anything unlabelled or misnamed.",
+        output: "doc.classify → 5 files sorted, 1 unrecognised",
       },
       {
-        label: "Find look-alike merchants",
-        detail: "Searches your existing book for merchants with a matching profile.",
-        output: "match.similar → 42 hospitality merchants, median 3.6 terminals",
+        label: "Extract the data",
+        detail: "Reads the fields out of each document so nothing is re-typed.",
+        output: "doc.extract → fields lifted, each tagged to its document",
       },
       {
-        label: "Recommend the kit",
-        detail: "Proposes the device mix most of those merchants run today.",
-        output: "recommend.kit → 3× A920 + softPOS  (confidence 0.91)",
+        label: "Check document quality",
+        detail: "Confirms each document is legible, in date and the correct type.",
+        output: "doc.qa → legibility + currency checked",
       },
       {
-        label: "Draft the application",
-        detail: "Writes the onboarding record into your CRM so nothing has to be re-typed downstream.",
+        label: "Match the required checklist",
+        detail:
+          "Checks what was received against the required set for this merchant type and calls out gaps.",
+        output: "doc.checklist → received vs required",
+      },
+      {
+        label: "Reconcile across sources",
+        detail: "Checks the documents agree with each other and with the application.",
+        output: "reconcile → cross-document field match",
+      },
+      {
+        label: "Enrich from public registries",
+        detail: "Pulls registration, directors and tax ID from the registry.",
+        output: "registry.enrich → company number + directors + tax id",
+      },
+      {
+        label: "Research the business online",
+        detail:
+          "Reads the merchant's website to confirm what the business actually does and corroborate the stated sector.",
+        output: "web.research → stated sector corroborated",
+      },
+      {
+        label: "Shape the application and recommend the kit",
+        detail:
+          "Normalises sector, geography and volume, finds look-alike merchants, and proposes the device mix.",
+        output: "recommend.kit → device mix proposed from look-alikes",
+      },
+      {
+        label: "Draft into CRM",
+        detail: "Writes the onboarding record into your CRM so nothing is re-typed downstream.",
         output: "application.draft → fields populated, gaps named",
       },
     ],
     // Confirming now releases BOTH lanes, not just underwriting. Saying only
     // "hands it to underwriting" would describe the old sequential pipeline
     // and hide the very thing that compresses the timeline.
-    handback: "The decision is yours. Confirming starts underwriting and the kit build at the same time.",
+    // Keeps the parallel-lane claim (confirming releases BOTH lanes, which is
+    // what compresses the timeline) and adds the inference caveat: the business
+    // profile read off the open web is the one thing here the agent GUESSED, so
+    // it must be named at the point of confirmation rather than buried in a panel.
+    handback:
+      "Confirm the shaped profile and recommended setup before it becomes an application — including the business profile inferred from web research. Confirming starts underwriting and the kit build at the same time.",
   },
   /* The risk lane, in running order: KYC → Pricing → Underwriting.
    *

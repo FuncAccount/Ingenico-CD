@@ -20,6 +20,7 @@ import {
   UserCheck,
   Wrench,
   Plug,
+  FileStack,
   Info,
 } from "lucide-react"
 import {
@@ -990,6 +991,57 @@ function StepCockpit({
                   : "Ready"}
           </span>
         </div>
+
+        {/* What the step's output is BUILT FROM, kept separate from the tool
+            chips below. The primary source is drawn as a full-width band rather
+            than another pill: on capture the merchant's own bundle IS the
+            application, and a flat row of four equal chips would say the
+            registry and the paperwork carry the same weight — when the entire
+            value of enrichment is that it is independent of the applicant. */}
+        {step.sources && step.sources.length > 0 && (
+          <div className="relative mt-4 space-y-2">
+            {step.sources
+              .filter((s) => s.role === "primary")
+              .map((s) => (
+                <div
+                  key={s.name}
+                  className="flex gap-2 rounded-lg border border-border bg-secondary/60 px-3 py-2"
+                >
+                  <FileStack className="mt-0.5 h-3.5 w-3.5 shrink-0 text-foreground" />
+                  <p className="text-xs leading-relaxed text-muted-foreground">
+                    <span className="font-semibold text-foreground">{s.name}</span>
+                    <span className="ml-1.5 rounded bg-foreground/8 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-foreground">
+                      primary
+                    </span>
+                    <span className="mt-0.5 block">{s.detail}</span>
+                  </p>
+                </div>
+              ))}
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-[11px] text-muted-foreground">Corroborated against</span>
+              {step.sources
+                .filter((s) => s.role === "enrichment")
+                .map((s) => (
+                  <span
+                    key={s.name}
+                    title={s.detail}
+                    className={cn(
+                      "inline-flex items-center gap-1.5 rounded-md border px-2 py-0.5 text-[11px]",
+                      s.origin === "acquirer"
+                        ? "border-primary/35 bg-primary/8 text-foreground"
+                        : "border-border bg-white/60 text-muted-foreground",
+                    )}
+                  >
+                    {s.name}
+                    <span className="sr-only">
+                      {s.origin === "acquirer" ? " — your system" : " — independent of the merchant"}
+                      . {s.detail}
+                    </span>
+                  </span>
+                ))}
+            </div>
+          </div>
+        )}
 
         {/* Tools. Each chip says WHOSE system it is, because the product claim
             on the regulated steps is that the agent operates the acquirer's own

@@ -865,6 +865,72 @@ function TxnsView({ artifact }: { artifact: Extract<Artifact, { kind: "txns" }> 
   )
 }
 
+/**
+ * The uploaded bundle, one row per file.
+ *
+ * An unclassified file is drawn as a WARNING, not as a weak classification: the
+ * agent has no answer for it, and the row exists so that a human gives it one. A
+ * greyed-out "unrecognised · low confidence" chip would sit quietly in a list of
+ * ticks and get scrolled past, which is the one outcome this panel is here for.
+ */
+function IntakeView({ artifact }: { artifact: Extract<Artifact, { kind: "intake" }> }) {
+  const typed = artifact.rows.filter((r) => r.classified !== null).length
+  const flagged = artifact.rows.length - typed
+  return (
+    <Shell title={artifact.title} note={artifact.note}>
+      <div className="space-y-2">
+        {artifact.rows.map((r) => (
+          <div
+            key={r.filename}
+            className={cn(
+              "flex gap-2.5 rounded-xl border p-3",
+              r.classified === null
+                ? "border-warning/45 bg-warning/[0.07]"
+                : "border-border/70 bg-white/60",
+            )}
+          >
+            <span
+              className={cn(
+                "mt-0.5 shrink-0",
+                r.classified === null ? "text-warning-foreground" : "text-muted-foreground",
+              )}
+            >
+              {r.classified === null ? (
+                <AlertTriangle className="h-4 w-4" />
+              ) : (
+                <FileText className="h-4 w-4" />
+              )}
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="truncate font-mono text-[11px] text-muted-foreground">{r.filename}</p>
+              {r.classified === null ? (
+                <>
+                  <p className="mt-0.5 text-sm font-medium text-warning-foreground">Unrecognised</p>
+                  <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">{r.review}</p>
+                </>
+              ) : (
+                <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <p className="text-sm font-medium text-foreground">{r.classified}</p>
+                  <span className="rounded bg-secondary px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                    {r.confidence} confidence
+                  </span>
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+      {/* Derived from the rows above, so the summary cannot outlive them. */}
+      <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground">
+        {artifact.rows.length} files received · {typed} typed
+        {flagged > 0
+          ? ` · ${flagged} needs your confirmation before the bundle is complete`
+          : " · nothing left to identify"}
+      </p>
+    </Shell>
+  )
+}
+
 function ChecksView({ artifact }: { artifact: Extract<Artifact, { kind: "checks" }> }) {
   const tone = {
     pass: "text-success",
@@ -1251,6 +1317,8 @@ export function ArtifactInspector(props: Props) {
       return <TariffView artifact={artifact} />
     case "records":
       return <RecordsView artifact={artifact} />
+    case "intake":
+      return <IntakeView artifact={artifact} />
     case "checks":
       return <ChecksView artifact={artifact} />
     case "txns":
