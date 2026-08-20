@@ -898,7 +898,22 @@ function StepCockpit({
         }))
 
   // Reset the run whenever the focused step (or merchant) changes.
+  //
+  // NAVIGATION ONLY — and the guard below is the whole point. `state` has to be
+  // read here (arriving at an already-done step should show it done) but it must
+  // not TRIGGER this, because a run and a decision are different registers. With
+  // `state` driving the effect, withdrawing an approval re-ran the reset and
+  // wiped the agent run to 0/4: correct the brand colour and the cockpit threw
+  // away four completed tasks and said "Run the agent first — there is nothing
+  // to approve yet", with the corrected design sitting on screen beside it. The
+  // artefacts had not gone anywhere; only the approval had. So the user fixed
+  // the thing they were asked to fix and the gate locked them out.
+  const navKey = `${merchant.id}:${step.id}`
+  const lastNav = useRef<string | null>(null)
   useEffect(() => {
+    // A decision changing is not a navigation. Bail before touching the run.
+    if (lastNav.current === navKey) return
+    lastNav.current = navKey
     if (timer.current) clearTimeout(timer.current)
     // A hand-reset step stays reset until it is run again, rather than being
     // re-derived back to "done" from the merchant's pipeline position.
@@ -910,7 +925,7 @@ function StepCockpit({
     return () => {
       if (timer.current) clearTimeout(timer.current)
     }
-  }, [step.id, merchant.id, state, step.tasks.length])
+  }, [navKey, state, step.tasks.length])
 
   // A different merchant means a different order, never the last one's basket.
   // The same applies to the underwriting determination: carrying it across

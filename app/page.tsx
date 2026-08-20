@@ -10,6 +10,7 @@ import { MERCHANTS, type Merchant } from "@/lib/acquirer-data"
 import { applyDecisions, awaitingSignOff } from "@/lib/decisions"
 import { DecisionsProvider, useDecisions } from "@/components/acquirer/decisions-provider"
 import { ProgressProvider } from "@/components/acquirer/progress-provider"
+import { BrandThemeProvider } from "@/components/acquirer/brand-theme-provider"
 import { DemoProvider } from "@/components/acquirer/demo-provider"
 import { Dashboard } from "@/components/ingenico/dashboard"
 import { Deployments } from "@/components/ingenico/deployments"
@@ -26,9 +27,15 @@ export default function Page() {
       {/* Above the screen switch below, so completing a step survives the
           navigation to the screen that completes it — see ProgressProvider. */}
       <ProgressProvider>
-        <DemoProvider>
-          <PlatformApp />
-        </DemoProvider>
+        {/* Same reason, for the brand design: the cockpit and the sign-off
+            screen are two screens in the switch below, and while the design
+            lived in the cockpit, "Approve branding" over on the sign-off screen
+            was committing a decision about a design it had never seen. */}
+        <BrandThemeProvider>
+          <DemoProvider>
+            <PlatformApp />
+          </DemoProvider>
+        </BrandThemeProvider>
       </ProgressProvider>
     </DecisionsProvider>
   )

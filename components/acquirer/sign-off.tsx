@@ -98,7 +98,10 @@ export function SignOff({
         {/* Queue */}
         <aside className="flex flex-col gap-2">
           {queue.map((m) => {
-            const d = decisionAtStep(decisions, m.id, m.currentStep)
+            // Live: a superseded approval returns this row to "Open", which is
+            // the honest state — the design it covered no longer exists, so the
+            // merchant really is waiting on you again.
+            const d = liveDecisionAtStep(decisions, m.id, m.currentStep)
             const branding = m.currentStep === 4
             const active = m.id === selectedId
             return (
@@ -191,14 +194,19 @@ export function SignOff({
                 </p>
                 <div className="mt-4 flex flex-col gap-3 sm:flex-row">
                   <button
-                    onClick={() => record(selected.id, "signed", selected.currentStep)}
+                    onClick={() => record(selected.id, "signed", selected.currentStep, basis)}
                     className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
                   >
                     <BadgeCheck className="h-4 w-4" />
                     {isBranding ? "Approve branding" : "Sign off"}
                   </button>
                   <button
-                    onClick={() => record(selected.id, "returned", selected.currentStep)}
+                    // `null` basis, deliberately, and not an oversight: sending
+                    // it back is a request for more from the merchant, not an
+                    // approval OF anything. Editing the design afterwards does
+                    // not make the request untrue, so there is nothing here
+                    // that a later edit could invalidate.
+                    onClick={() => record(selected.id, "returned", selected.currentStep, null)}
                     className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg border border-border bg-card px-4 py-2.5 text-sm font-semibold text-foreground transition-colors hover:bg-secondary"
                   >
                     <MessageSquareReply className="h-4 w-4" />
