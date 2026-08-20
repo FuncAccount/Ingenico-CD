@@ -453,6 +453,19 @@ export interface RecordRow {
   /** Where the value came from, so a figure is never orphaned from its source. */
   source?: string
   /**
+   * Whether the acquirer may retype this before it is pushed.
+   *
+   * Per row, not per artefact, because the two kinds genuinely differ: a
+   * drafted application is the agent's proposal and every line of it is the
+   * acquirer's to correct, whereas a write-back receipt quotes ids read back
+   * off the host — typing over those would not change the host, it would just
+   * make the screen disagree with it.
+   *
+   * The default is read-only. An editable field is a claim that the edit goes
+   * somewhere, and that claim has to be made deliberately.
+   */
+  writable?: boolean
+  /**
    * For a row with no value: WHO closes the gap and WHEN.
    *
    * A named absence was still only half an answer — "not on file" told the
@@ -487,6 +500,84 @@ export interface TxnRow {
   cause?: string
   /** Only on a failure: who clears it and what clearing it involves. */
   fix?: { owner: "Ingenico" | "Acquirer" | "Merchant"; action: string; blocking: boolean }
+}
+
+/**
+ * The last act of a stage: the point where the agent's work leaves this app and
+ * lands in a system that keeps it.
+ *
+ * Two artefacts used to report that write in the PAST TENSE — "Written into
+ * your CRM", "What went into your systems" — with no control anywhere that
+ * performed it. That is the worst version of an automation claim: the acquirer
+ * is told a record now exists under their name in their own system of record,
+ * by a screen that never asked them and cannot show them when it happened. The
+ * agent drafts; a person commits. This type is that commit.
+ *
+ * `action` names the destination, never a bare "Submit" or "Approve" — the
+ * whole question at a handoff is *where is this going*, and a verb with no
+ * object does not answer it.
+ */
+export interface ArtifactHandoff {
+  /** The system of record that receives it. */
+  system: string
+  /** The button label. Names the system and the act. */
+  action: string
+  /** What the acquirer takes responsibility for by pushing. */
+  commits: string
+  /** What actually lands over there, so the push is not a black box. */
+  delivers: string
+}
+
+/** What a push would carry, and what stands in its way. All three lists are
+ *  DERIVED from the rows on screen and the acquirer's own edits — none is
+ *  typed, so the footer cannot describe a record different from the one
+ *  above it. */
+export interface PushReadiness {
+  /** Rows the acquirer retyped. Named so the receipt can say the record is
+   *  not purely the agent's work — a CRM entry that looks machine-written
+   *  when a human moved three fields misattributes the judgement. */
+  edited: string[]
+  /** Empty rows the agent never filled, which travel with the record. A gap
+   *  the agent declared is honest; the destination sees it as empty either
+   *  way, so hiding it here would only surprise whoever opens it there. */
+  gaps: string[]
+  /** Why the push is refused. Empty means it can go. */
+  blockers: string[]
+}
+
+export function pushReadiness(
+  rows: RecordRow[],
+  edits: Record<string, string>,
+): PushReadiness {
+  const edited: string[] = []
+  const gaps: string[] = []
+  const blockers: string[] = []
+
+  for (const r of rows) {
+    const typed = edits[r.label]
+    const current = typed ?? r.value ?? ""
+    const isEmpty = current.trim() === ""
+
+    if (typed !== undefined && typed.trim() !== (r.value ?? "").trim()) {
+      edited.push(r.label)
+    }
+
+    if (!isEmpty) continue
+
+    // An empty field the acquirer CREATED is a different thing from one the
+    // agent reported. The agent's gap is a known unknown that the destination
+    // is entitled to see; clearing a value the agent read off a document is a
+    // deletion, and pushing it would overwrite evidence with nothing.
+    if (r.value !== null && r.value.trim() !== "") {
+      blockers.push(`${r.label} was cleared — restore it or type a replacement`)
+    } else if (r.resolution?.blocking) {
+      blockers.push(`${r.label} — ${r.resolution.when}`)
+    } else {
+      gaps.push(r.label)
+    }
+  }
+
+  return { edited, gaps, blockers }
 }
 
 export interface CheckRow {
@@ -720,6 +811,13 @@ export type Artifact =
        */
       editable?: { label: string; where: string }
       /**
+       * Present only on a record that leaves for another system. Absent means
+       * this panel is a read-out and nothing here is dispatched — which is the
+       * case for most of them, so the slot is optional rather than a footer
+       * that renders disabled on eleven panels with nowhere to send anything.
+       */
+      handoff?: ArtifactHandoff
+      /**
        * The verdict the record supports, stated above it.
        *
        * A parameter dump answers "what was sent" but not "did it land" —
@@ -928,7 +1026,15 @@ export function traceFor(
       if (art?.kind !== "records") return null
       const filled = art.rows.filter((r) => r.value !== null).length
       const gaps = art.rows.length - filled
-      return `application.draft → ${filled}/${art.rows.length} fields populated, ${gaps} awaiting downstream`
+      // Ends on "held for your release", not "0 awaiting downstream". The old
+      // tail described a record already gone: it reported the draft as
+      // finished business at the exact moment the panel above it started
+      // waiting for a human to press send. A trace that contradicts the
+      // control beside it is the more believable of the two, because it looks
+      // like machine output.
+      return `application.draft → ${filled}/${art.rows.length} fields populated, ${
+        gaps === 0 ? "no gaps" : `${gaps} gap${gaps === 1 ? "" : "s"} named`
+      }, held for your release`
     }
     case "3.0":
       return `order.build → ${active.map((l) => `${l.qty}× ${l.name}`).join(", ")}`
@@ -1618,25 +1724,43 @@ export function artifactFor(
       return {
         kind: "records",
         title: "Drafted application",
-        note: "Written into your CRM, ready for underwriting. Every field is editable — the agent fills it in, it does not commit it.",
+        // Was "Written into your CRM …. Every field is editable" — two claims,
+        // both false and mutually contradictory. Nothing had been written (no
+        // control on the screen wrote anything) and nothing was editable (every
+        // row rendered as flat text). It now says what is true before the push,
+        // and the push below is what makes the first half true.
+        note: "The agent has filled in your application form. Nothing has left this screen yet — correct anything it got wrong, then send it.",
+        handoff: {
+          system: `${ACQUIRER.name} CRM`,
+          action: "Push to CRM",
+          commits:
+            "The record is created under your name in your system of record, and underwriting picks the file up from there. Anything you retyped goes as your figure, not the agent's.",
+          delivers: "A merchant record with these fields, the source note against each one, and the document bundle attached.",
+        },
         rows: [
-          { label: "Legal name", value: merchant.name, source: "from incorporation certificate" },
+          { label: "Legal name", value: merchant.name, source: "from incorporation certificate", writable: true },
           {
             label: "Trading sector",
             value: merchant.sector,
             source: "normalised from free text, corroborated by the website",
+            writable: true,
           },
-          { label: "Registered address", value: merchant.location, source: "from proof of address" },
-          { label: "Expected annual volume", value: merchant.size, source: "banded from your submission" },
-          { label: "Device count", value: `${merchant.terminalCount}`, source: "derived from the recommended kit" },
-          { label: "Tax treatment", value: vat, source: vat ? "derived from country" : "country not in the rules table" },
+          { label: "Registered address", value: merchant.location, source: "from proof of address", writable: true },
+          { label: "Expected annual volume", value: merchant.size, source: "banded from your submission", writable: true },
+          { label: "Device count", value: `${merchant.terminalCount}`, source: "derived from the recommended kit", writable: true },
+          { label: "Tax treatment", value: vat, source: vat ? "derived from country" : "country not in the rules table", writable: true },
           {
             label: "Company number",
             value: reg?.number ?? null,
             source: reg ? `confirmed against ${reg.name}` : "no register on file for this country",
+            writable: true,
             ...(reg
               ? {}
               : {
+                  // The resolution has always said "key it in from the
+                  // certificate" — and until this row became writable there was
+                  // nowhere to key it in. An instruction the interface does not
+                  // support is a defect with a polite voice.
                   resolution: {
                     owner: "Acquirer",
                     when: "key it in from the certificate before sign-off",
@@ -1648,6 +1772,7 @@ export function artifactFor(
             label: "Settlement account",
             value: maskedAccountFor(merchant),
             source: "read off the bank statement at capture",
+            writable: true,
           },
         ],
       }
@@ -2498,7 +2623,23 @@ export function artifactFor(
       return {
         kind: "records",
         title: "Write-back",
-        note: "What went into your systems, and where. The agent writes the record; it does not keep a second copy of it.",
+        // Was "What went into your systems, and where" — past tense, on a panel
+        // with no control that put anything anywhere. Same defect as the drafted
+        // application: the closing write of the whole journey was reported as
+        // already done, so nobody was ever asked.
+        note: "What the agent will close the file with. None of it is yours to retype — these are read back off the host — but the write itself is yours to authorise.",
+        handoff: {
+          system: `${ACQUIRER.name} CRM`,
+          action: "Close the record",
+          commits:
+            "The onboarding file is closed against this merchant and the underwriting signatory travels with it. The go-live notice goes out on the back of this write.",
+          delivers: "The merchant record updated to live, the device count, and the signed underwriting decision attached to it.",
+        },
+        // No `writable` flags anywhere here. Every one of these is a value read
+        // back off another system: retyping the Merchant ID would not rename it
+        // on the host, it would only make this screen lie about what the host
+        // holds. Editability is not a courtesy, it is a claim that the edit
+        // lands somewhere.
         rows: [
           { label: "Destination", value: `${ACQUIRER.name} CRM — merchant record`, source: "your system of record" },
           { label: "Merchant ID", value: merchant.id.replace("m-", "MID-").toUpperCase(), source: "acquirer host" },

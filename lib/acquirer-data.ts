@@ -194,8 +194,13 @@ export const PIPELINE: PipelineStep[] = [
       },
       {
         label: "Draft into CRM",
-        detail: "Writes the onboarding record into your CRM so nothing is re-typed downstream.",
-        output: "application.draft → fields populated, gaps named",
+        // "Writes the onboarding record into your CRM" claimed the agent performs
+        // the write. It fills the form; you release it. The label stays "Draft
+        // into CRM" because that IS the output — a draft addressed at the CRM —
+        // but the verb had to stop being "writes".
+        detail:
+          "Fills in your CRM record so nothing is re-typed downstream, and holds it for you to check and release.",
+        output: "application.draft → fields populated, gaps named, held for release",
       },
     ],
     // Confirming now releases BOTH lanes, not just underwriting. Saying only

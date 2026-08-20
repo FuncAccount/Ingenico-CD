@@ -7,6 +7,7 @@ import {
   Plus,
   MapPin,
   AlertTriangle,
+  ArrowUpRight,
   Check,
   CheckCircle2,
   FileText,
@@ -25,10 +26,14 @@ import type { BrandTheme } from "@/lib/branding"
 import type { EdgeResolution } from "@/lib/underwriting"
 import type { Merchant } from "@/lib/acquirer-data"
 import { formatRate, projectSignUp, type Projection } from "@/lib/tariff-model"
+import { fmtDateTime } from "@/lib/handoffs"
 import {
   type Artifact,
+  type ArtifactHandoff,
   type BasketLine,
+  type PushReadiness,
   type Sku,
+  pushReadiness,
   CATALOGUE,
   SERVICE_LEVELS,
   RATE_CARD,
@@ -665,8 +670,15 @@ function RecordsView({ artifact }: { artifact: Extract<Artifact, { kind: "record
   // control that does nothing — worse than no control, because the reader
   // would believe acceptance had been changed here.
   const [showEdit, setShowEdit] = useState(false)
+  // Held OUTSIDE the artefact, keyed by label: the artefact is the record of
+  // what the AGENT drafted, and writing over it would destroy the evidence of
+  // what was proposed the instant somebody disagreed with a line.
+  const [edits, setEdits] = useState<Record<string, string>>({})
+  const readiness = pushReadiness(artifact.rows, edits)
+  const anyWritable = artifact.rows.some((r) => r.writable)
+
   return (
-    <Shell title={artifact.title} note={artifact.note}>
+    <Shell title={artifact.title} note={artifact.note} editable={anyWritable}>
       {artifact.outcome && (
         <div
           className={cn(
@@ -717,44 +729,234 @@ function RecordsView({ artifact }: { artifact: Extract<Artifact, { kind: "record
         </div>
       )}
       <div className="overflow-hidden rounded-xl border border-border/70 bg-white/60">
-        {artifact.rows.map((r, i) => (
-          <div key={r.label} className={cn("px-3 py-2.5", i > 0 && "border-t border-border/60")}>
-            <Row className="py-0">
-              <span className="text-sm text-muted-foreground">{r.label}</span>
-              <span className="text-right text-sm font-medium text-foreground">
-                {r.value ?? <Absent>not on file</Absent>}
-              </span>
-            </Row>
-            {r.source && (
-              <p className="mt-0.5 font-mono text-[10px] text-muted-foreground">{r.source}</p>
-            )}
-            {/* A gap that names who closes it and when is a scheduled step; a
-                gap that names nobody is an open question the reader has to
-                chase. The two must not look alike. */}
-            {r.value === null && r.resolution && (
-              <p
-                className={cn(
-                  "mt-1.5 inline-flex items-center gap-1.5 rounded px-1.5 py-0.5 text-[10px]",
-                  r.resolution.blocking
-                    ? "bg-warning/15 text-warning-foreground"
-                    : "bg-secondary text-muted-foreground",
-                )}
-              >
-                {r.resolution.blocking ? (
-                  <AlertTriangle className="h-3 w-3 shrink-0" />
+        {artifact.rows.map((r, i) => {
+          const typed = edits[r.label]
+          const isChanged = typed !== undefined && typed.trim() !== (r.value ?? "").trim()
+          return (
+            <div key={r.label} className={cn("px-3 py-2.5", i > 0 && "border-t border-border/60")}>
+              {/* Wraps rather than shrinking the field: a legal name is as long
+                  as it is, and a right-aligned input too narrow for its value
+                  clips the tail — which reads as a broken render on the one
+                  panel whose whole job is to show you what is about to be
+                  filed under your name. */}
+              <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5">
+                <label
+                  htmlFor={r.writable ? `rec-${r.label}` : undefined}
+                  className="shrink-0 text-sm text-muted-foreground"
+                >
+                  {r.label}
+                </label>
+                {r.writable ? (
+                  <input
+                    id={`rec-${r.label}`}
+                    value={typed ?? r.value ?? ""}
+                    onChange={(e) => setEdits((s) => ({ ...s, [r.label]: e.target.value }))}
+                    spellCheck={false}
+                    // A field the agent left empty gets a prompt rather than a
+                    // blank box, so an absence still reads as an absence once
+                    // it becomes typeable.
+                    placeholder={r.value === null ? "not on file — key it in" : undefined}
+                    className={cn(
+                      "w-full min-w-[10rem] max-w-full flex-1 basis-40 rounded-lg border bg-white px-2 py-1 text-right text-sm font-medium text-foreground outline-none transition-colors placeholder:font-normal placeholder:italic focus:border-primary focus:ring-2 focus:ring-primary/20",
+                      isChanged ? "border-primary/50" : "border-border",
+                    )}
+                  />
                 ) : (
-                  <Info className="h-3 w-3 shrink-0" />
+                  <span className="text-right text-sm font-medium text-foreground">
+                    {r.value ?? <Absent>not on file</Absent>}
+                  </span>
                 )}
-                <span>
-                  <span className="font-medium">{r.resolution.owner}</span> · {r.resolution.when}
-                  {r.resolution.blocking ? " — needed before this step can clear" : ""}
-                </span>
-              </p>
-            )}
-          </div>
-        ))}
+              </div>
+              {r.source && (
+                <p className="mt-0.5 font-mono text-[10px] text-muted-foreground">{r.source}</p>
+              )}
+              {isChanged && (
+                <p className="mt-1 flex items-center justify-end gap-2 text-[11px] text-muted-foreground">
+                  {/* The agent's value survives the disagreement — the panel is
+                      the record of what it proposed, and overwriting that would
+                      destroy the evidence the moment someone corrected it. */}
+                  <span>
+                    Agent drafted{" "}
+                    <span className="font-medium text-foreground">
+                      {r.value === null || r.value === "" ? "nothing" : r.value}
+                    </span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setEdits((s) => {
+                        const next = { ...s }
+                        delete next[r.label]
+                        return next
+                      })
+                    }
+                    className="font-medium text-primary underline-offset-2 hover:underline"
+                  >
+                    Restore
+                  </button>
+                </p>
+              )}
+              {/* A gap that names who closes it and when is a scheduled step; a
+                  gap that names nobody is an open question the reader has to
+                  chase. The two must not look alike. */}
+              {r.value === null && typed === undefined && r.resolution && (
+                <p
+                  className={cn(
+                    "mt-1.5 inline-flex items-center gap-1.5 rounded px-1.5 py-0.5 text-[10px]",
+                    r.resolution.blocking
+                      ? "bg-warning/15 text-warning-foreground"
+                      : "bg-secondary text-muted-foreground",
+                  )}
+                >
+                  {r.resolution.blocking ? (
+                    <AlertTriangle className="h-3 w-3 shrink-0" />
+                  ) : (
+                    <Info className="h-3 w-3 shrink-0" />
+                  )}
+                  <span>
+                    <span className="font-medium">{r.resolution.owner}</span> · {r.resolution.when}
+                    {r.resolution.blocking ? " — needed before this step can clear" : ""}
+                  </span>
+                </p>
+              )}
+            </div>
+          )
+        })}
       </div>
+
+      {artifact.handoff && (
+        <HandoffFooter
+          handoff={artifact.handoff}
+          readiness={readiness}
+          // Re-keyed on the merchant's own record so a push receipt cannot
+          // follow the reader onto the next merchant's identical panel.
+          signature={JSON.stringify(artifact.rows.map((r) => edits[r.label] ?? r.value))}
+        />
+      )}
     </Shell>
+  )
+}
+
+/**
+ * The commit at the end of a stage: the control that actually sends the record
+ * on, and the receipt for having sent it.
+ *
+ * Everything it says is derived from the rows above it (`pushReadiness`), so
+ * the footer cannot describe a record different from the one on screen. Three
+ * states, and the third is the one worth the code:
+ *
+ *   blocked  — refuses, and names what is in the way rather than greying out
+ *   ready    — offers the push, disclosing any gap that travels with it
+ *   sent     — a receipt; and if the record is EDITED after being sent, the
+ *              receipt goes stale rather than standing there asserting that
+ *              the destination holds values it does not.
+ */
+function HandoffFooter({
+  handoff,
+  readiness,
+  signature,
+}: {
+  handoff: ArtifactHandoff
+  readiness: PushReadiness
+  /** The content that was sent. Compared against the live rows to notice an
+   *  edit made after the push. */
+  signature: string
+}) {
+  const [sent, setSent] = useState<{ atIso: string; signature: string; edited: number; gaps: number } | null>(null)
+  const blocked = readiness.blockers.length > 0
+  const stale = sent !== null && sent.signature !== signature
+
+  if (sent && !stale) {
+    return (
+      <div className="mt-3 rounded-xl border border-success/35 bg-success/[0.07] px-3 py-2.5">
+        <p className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
+          <CheckCircle2 className="h-4 w-4 shrink-0 text-success" />
+          Sent to {handoff.system}
+        </p>
+        <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+          {fmtDateTime(sent.atIso)} · {handoff.delivers}
+        </p>
+        {/* Attribution, not decoration. A record that a person moved three
+            fields in is not the agent's output, and whoever opens it in the
+            destination is entitled to know that before they rely on it. */}
+        <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+          {sent.edited > 0
+            ? `${sent.edited} field${sent.edited === 1 ? "" : "s"} carried your correction rather than the agent's value.`
+            : "Sent exactly as the agent drafted it."}
+          {sent.gaps > 0 &&
+            ` ${sent.gaps} field${sent.gaps === 1 ? " was" : "s were"} still empty and went over empty.`}
+        </p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="mt-3 rounded-xl border border-border bg-white/70 px-3 py-2.5">
+      {stale && (
+        // The dangerous state. Without this the receipt above would go on
+        // saying "sent" over fields that have since changed, and the acquirer
+        // would believe the destination holds the value in front of them.
+        <p className="mb-2 flex items-start gap-1.5 rounded-lg bg-warning/15 px-2 py-1.5 text-[11px] leading-relaxed text-warning-foreground">
+          <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" />
+          <span>
+            Edited after sending. {handoff.system} still holds the version sent at{" "}
+            {fmtDateTime(sent!.atIso)} — send again to bring it up to date.
+          </span>
+        </p>
+      )}
+
+      <p className="text-[11px] leading-relaxed text-muted-foreground">{handoff.commits}</p>
+
+      {blocked ? (
+        <div className="mt-2">
+          {/* Named, not merely disabled. A greyed-out button on a screen full
+              of fields does not tell you which one it is waiting for. */}
+          <p className="mb-1.5 text-[11px] font-semibold text-destructive">
+            Cannot send yet:
+          </p>
+          <ul className="space-y-0.5">
+            {readiness.blockers.map((b) => (
+              <li key={b} className="flex items-start gap-1.5 text-[11px] leading-relaxed text-foreground">
+                <AlertTriangle className="mt-px h-3 w-3 shrink-0 text-destructive" />
+                <span>{b}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : (
+        <>
+          {readiness.gaps.length > 0 && (
+            // The gap travels either way — the destination sees an empty field
+            // whether or not this screen mentions it. Saying so before the
+            // click is the difference between a disclosure and a surprise.
+            <p className="mt-2 flex items-start gap-1.5 text-[11px] leading-relaxed text-muted-foreground">
+              <Info className="mt-px h-3.5 w-3.5 shrink-0" />
+              <span>
+                Goes with {readiness.gaps.length} field
+                {readiness.gaps.length === 1 ? "" : "s"} still empty: {readiness.gaps.join(", ")}.
+              </span>
+            </p>
+          )}
+          <button
+            type="button"
+            onClick={() =>
+              setSent({
+                // Stamped once, at the moment of the push. Formatting a fresh
+                // Date at render would restate an old send with today's clock.
+                atIso: new Date().toISOString(),
+                signature,
+                edited: readiness.edited.length,
+                gaps: readiness.gaps.length,
+              })
+            }
+            className="mt-2.5 inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
+          >
+            <ArrowUpRight className="h-3.5 w-3.5" />
+            {stale ? `Send again to ${handoff.system}` : handoff.action}
+          </button>
+        </>
+      )}
+    </div>
   )
 }
 
