@@ -538,9 +538,19 @@ export const PIPELINE: PipelineStep[] = [
     name: "Ship",
     lane: "spine",
     band: "Automate",
-    acquirerRole: "watch",
-    blurb: "Agent books logistics and tracks delivery to the merchant.",
-    agentMission: "Book logistics and track every parcel to the merchant's door.",
+    /* `watch` asserts the step completes without the acquirer, and this one no
+       longer does: it is the rejoin, so it is the only step reachable with the
+       other lane unfinished, and hardware must not leave over an open file.
+       `releases` is the honest role — Ingenico runs every parcel movement and
+       the acquirer contributes exactly one thing, permission to go.
+    
+       Note the release here is GRANTED BY THE CHECKS, not by a click (see
+       lib/ship-clearance.ts). The role still belongs to the acquirer because
+       it is the acquirer's clearance being given; automation decides when, not
+       whose it is. */
+    acquirerRole: "releases",
+    blurb: "Ingenico ships the kit. You observe — and your clearance is what lets the parcels leave.",
+    agentMission: "Get every parcel to the merchant's door, once the file is clear to release.",
     tools: [
       externalTool("Carrier API"),
       ingenicoTool("Label printing"),
@@ -571,7 +581,12 @@ export const PIPELINE: PipelineStep[] = [
         output: "track.notify → merchant emailed tracking ok",
       },
     ],
-    handback: "Fully automated. Tracking updates flow straight back into the journey.",
+    /* "Fully automated" was true of the logistics and false of the step: this
+       is the rejoin, and nothing leaves the warehouse until both lanes have
+       passed. The sentence now separates the two — Ingenico's work is
+       automatic, the clearance in front of it is a condition. */
+    handback:
+      "Ingenico handles the logistics end to end and tracking flows straight back into the journey. Release is automatic once every prior step has passed — until then the parcels stay put.",
   },
   {
     id: 8,
@@ -710,7 +725,8 @@ function riskIndex(id: StepId): number {
  *
  *  Ship (the rejoin) is the one step that answers to both lanes, so it is
  *  reported as reachable only when the build has arrived AND risk has cleared;
- *  see `shipRisk` for the warning shown when it has not. */
+ *  see `shipClearance` in lib/ship-clearance.ts for the gate that holds the
+ *  shipment when it has not. */
 export function laneState(
   merchant: Pick<Merchant, "currentStep" | "riskLane">,
   step: PipelineStep,
@@ -748,31 +764,15 @@ export const REJOIN_STEP: StepId = (() => {
   return PIPELINE.slice(forkAt).find((s) => s.lane === "spine")!.id
 })()
 
-/** The rejoin condition at Ship, stated rather than inferred.
+/* `shipRisk` lived here. It warned and allowed the run anyway, and it read
+ * ONLY `riskLane` — so a rejected order or a failed terminal configuration on
+ * the build lane could not hold a shipment back at all.
  *
- *  Returns null when there is nothing to warn about, so a caller cannot render
- *  an empty banner and imply a check that found nothing wrong. */
-export function shipRisk(merchant: Pick<Merchant, "riskLane">): { label: string; detail: string } | null {
-  const lane = merchant.riskLane
-  if (lane.verdict === "cleared") return null
-  // The OPEN STEP is named, not the lane. "Underwriting referred" was accurate
-  // while the lane was one step; it would now report a sanctions hit at KYC as
-  // a credit decision, sending the acquirer to the wrong screen and the wrong
-  // remedy.
-  const open = stepById(lane.at).name
-  if (lane.verdict === "referred") {
-    return {
-      label: `${open} referred for review`,
-      detail:
-        "This file was sent back and has not been approved. Shipping now puts hardware with a merchant the acquirer has not accepted.",
-    }
-  }
-  return {
-    label: `${open} still in flight`,
-    detail:
-      "The build lane has arrived at Ship first. Shipping now puts hardware with a merchant whose file is not yet approved.",
-  }
-}
+ * Superseded by `shipClearance` in `lib/ship-clearance.ts`: a hard gate
+ * derived from every prerequisite on BOTH lanes. Deleted rather than left
+ * beside it, because two functions answering "may this ship?" is precisely
+ * the second source that drifts, and the weaker one would go on being
+ * called. */
 
 export type MerchantStatus =
   | "On track"

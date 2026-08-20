@@ -6,6 +6,7 @@ import {
   Building2,
   Check,
   ChevronDown,
+  Clock,
   Cpu,
   FileSearch,
   Lock,
@@ -15,6 +16,7 @@ import {
   PartyPopper,
   Play,
   RotateCcw,
+  ShieldCheck,
   Sparkles,
   Terminal,
   UserCheck,
@@ -31,10 +33,11 @@ import {
   type Merchant,
   type PipelineStep,
   laneState,
-  shipRisk,
+
   REJOIN_STEP,
   type StepId,
 } from "@/lib/acquirer-data"
+import { clearanceLine, shipClearance } from "@/lib/ship-clearance"
 import { cn } from "@/lib/utils"
 import {
   artifactFor,
@@ -643,7 +646,14 @@ function StepCockpit({
   exceptionCtx: ExceptionContext
 }) {
   // Null unless the risk lane is genuinely outstanding — see the banner below.
-  const rejoinRisk = shipRisk(merchant)
+  /* Computed for every step, not just Ship, because the Play gate below reads
+     it too — and both must read the SAME evaluation. Two calls could not
+     disagree today, but a panel saying "cleared" above a button saying
+     "withheld" is the defect this app keeps producing, so there is one. */
+  const clearance = useMemo(
+    () => shipClearance(merchant, exceptionCtx),
+    [merchant, exceptionCtx],
+  )
 
   // How many tasks have completed. Upcoming steps start at 0 (preview),
   // done steps start fully complete, the active step invites you to play.
@@ -954,6 +964,20 @@ function StepCockpit({
     [step.id, merchant, completed, releases],
   )
 
+  /* What stops the AGENT RUN, as opposed to `precondition` below, which stops
+     the acquirer's own decision. Two different acts: on most steps playing the
+     agent is harmless analysis you can re-run, but Ship's tasks move physical
+     hardware, and once a parcel is with a carrier no amount of withheld
+     sign-off brings it back.
+  
+     Only Ship has one today, which is why this is a narrow named value rather
+     than another enumeration — the last one of those was hand-listed for two
+     steps and silently left the order button ungated. */
+  const runBlocked = useMemo<string | null>(() => {
+    if (step.id !== REJOIN_STEP || clearance.granted) return null
+    return `${clearanceLine(clearance)} Ingenico cannot dispatch until every prior step passes.`
+  }, [step.id, clearance])
+
   // What stops the acquirer's own decision on THIS step. Different steps are
   // blocked by different things, so this is computed per step rather than by
   // one shared "is everything fine" flag that could not name its own blocker.
@@ -1133,7 +1157,15 @@ function StepCockpit({
                             : "bg-success"
                     : blocker
                       ? "bg-destructive"
-                      : "bg-muted-foreground/60",
+                      : // Matches the panel's own tone rather than inventing a
+                        // second reading of the same hold: red only when
+                        // something actually failed, amber when the file is
+                        // merely still in flight.
+                        runBlocked
+                        ? clearance.failing
+                          ? "bg-destructive"
+                          : "bg-warning"
+                        : "bg-muted-foreground/60",
                 )}
               />
             )}
@@ -1164,7 +1196,16 @@ function StepCockpit({
                   // one step that cannot be run to completion.
                   blocker
                   ? "Blocked"
-                  : "Ready"}
+                  : // Nor on a step whose dispatch is being held. `blocker`
+                    // only sees findings raised ON THIS STEP, and Ship's
+                    // holds come from the eight steps behind it — so the
+                    // badge read "Ready" directly above "Release withheld",
+                    // the badge contradicting the record beneath it. Only
+                    // the screenshot caught this; every text assertion
+                    // passed.
+                    runBlocked
+                    ? "Held"
+                    : "Ready"}
           </span>
         </div>
 
@@ -1271,25 +1312,91 @@ function StepCockpit({
         )}
       </div>
 
-      {/* THE REJOIN. Ship is where the two lanes meet, so it is the one step
-          that can be reached with the other lane unfinished. Deliberately a
-          warning and not a block (a product decision), which means the banner
-          carries the entire claim: it is non-dismissible, names the actual
-          state rather than a generic "not ready", and says what shipping now
-          would mean. `shipRisk` returns null when cleared, so this cannot
-          render as an empty box implying a check that found nothing. */}
-      {step.lane === "spine" && step.id === REJOIN_STEP && rejoinRisk && (
+      {/* THE REJOIN GATE. Ship is where the lanes meet, so it is the only step
+          reachable with the other lane unfinished — and the only one where
+          getting it wrong puts hardware in the hands of a merchant nobody
+          approved.
+      
+          Rendered in BOTH states, unlike the warning it replaces. A control
+          that appears only on failure leaves the reader unable to tell a
+          granted clearance from a check that never ran, and this one is
+          granted silently by the checks themselves — so if it said nothing on
+          a clean file, nothing on screen would record that the decision had
+          been taken at all. */}
+      {step.lane === "spine" && step.id === REJOIN_STEP && (
         <div className="border-b border-border px-5 py-4">
-          <div className="flex gap-2.5 rounded-lg border border-destructive/40 bg-destructive/[0.07] px-3 py-2.5">
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
-            <div>
-              <p className="text-sm font-semibold text-foreground">{rejoinRisk.label}</p>
-              <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
-                {rejoinRisk.detail} The build lane does not wait for underwriting, so reaching this
-                step is not itself an approval.
-              </p>
+          {clearance.granted ? (
+            <div className="flex gap-2.5 rounded-lg border border-success/40 bg-success/[0.07] px-3 py-2.5">
+              <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-success" />
+              <div>
+                <p className="text-sm font-semibold text-foreground">Cleared to release</p>
+                <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                  All {clearance.checked.length} prior steps across both lanes have passed, so
+                  clearance was granted automatically — there was nothing left to decide. Ingenico
+                  books the carrier and ships from here.
+                </p>
+              </div>
             </div>
-          </div>
+          ) : (
+            <div
+              /* Tone tracks the KIND of hold. An unfinished build step is not a
+                 fraud finding, and painting both in alarm red would spend the
+                 alarm colour on a file that is merely early. */
+              className={`rounded-lg border px-3 py-2.5 ${
+                clearance.failing
+                  ? "border-destructive/40 bg-destructive/[0.07]"
+                  : "border-warning/40 bg-warning/[0.07]"
+              }`}
+            >
+              <div className="flex gap-2.5">
+                {clearance.failing ? (
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+                ) : (
+                  <Clock className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+                )}
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-foreground">Release withheld</p>
+                  <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                    Ingenico cannot dispatch without your clearance, and clearance needs every prior
+                    step on both lanes to pass. Reaching this step is not itself an approval — the
+                    build lane does not wait for the risk lane.
+                  </p>
+
+                  {/* Each hold NAMED. A count alone ("2 outstanding") tells the
+                      acquirer something is wrong but not what to do about it,
+                      and the two kinds have different remedies. */}
+                  <ul className="mt-2.5 flex flex-col gap-1.5">
+                    {clearance.holds.map((h) => (
+                      <li key={h.step.id} className="flex items-start gap-2 text-xs">
+                        <span className="mt-px font-mono text-[10px] font-semibold text-muted-foreground">
+                          {h.step.code}
+                        </span>
+                        <span className="min-w-0">
+                          <span className="font-medium text-foreground">{h.step.name}</span>
+                          <span className="text-muted-foreground">
+                            {" — "}
+                            {h.kind === "failed"
+                              ? h.headline
+                              : h.started
+                                ? "in progress, not finished"
+                                : "not started"}
+                          </span>
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+
+                  {/* Says what makes it move, so a withheld release does not
+                      read as a dead end. */}
+                  <p className="mt-2.5 text-xs text-muted-foreground">
+                    {clearance.failing
+                      ? "Resolve the findings above. Release is granted automatically once every step passes."
+                      : "No action needed here — release is granted automatically as the remaining steps pass."}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -1329,16 +1436,25 @@ function StepCockpit({
               Pause
             </button>
           ) : (
+            /* THE GATE THAT ACTUALLY MATTERS. The banner above states the
+               position; this stops the parcels. Ship's tasks book a carrier
+               and hand hardware over, so running them on a withheld file is
+               the very outcome the clearance exists to prevent — a red notice
+               above a live Play button is a warning, not a control. */
             <button
               onClick={play}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary/90 glow-soft"
+              disabled={runBlocked !== null}
+              title={runBlocked ?? undefined}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary/90 glow-soft disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none disabled:hover:bg-primary"
             >
               <Play className="h-3.5 w-3.5" />
-              {completed >= step.tasks.length
-                ? "Replay agent"
-                : completed > 0
-                  ? "Resume agent"
-                  : "Play agent run"}
+              {runBlocked
+                ? "Release withheld"
+                : completed >= step.tasks.length
+                  ? "Replay agent"
+                  : completed > 0
+                    ? "Resume agent"
+                    : "Play agent run"}
             </button>
           )}
           {/* Gated on "is there anything to undo", not on progress alone: a
