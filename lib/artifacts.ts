@@ -1506,6 +1506,37 @@ export function blockingFinding(
   return first ?? null
 }
 
+/**
+ * Checks this step DISPATCHED that have not come back yet.
+ *
+ * "Every task ran" and "every answer arrived" are different claims, and the
+ * parallel lanes make the gap between them routine: KYC sends a liveness check
+ * out to a provider and the file legitimately carries on without it. The
+ * merchant is presumed legitimate and is simply waiting on a third party — so
+ * the wait has to be VISIBLE. A step that renders as finished leaves nobody
+ * aware anything is outstanding, and the merchant sits waiting on a check no
+ * one on this side can see is still open.
+ *
+ * Derived here, once, because three surfaces need it — the rail marker, the
+ * step badge and the panel footer. Each counting for itself is how a badge
+ * comes to read "Complete" over a spinner saying otherwise.
+ *
+ * Task indices are scanned to a fixed upper bound, exactly as `blockingFinding`
+ * does: `artifactFor` returns null past the end of a step, so no task count has
+ * to be passed in and two callers cannot disagree about how many there are.
+ */
+export function outstandingChecks(stepId: StepId, merchant: Merchant): number {
+  let n = 0
+  for (let i = 0; i < 8; i++) {
+    // A task that cannot run here dispatched nothing, so it can have nothing
+    // outstanding — counting it would report a wait nobody is serving.
+    if (taskSkipped(stepId, i, merchant)) continue
+    const a = artifactFor(stepId, i, merchant)
+    if (a?.kind === "checks") n += a.rows.filter((r) => r.state === "running").length
+  }
+  return n
+}
+
 /** Resolve the artefact a given task produced. Returning null is a real
  *  answer — some tasks only write to the trace — and the UI says so rather
  *  than rendering an empty panel that looks broken. */

@@ -42,12 +42,14 @@ import { decisionAtStep, liveDecisionAtStep } from "@/lib/decisions"
 import { decisionBasis } from "@/lib/decision-basis"
 import { useDecisions } from "@/components/acquirer/decisions-provider"
 import { useBrandTheme } from "@/components/acquirer/brand-theme-provider"
+import { InProgressTag, PulseDot } from "@/components/acquirer/in-progress-tag"
 import { clearanceLine, shipClearance } from "@/lib/ship-clearance"
 import { cn } from "@/lib/utils"
 import {
   artifactFor,
   artifactOutcome,
   blockingFinding,
+  outstandingChecks as countOutstandingChecks,
   taskExceptions,
   type ExceptionContext,
   defaultBasket,
@@ -167,6 +169,24 @@ export function MerchantJourney({
     }
     return s
   }, [current, exceptionCtx])
+
+  // How many checks each step is still waiting on, so the rail marker cannot
+  // show a finished tick over one either.
+  //
+  // The rail was the worst of the three surfaces: KYC dispatches a liveness
+  // check, the file moves on, and R1 drew a solid tick — the strongest claim
+  // the marker can make — over a check nobody had answered. The merchant is
+  // legitimate and simply waiting on a provider, and nothing on the rail said
+  // so, so the wait was invisible until someone opened the one task holding
+  // the open row.
+  const awaitingSteps = useMemo(() => {
+    const m = new Map<StepId, number>()
+    for (const st of PIPELINE) {
+      const n = countOutstandingChecks(st.id, current)
+      if (n > 0) m.set(st.id, n)
+    }
+    return m
+  }, [current])
 
   /* WHAT THIS SESSION HAS FINISHED, per merchant.
   
@@ -331,6 +351,7 @@ export function MerchantJourney({
               onFocus={setFocusStep}
               connector="none"
               hasFinding={findingSteps.has(step.id)}
+          awaiting={awaitingSteps.get(step.id) ?? 0}
             />
           ))}
 
@@ -359,6 +380,7 @@ export function MerchantJourney({
               focusStep={focusStep}
               onFocus={setFocusStep}
               findingSteps={findingSteps}
+            awaitingSteps={awaitingSteps}
             />
             <LaneColumn
               steps={buildLane}
@@ -366,6 +388,7 @@ export function MerchantJourney({
               focusStep={focusStep}
               onFocus={setFocusStep}
               findingSteps={findingSteps}
+            awaitingSteps={awaitingSteps}
             />
           </div>
 
@@ -381,6 +404,7 @@ export function MerchantJourney({
               onFocus={setFocusStep}
               connector={i === spine.after.length - 1 ? "none" : "down"}
               hasFinding={findingSteps.has(step.id)}
+          awaiting={awaitingSteps.get(step.id) ?? 0}
             />
           ))}
         </div>
@@ -483,12 +507,16 @@ function LaneColumn({
   focusStep,
   onFocus,
   findingSteps,
+  awaitingSteps,
 }: {
   steps: PipelineStep[]
   stepState: (step: PipelineStep) => StepState
   focusStep: StepId
   onFocus: (id: StepId) => void
   findingSteps: Set<StepId>
+  /** Step id → checks dispatched and not yet returned. A count, not a flag,
+   *  because the marker has to say how many are outstanding. */
+  awaitingSteps: Map<StepId, number>
 }) {
   return (
     <div className="flex min-w-0 flex-1 flex-col">
@@ -502,6 +530,7 @@ function LaneColumn({
           connector={i === steps.length - 1 ? "none" : "down"}
           dense
           hasFinding={findingSteps.has(step.id)}
+          awaiting={awaitingSteps.get(step.id) ?? 0}
         />
       ))}
       <div className="relative min-h-3 flex-1">
@@ -525,6 +554,7 @@ function StepRow({
   connector,
   dense,
   hasFinding,
+  awaiting = 0,
 }: {
   step: PipelineStep
   state: StepState
@@ -534,11 +564,17 @@ function StepRow({
   dense?: boolean
   /** The step is behind us but something in its artefacts is unresolved. */
   hasFinding?: boolean
+  /** The step ran, but checks it dispatched have not come back. */
+  awaiting?: number
 }) {
   // Only meaningful once the step is behind us: an upcoming step's artefacts
   // describe work nobody has done, and marking it would report a failure
   // against a step the agent has not reached.
   const flagged = hasFinding && state === "done"
+  // Same rule, same reason. And ranked BELOW a finding: both are amber, but a
+  // finding is something to answer and this is something to wait out, so when
+  // a step carries both the marker shows the one that needs a person.
+  const pending = !flagged && state === "done" && awaiting > 0
   return (
     <div className="flex flex-col items-center">
       {/* THE WHOLE NODE IS THE TARGET — circle included.
@@ -558,6 +594,8 @@ function StepRow({
             "flex h-8 w-8 shrink-0 items-center justify-center rounded-full border text-[11px] font-semibold transition-all",
             flagged
               ? "border-warning bg-warning/15 text-warning"
+              : pending
+              ? "border-warning bg-warning/15 text-warning"
               : state === "done"
               ? "border-primary bg-primary text-primary-foreground"
               : state === "active"
@@ -575,6 +613,13 @@ function StepRow({
               work, and red is already spoken for by a task that failed. */}
           {flagged ? (
             <AlertTriangle className="h-4 w-4" />
+          ) : pending ? (
+            // The tick is withheld here too, and for a nearer reason: the
+            // step's checks have not come back, so a tick would report a
+            // verdict nobody has returned. NOT the warning triangle either —
+            // nothing has gone wrong. A pulse, because a static mark is what
+            // let this read as finished in the first place.
+            <PulseDot />
           ) : state === "done" ? (
             <Check className="h-4 w-4" />
           ) : (
@@ -590,9 +635,15 @@ function StepRow({
             <span className="sr-only">
               {flagged
                 ? "Step has an unresolved finding"
-                : state === "done"
-                  ? "Step complete"
-                  : "Step in progress"}
+                : pending
+                  ? `Step ran, ${awaiting} check${awaiting === 1 ? "" : "s"} still in progress`
+                  : state === "done"
+                    ? "Step complete"
+                    : // Was "Step in progress", which the pending state above
+                      // now needs: a check out with a provider and the agent
+                      // mid-run are different things and cannot share a name.
+                      // Matches the header badge, which already says this.
+                      "Agent working on this step"}
             </span>
           )}
         </span>
@@ -633,6 +684,11 @@ function StepRow({
             >
               {step.band}
             </span>
+            {/* The words, on the rail itself. The pulsing marker says
+                something is still moving but not what, and this is the one
+                view a reader scans without opening anything — if the wait is
+                not named here it is not named anywhere they will look. */}
+            {pending && <InProgressTag label={dense ? "In progress" : `${awaiting} in progress`} />}
             {!dense && <OwnerBadge step={step.id} compact />}
           </div>
         </div>
@@ -1108,15 +1164,12 @@ function StepCockpit({
   // "Complete" directly above a spinner saying otherwise — the same defect this
   // file already fixed for held dispatches and halted runs, one register lower.
   // Counted off the artefacts themselves so the badge and the panel beneath it
-  // are reading one source and cannot drift apart.
-  const outstandingChecks = useMemo(() => {
-    let n = 0
-    for (let i = 0; i < step.tasks.length; i++) {
-      const a = artifactFor(step.id, i, merchant)
-      if (a?.kind === "checks") n += a.rows.filter((r) => r.state === "running").length
-    }
-    return n
-  }, [step.id, merchant, step.tasks.length])
+  // are reading one source and cannot drift apart — and now counted by the
+  // SAME function the rail uses, for the same reason one register up.
+  const outstandingChecks = useMemo(
+    () => countOutstandingChecks(step.id, merchant),
+    [step.id, merchant],
+  )
 
   // Commits this step has PREPARED that the acquirer has not released yet.
   //
@@ -1395,7 +1448,13 @@ function StepCockpit({
                     ? "border-destructive/40 bg-destructive/12 text-destructive"
                     : finding
                       ? "border-warning/40 bg-warning/15 text-warning-foreground"
-                      : "border-success/30 bg-success/10 text-success"
+                      : // The count was already honest — "2 awaiting" — but it
+                        // was printed in the success green, so the chrome said
+                        // finished while the words said waiting and the chrome
+                        // is what gets read at a glance.
+                        outstandingChecks > 0
+                        ? "border-warning/40 bg-warning/15 text-warning-foreground"
+                        : "border-success/30 bg-success/10 text-success"
                   : "border-border bg-secondary text-muted-foreground",
             )}
           >
@@ -1404,6 +1463,15 @@ function StepCockpit({
                 <span className="absolute inline-flex h-full w-full rounded-full bg-primary animate-agent-ring" />
                 <span className="relative inline-flex h-2 w-2 rounded-full bg-primary" />
               </span>
+            ) : status === "done" && runnableCount > 0 && !finding && outstandingChecks > 0 ? (
+              // Was a flat grey dot, on the reasoning that waiting is not a
+              // warning. True, but grey is what "this step has not had its
+              // turn" already looks like, so an open check rendered as nothing
+              // happening — and the merchant went on waiting on a provider
+              // with no one on this side able to see it. Amber and moving:
+              // amber because the file IS held up, moving because that is what
+              // separates it from the settled amber of a finding.
+              <PulseDot />
             ) : (
               <span
                 className={cn(
@@ -1413,12 +1481,7 @@ function StepCockpit({
                       ? "bg-destructive"
                       : finding
                         ? "bg-warning"
-                        : // Waiting is not a warning. Amber here would raise an
-                          // alarm about a check that is proceeding normally, and
-                          // green would assert a result nobody has returned.
-                          outstandingChecks > 0
-                          ? "bg-muted-foreground/60"
-                          : // A held release is not an alarm either — nothing
+                        : // A held release is not an alarm either — nothing
                             // has gone wrong, the acquirer simply has not
                             // pressed it yet — but green would claim the step
                             // had finished, which is the thing it has not done.
@@ -1454,9 +1517,11 @@ function StepCockpit({
                       ? "Finding"
                       : // Reports the outstanding count rather than a verdict:
                         // the step is genuinely waiting, not finished and not
-                        // stuck, and that is a third thing.
+                        // stuck, and that is a third thing. "In progress"
+                        // rather than "awaiting", which reads as stalled — the
+                        // check is moving, just not here.
                         outstandingChecks > 0
-                        ? `${outstandingChecks} awaiting`
+                        ? `${outstandingChecks} in progress`
                         : // Named as YOURS, not as a bare count: an
                           // outstanding check is waiting on someone else,
                           // whereas this is waiting on the reader.

@@ -21,6 +21,7 @@ import { cn } from "@/lib/utils"
 import { BrandStudio } from "@/components/acquirer/brand-studio"
 import { EdgeCaseDesk, RiskBreakdown } from "@/components/acquirer/risk-desk"
 import { SchemeDesk } from "@/components/acquirer/scheme-desk"
+import { InProgressTag } from "@/components/acquirer/in-progress-tag"
 import type { AcceptanceState } from "@/lib/scheme-acceptance"
 import type { BrandTheme } from "@/lib/branding"
 import type { EdgeResolution } from "@/lib/underwriting"
@@ -1334,7 +1335,11 @@ function ChecksView({ artifact }: { artifact: Extract<Artifact, { kind: "checks"
     pass: "text-success",
     warn: "text-warning",
     fail: "text-destructive",
-    running: "text-primary",
+    // Amber, and the same amber the rail and the badge now use for an open
+    // check. It was primary cyan, which reads as "waiting on you" everywhere
+    // else in this portal — precisely the wrong instruction for a check that
+    // is out with a provider and needs nothing from the acquirer at all.
+    running: "text-warning",
   } as const
   const open = artifact.rows.filter((r) => r.state === "running").length
   return (
@@ -1346,7 +1351,7 @@ function ChecksView({ artifact }: { artifact: Extract<Artifact, { kind: "checks"
             className={cn(
               "flex gap-2.5 rounded-xl border p-3",
               r.state === "running"
-                ? "border-primary/40 bg-primary/[0.05]"
+                ? "border-warning/45 bg-warning/[0.07]"
                 : "border-border/70 bg-white/60",
             )}
           >
@@ -1363,7 +1368,13 @@ function ChecksView({ artifact }: { artifact: Extract<Artifact, { kind: "checks"
               )}
             </span>
             <div className="min-w-0">
-              <p className="text-sm font-medium text-foreground">{r.label}</p>
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="text-sm font-medium text-foreground">{r.label}</p>
+                {/* The state SAID, not only drawn. A spinner alone leaves the
+                    reader to infer what it means; the words are what stop an
+                    open check being read as a stalled one. */}
+                {r.state === "running" && <InProgressTag />}
+              </div>
               <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">{r.evidence}</p>
             </div>
           </div>
@@ -1374,8 +1385,8 @@ function ChecksView({ artifact }: { artifact: Extract<Artifact, { kind: "checks"
           ticks. */}
       {open > 0 && (
         <p className="mt-2.5 text-[11px] leading-relaxed text-muted-foreground">
-          {open} of {artifact.rows.length} still running. The build lane keeps moving while these
-          resolve — only Ship waits on the outcome.
+          {open} of {artifact.rows.length} still in progress — out with the provider, not waiting on
+          you. The build lane keeps moving while these resolve; only Ship waits on the outcome.
         </p>
       )}
     </Shell>
