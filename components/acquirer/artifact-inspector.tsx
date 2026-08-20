@@ -37,6 +37,8 @@ import {
   deliveryGeo,
   warehousesByDistance,
   consignmentFacts,
+  experimentReading,
+  metricOverlap,
   fmtDate,
   isoDate,
   eur,
@@ -1226,6 +1228,258 @@ function TariffView({ artifact }: { artifact: Extract<Artifact, { kind: "tariff"
   )
 }
 
+const expValue = (n: number, unit: "pct" | "gbp") =>
+  unit === "gbp" ? `£${n.toLocaleString("en-GB")}` : `${n}%`
+const expBand = (b: [number, number], unit: "pct" | "gbp") =>
+  `${expValue(b[0], unit)}–${expValue(b[1], unit)}`
+
+/**
+ * A proposed test the acquirer can actually answer.
+ *
+ * This was a static table, and the objection was exactly right: the agent
+ * proposed a test and there was nothing to click. A proposal with no way to
+ * accept or decline it is not a recommendation, it is a remark.
+ *
+ * The three options are deliberately NOT "run / don't run". Declining a test
+ * is not a decision — you still have to price the merchant — so the two ways
+ * of declining are the two prices, stated as what they are.
+ */
+function ExperimentView({ artifact }: { artifact: Extract<Artifact, { kind: "experiment" }> }) {
+  // Held outside the artefact, like the tariff rates: the artefact records what
+  // the AGENT proposed, and a choice that overwrote it would erase the proposal
+  // the moment someone disagreed with it.
+  const [choice, setChoice] = useState<"A" | "B" | "test" | null>(null)
+  const reading = useMemo(() => experimentReading(artifact), [artifact])
+
+  const { separated, unresolved, earliestCallMonths } = reading
+  const underTest = artifact.merchantsPerWeek * 52
+
+  const options = [
+    ...artifact.variants.map((v) => ({
+      key: v.key as "A" | "B" | "test",
+      title: `Ship ${v.key} — ${v.label.toLowerCase()}`,
+      terms: v.terms.map((t) => `${t.label} ${t.value}`).join(" · "),
+      recommended: false,
+      // Naming the disagreement rather than letting two cards quietly hold
+      // different rates for the same merchant.
+      commits: v.matchesRecommendedTariff
+        ? "Prices every merchant of this type on these rates. Matches the tariff recommended above, and leaves the revenue question unresolved."
+        : `Prices every merchant of this type on these rates. Overrules the tariff recommended above — those rates become ${v.terms
+            .map((t) => `${t.label.toLowerCase()} ${t.value}`)
+            .join(" and ")} — and leaves the revenue question unresolved.`,
+    })),
+    {
+      key: "test" as const,
+      title: `Run the ${artifact.split} test`,
+      terms: `Both tariffs live · ${artifact.merchantsPerWeek} merchants a week enter the split`,
+      recommended: true,
+      commits: earliestCallMonths
+        ? `Resolves ${unresolved
+            .map((m) => m.label.toLowerCase())
+            .join(" and ")}, but cannot be read for ${earliestCallMonths} months — about ${underTest.toLocaleString(
+            "en-GB",
+          )} merchants priced under the split before the first reading (${artifact.merchantsPerWeek} a week × 52).`
+        : // Not reachable on today's numbers, but a test that resolves nothing
+          // should say so rather than render an empty consequence.
+          "Buys nothing the model cannot already state — every metric below is already separated.",
+    },
+  ]
+
+  const chosen = options.find((o) => o.key === choice)
+
+  return (
+    <Shell title={artifact.title} note={artifact.note}>
+      {/* WHAT THE MODEL CAN AND CANNOT SAY, one card per metric.
+      
+          Built as a 4-column table first, and the screenshot killed it: the
+          inspector is a ~380px column, so Metric / A / B / verdict got ~95px
+          each and the verdict wrapped to one word per line. A comparison
+          nobody can read is not a comparison. Cards give each metric the full
+          width and stack the two bands, which also lets the verdict sit under
+          the figures it is about rather than in a column beside them. */}
+      <div className="space-y-1.5">
+        {artifact.metrics.map((m) => {
+          const ov = metricOverlap(m)
+          // Only claim a leader where the bands are actually disjoint. Marking
+          // one side ahead on an overlapping metric would assert exactly the
+          // thing the test exists to find out.
+          const leader = ov ? null : m.a[0] > m.b[0] ? "A" : "B"
+          return (
+            <div key={m.key} className="rounded-xl border border-border/70 bg-white/60 p-3">
+              <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                <span className="text-sm font-semibold text-foreground">{m.label}</span>
+                <span
+                  className={cn(
+                    "rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
+                    ov ? "bg-warning/15 text-warning-foreground" : "bg-success/15 text-success",
+                  )}
+                >
+                  {ov ? "Unresolved" : "Separated"}
+                </span>
+                <span className="w-full text-[11px] text-muted-foreground">
+                  {m.horizonMonths === 0
+                    ? "Observable at the point of sale"
+                    : `Cannot be read for ${m.horizonMonths} months`}
+                </span>
+              </div>
+
+              <div className="mt-2 space-y-1">
+                {artifact.variants.map((v) => {
+                  const band = v.key === "A" ? m.a : m.b
+                  const ahead = leader === v.key
+                  return (
+                    <div
+                      key={v.key}
+                      className="flex items-baseline justify-between gap-3 border-t border-border/40 pt-1 first:border-0 first:pt-0"
+                    >
+                      <span className="min-w-0 text-xs text-muted-foreground">
+                        <span className="font-semibold text-foreground">{v.key}</span> —{" "}
+                        {v.label.toLowerCase()}
+                      </span>
+                      <span className="flex shrink-0 items-baseline gap-1.5">
+                        <span
+                          className={cn(
+                            "font-mono text-sm tabular-nums",
+                            ahead ? "font-semibold text-foreground" : "text-foreground",
+                          )}
+                        >
+                          {expBand(band, m.unit)}
+                        </span>
+                        {ahead && (
+                          <span className="text-[10px] font-semibold uppercase tracking-wide text-success">
+                            ahead
+                          </span>
+                        )}
+                      </span>
+                    </div>
+                  )
+                })}
+              </div>
+
+              <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
+                {ov ? (
+                  <>
+                    Bands overlap{" "}
+                    <span className="font-mono tabular-nums text-foreground">
+                      {expBand([ov.lo, ov.hi], m.unit)}
+                    </span>{" "}
+                    — {expValue(ov.width, m.unit)} wide, {Math.round(ov.shareOfA * 100)}% of A{"'"}s
+                    range and {Math.round(ov.shareOfB * 100)}% of B{"'"}s. The model cannot separate
+                    them.
+                  </>
+                ) : (
+                  <>No overlap. Testing this re-measures something the model already states.</>
+                )}
+              </p>
+            </div>
+          )
+        })}
+      </div>
+
+      {/* The asymmetry IS the argument, so it is stated once in plain words
+          rather than left for the reader to assemble from two rows. */}
+      {unresolved.length > 0 && separated.length > 0 && (
+        <p className="mt-2.5 rounded-lg border border-border bg-secondary/60 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+          <span className="font-semibold text-foreground">Why the agent proposes a test.</span> The
+          model already separates {separated.map((m) => m.label.toLowerCase()).join(" and ")}, so
+          that question is answered. It cannot separate{" "}
+          {unresolved.map((m) => m.label.toLowerCase()).join(" or ")} — and that is the figure the
+          commercial case rests on.
+        </p>
+      )}
+
+      <p className="mt-1.5 flex gap-2 rounded-lg border border-warning/35 bg-warning/[0.07] px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+        <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
+        <span>
+          <span className="font-semibold text-foreground">Cohort not sized.</span>{" "}
+          {artifact.cohortGap}
+        </span>
+      </p>
+
+      {/* THE DECISION. Nothing preselected — a default here would be the app
+          choosing the merchant's price and calling it the acquirer's call. */}
+      <div className="mt-3.5" role="radiogroup" aria-label="Pricing decision">
+        {/* Names the commit surface. Without this the radio reads as the
+            decision itself, when the binding act is the Set pricing handoff
+            below — and a control that looks like it has committed something it
+            hasn't is worse than one that looks inert. */}
+        <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          Your call{" "}
+          <span className="font-normal normal-case tracking-normal text-muted-foreground/80">
+            — committed at Set pricing below
+          </span>
+        </p>
+        <div className="space-y-1.5">
+          {options.map((o) => {
+            const active = choice === o.key
+            return (
+              <button
+                key={o.key}
+                type="button"
+                role="radio"
+                aria-checked={active}
+                onClick={() => setChoice(o.key)}
+                className={cn(
+                  "w-full rounded-xl border p-3 text-left transition-colors",
+                  active
+                    ? "border-primary/55 bg-primary/[0.06]"
+                    : "border-border/70 bg-white/60 hover:border-border hover:bg-white",
+                )}
+              >
+                <span className="flex flex-wrap items-center gap-2">
+                  <span
+                    className={cn(
+                      "grid h-4 w-4 shrink-0 place-items-center rounded-full border transition-colors",
+                      active ? "border-primary bg-primary" : "border-border bg-white",
+                    )}
+                  >
+                    {active && <Check className="h-2.5 w-2.5 text-white" strokeWidth={3.5} />}
+                  </span>
+                  <span className="text-sm font-semibold text-foreground">{o.title}</span>
+                  {o.recommended && (
+                    <span className="rounded bg-foreground/8 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-foreground">
+                      Agent{"'"}s proposal
+                    </span>
+                  )}
+                </span>
+                <span className="mt-1 block pl-6 font-mono text-[11px] tabular-nums text-muted-foreground">
+                  {o.terms}
+                </span>
+              </button>
+            )
+          })}
+        </div>
+      </div>
+
+      {/* The consequence of the choice, and a way back out of it. */}
+      {chosen && (
+        <div className="mt-2 rounded-xl border border-primary/40 bg-primary/[0.04] p-3">
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            <span className="font-semibold text-foreground">{chosen.title}.</span> {chosen.commits}
+          </p>
+          <p className="mt-1.5 flex items-center gap-2 text-[11px] text-muted-foreground">
+            <span>
+              The agent proposed{" "}
+              <span className="font-semibold text-foreground">running the test</span>
+            </span>
+            <button
+              type="button"
+              onClick={() => setChoice(null)}
+              className="font-medium text-primary underline-offset-2 hover:underline"
+            >
+              Clear
+            </button>
+          </p>
+        </div>
+      )}
+
+      <p className="mt-2.5 text-[11px] leading-relaxed text-muted-foreground">
+        {artifact.illustrative}
+      </p>
+    </Shell>
+  )
+}
+
 function TableView({ artifact }: { artifact: Extract<Artifact, { kind: "table" }> }) {
   return (
     <Shell title={artifact.title} note={artifact.note}>
@@ -1325,6 +1579,8 @@ export function ArtifactInspector(props: Props) {
       return <TxnsView artifact={artifact} />
     case "table":
       return <TableView artifact={artifact} />
+    case "experiment":
+      return <ExperimentView artifact={artifact} />
     case "document":
       return <DocumentView artifact={artifact} />
     case "acceptance":
