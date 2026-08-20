@@ -532,6 +532,16 @@ export type Artifact =
       title: string
       note: string
       rows: TariffRow[]
+      /**
+       * Pricing is a COMMERCIAL DECISION the acquirer owns outright — unlike a
+       * sanctions hit, there is no external authority behind it, so the agent's
+       * rate card is a proposal and nothing more. The panel's own note promised
+       * "every line is yours to overrule" while offering no way to overrule it:
+       * a claim in prose that the interface contradicted. Same slot and same
+       * reasoning as `records` — it names WHERE the change lands rather than
+       * pretending this screen writes the rate.
+       */
+      editable?: { label: string; where: string }
       /** The modelled consequence of the bundle, stated as a RANGE — a single
        *  conversion number would imply a precision the model does not have. */
       projection: { label: string; range: string; basis: string }
@@ -1196,6 +1206,11 @@ export function artifactFor(
         kind: "tariff",
         title: "Recommended tariff",
         note: "The bundle the agent would offer this merchant type. Every line is yours to overrule.",
+        editable: {
+          label: "Set your own rates",
+          where:
+            "Your pricing engine — the agent proposes from the merchant profile, your rate card overrides it line by line",
+        },
         rows: [
           { label: "Monthly fee", value: "£19", basis: "Median for single-site hospitality on your book" },
           { label: "Setup fee", value: "£0", basis: "Waived — the upfront fee is the sharpest lever on sign-up" },
@@ -1206,7 +1221,11 @@ export function artifactFor(
         projection: {
           label: "Modelled sign-up rate",
           range: "58–71%",
-          basis: "Range, not a point: conversion moves sharply by merchant type and this bundle has not been tested on this segment.",
+          // States its DEPENDENCY on the rates above, not just its width. Once
+          // the acquirer can overrule a line, a projection that only explains
+          // why it is a range would go on asserting 58–71% against a rate card
+          // it was never modelled on.
+          basis: "Modelled on the rates above — overrule a line and this no longer holds. A range, not a point: conversion moves sharply by merchant type and this bundle is untested on this segment.",
         },
         illustrative: "Illustrative. Modelled from comparable merchants — not an offer, and not a commitment to a rate.",
       }

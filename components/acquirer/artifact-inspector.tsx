@@ -921,8 +921,29 @@ function ChecksView({ artifact }: { artifact: Extract<Artifact, { kind: "checks"
  *  recommendation the acquirer is expected to argue with — a bare rate can only
  *  be accepted or ignored, not corrected. */
 function TariffView({ artifact }: { artifact: Extract<Artifact, { kind: "tariff" }> }) {
+  // Same disclosure as RecordsView: the control names where the change lands
+  // instead of faking an inline editor this screen cannot commit.
+  const [showEdit, setShowEdit] = useState(false)
   return (
-    <Shell title={artifact.title} note={artifact.note}>
+    <Shell title={artifact.title} note={artifact.note} editable={!!artifact.editable}>
+      {artifact.editable && (
+        <div className="mb-2.5">
+          <button
+            type="button"
+            onClick={() => setShowEdit((v) => !v)}
+            aria-expanded={showEdit}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-white/70 px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:border-primary/40 hover:text-primary"
+          >
+            <Pencil className="h-3.5 w-3.5" />
+            {artifact.editable.label}
+          </button>
+          {showEdit && (
+            <p className="mt-2 rounded-lg border border-primary/25 bg-primary/[0.06] px-3 py-2 text-[11px] leading-relaxed text-foreground">
+              {artifact.editable.where}
+            </p>
+          )}
+        </div>
+      )}
       <div className="space-y-1.5">
         {artifact.rows.map((r) => (
           <div
