@@ -195,11 +195,19 @@ export function MerchantJourney({
 
       <div className="mt-6 grid gap-6 lg:grid-cols-[300px_1fr]">
         {/* Left rail: clickable steps */}
-        <div className="flex flex-col gap-1.5">
-          <p className="px-1 pb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+        <div className="flex flex-col">
+          <p className="px-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
             Pipeline
           </p>
-          {/* Capture — the shared start, before the fork. */}
+          {/* Stated here, above the diagram, rather than between the lanes and
+              the rejoin — a paragraph dropped in there severs the very lines it
+              is describing. */}
+          <p className="px-1 pb-3 pt-1 text-[10px] leading-relaxed text-muted-foreground">
+            Both lanes run at the same time and rejoin at Ship.
+          </p>
+
+          {/* Capture — the shared trunk, centred so the fork below it can
+              descend symmetrically into both lanes. */}
           {spine.before.map((step) => (
             <StepRow
               key={step.id}
@@ -207,53 +215,42 @@ export function MerchantJourney({
               state={stepState(step)}
               isFocus={step.id === focusStep}
               onFocus={setFocusStep}
-              connector="down"
+              connector="none"
             />
           ))}
+
+          {/* Lane names sit between the trunk and the arch. They are centred in
+              each half (25% / 75%) while the trunk runs at 50%, so the line
+              passes cleanly BETWEEN them and capture stays visibly connected to
+              the fork. Below the arch they would be an arrow target, which
+              reads as the branch stopping short of the step it feeds. */}
+          <div className="relative flex gap-2 py-1">
+            <span
+              aria-hidden
+              className="absolute bottom-0 left-1/2 top-0 w-px -translate-x-1/2 bg-border"
+            />
+            <LaneHeader label="Risk" />
+            <LaneHeader label="Build" />
+          </div>
 
           {/* THE FORK. Two columns side by side, because the whole point is
               that neither waits for the other — stacking them vertically is
               what made the old rail assert an order that does not exist. */}
-          {/* Labels sit ABOVE the arch so its arrowheads land on the step
-              circles themselves — pointing an arrow at a caption reads as the
-              branch stopping short of the thing it feeds. */}
-          <div className="flex gap-2 pt-1">
-            <LaneHeader label="Risk" />
-            <LaneHeader label="Build" />
-          </div>
           <ForkArch />
-          <div className="relative flex gap-2">
-            <div className="min-w-0 flex-1">
-              {riskLane.map((step) => (
-                <StepRow
-                  key={step.id}
-                  step={step}
-                  state={stepState(step)}
-                  isFocus={step.id === focusStep}
-                  onFocus={setFocusStep}
-                  connector="none"
-                  dense
-                />
-              ))}
-            </div>
-            <div className="min-w-0 flex-1">
-              {buildLane.map((step, i) => (
-                <StepRow
-                  key={step.id}
-                  step={step}
-                  state={stepState(step)}
-                  isFocus={step.id === focusStep}
-                  onFocus={setFocusStep}
-                  connector={i === buildLane.length - 1 ? "none" : "down"}
-                  dense
-                />
-              ))}
-            </div>
+          <div className="flex items-stretch gap-2">
+            <LaneColumn
+              steps={riskLane}
+              stepState={stepState}
+              focusStep={focusStep}
+              onFocus={setFocusStep}
+            />
+            <LaneColumn
+              steps={buildLane}
+              stepState={stepState}
+              focusStep={focusStep}
+              onFocus={setFocusStep}
+            />
           </div>
-
-          <p className="px-1 pt-1.5 text-[10px] leading-relaxed text-muted-foreground">
-            Both lanes run at the same time and rejoin at Ship.
-          </p>
 
           <RejoinArch />
 
@@ -284,18 +281,18 @@ export function MerchantJourney({
 
 /* The fork drawn as a real branch.
  *
- *  GEOMETRY, so the arms actually meet the step circles: each lane column is
- *  `flex-1` inside a `gap-2` (8px) row, and each circle is `w-8` (32px), so the
- *  left circle's centre sits at 16px and the right at `50% + 4px + 16px`. The
- *  arms are pinned to exactly those two x positions — anything hand-tuned drifts
- *  the moment the rail is resized.
+ *  GEOMETRY, so the arms actually meet the step circles: every step centres its
+ *  circle in its own column, so with two `flex-1` lanes in a `gap-2` (8px) row
+ *  the circles land at `25% - 2px` and `75% + 2px` — symmetric about the trunk
+ *  at 50%. The arms are pinned to exactly those x positions; anything
+ *  hand-tuned drifts the moment the rail is resized.
  *
  *  Built from a bordered box with rounded corners rather than an SVG: an SVG
  *  would need either a fixed viewBox (wrong at other widths) or
  *  `preserveAspectRatio="none"`, which stretches the arrowheads into wedges.
  *  A border arch scales cleanly at any width. */
-const LEFT_ARM = "left-4" // 16px = centre of the left lane's circle
-const RIGHT_ARM = "right-[calc(50%-20px)]" // mirrors 50% + 4px gap + 16px radius
+const LEFT_ARM = "left-[calc(25%-2px)]" // centre of the left lane column
+const RIGHT_ARM = "right-[calc(25%-2px)]" // mirror image, so the fork is symmetric
 
 /** Arrowhead. A CSS border triangle, not a glyph — U+25BE renders as tofu in
  *  this font stack. */
@@ -311,13 +308,16 @@ function ArrowDown({ className }: { className?: string }) {
   )
 }
 
-/** One line in, two lines out — the split into the parallel lanes. */
+/** One line in, two lines out — the split into the parallel lanes.
+ *  The trunk descends from the centred capture step, then the arch carries it
+ *  out to both lanes and drops an arrowhead into each. */
 function ForkArch() {
   return (
-    <div aria-hidden className="relative h-6">
+    <div aria-hidden className="relative h-8">
+      <span className="absolute left-1/2 top-0 h-3 w-px -translate-x-1/2 bg-border" />
       <div
         className={cn(
-          "absolute bottom-1.5 top-0 rounded-t-[14px] border-l border-r border-t border-border",
+          "absolute bottom-1.5 top-3 rounded-t-[14px] border-l border-r border-t border-border",
           LEFT_ARM,
           RIGHT_ARM,
         )}
@@ -329,19 +329,57 @@ function ForkArch() {
 }
 
 /** Two lines in, one line out — the lanes merging back onto the spine at Ship.
- *  Mirrors the fork so the regroup is as visible as the split; the build lane's
- *  arm sweeps left and both continue down into Ship's circle at 16px. */
+ *  The exact mirror of the fork, so the regroup is as legible as the split:
+ *  both arms curve inwards to the centre and a single trunk continues down. */
 function RejoinArch() {
   return (
-    <div aria-hidden className="relative h-6">
+    <div aria-hidden className="relative h-8">
       <div
         className={cn(
-          "absolute bottom-1.5 top-0 rounded-br-[14px] border-b border-r border-border",
+          "absolute top-0 h-5 rounded-b-[14px] border-b border-l border-r border-border",
           LEFT_ARM,
           RIGHT_ARM,
         )}
       />
-      <ArrowDown className={cn("bottom-0 -translate-x-1/2", LEFT_ARM)} />
+      <span className="absolute bottom-1.5 left-1/2 top-5 w-px -translate-x-1/2 bg-border" />
+      <ArrowDown className="bottom-0 left-1/2 -translate-x-1/2" />
+    </div>
+  )
+}
+
+/** One branch of the fork. The trailing filler keeps a SHORT lane connected:
+ *  the risk lane is one step against the build lane's four, so without it the
+ *  regroup would appear to start from nothing on the left. */
+function LaneColumn({
+  steps,
+  stepState,
+  focusStep,
+  onFocus,
+}: {
+  steps: PipelineStep[]
+  stepState: (step: PipelineStep) => StepState
+  focusStep: StepId
+  onFocus: (id: StepId) => void
+}) {
+  return (
+    <div className="flex min-w-0 flex-1 flex-col">
+      {steps.map((step, i) => (
+        <StepRow
+          key={step.id}
+          step={step}
+          state={stepState(step)}
+          isFocus={step.id === focusStep}
+          onFocus={onFocus}
+          connector={i === steps.length - 1 ? "none" : "down"}
+          dense
+        />
+      ))}
+      <div className="relative min-h-3 flex-1">
+        <span
+          aria-hidden
+          className="absolute bottom-0 left-1/2 top-0 w-px -translate-x-1/2 bg-border"
+        />
+      </div>
     </div>
   )
 }
@@ -365,45 +403,38 @@ function StepRow({
   dense?: boolean
 }) {
   return (
-    <div className="flex gap-3">
-      <div className="flex flex-col items-center">
-        <span
-          className={cn(
-            "flex h-8 w-8 shrink-0 items-center justify-center rounded-full border text-[11px] font-semibold transition-colors",
-            state === "done"
-              ? "border-primary bg-primary text-primary-foreground"
-              : state === "active"
-                ? "border-primary bg-primary/15 text-primary glow-primary"
-                : "border-border bg-card text-muted-foreground",
-          )}
-        >
-          {state === "done" ? <Check className="h-4 w-4" /> : step.code}
-        </span>
-        {connector === "down" && (
-          <span
-            className={cn("min-h-6 w-px flex-1", state === "done" ? "bg-primary/60" : "bg-border")}
-          />
+    <div className="flex flex-col items-center">
+      <span
+        className={cn(
+          "flex h-8 w-8 shrink-0 items-center justify-center rounded-full border text-[11px] font-semibold transition-colors",
+          state === "done"
+            ? "border-primary bg-primary text-primary-foreground"
+            : state === "active"
+              ? "border-primary bg-primary/15 text-primary glow-primary"
+              : "border-border bg-card text-muted-foreground",
         )}
-      </div>
+      >
+        {state === "done" ? <Check className="h-4 w-4" /> : step.code}
+      </span>
       <button
         onClick={() => onFocus(step.id)}
         className={cn(
-          "mb-1.5 min-w-0 flex-1 rounded-lg border text-left transition-all",
-          dense ? "px-2 py-2" : "px-3 py-2.5",
+          "mt-1.5 w-full rounded-lg border text-center transition-all",
+          dense ? "px-1.5 py-1.5" : "px-3 py-2",
           isFocus
             ? "border-primary/50 bg-primary/[0.06]"
             : "border-transparent hover:border-border hover:bg-secondary/50",
         )}
       >
-        {/* `items-start`, and NO `truncate` in a lane column: at half width
-            "Underwrite" clipped to "Underw…", and a step whose name is cut to
-            nonsense reads as a rendering fault rather than a narrow column.
-            These names are one or two short words, so wrapping is safe. */}
-        <div className={cn("flex gap-1.5", dense ? "items-start" : "items-center")}>
+        {/* NO `truncate` in a lane column: at half width "Underwrite" clipped
+            to "Underw…", and a step whose name is cut to nonsense reads as a
+            rendering fault rather than a narrow column. These names are one or
+            two short words, so wrapping is safe. */}
+        <div className="flex items-center justify-center gap-1.5">
           <span
             className={cn(
-              "font-semibold",
-              dense ? "text-[13px] leading-tight" : "truncate text-sm",
+              "font-semibold leading-tight",
+              dense ? "text-[13px]" : "text-sm",
               state === "upcoming" ? "text-muted-foreground" : "text-foreground",
             )}
           >
@@ -413,7 +444,7 @@ function StepRow({
             <UserCheck className="h-3.5 w-3.5 shrink-0 text-primary" />
           )}
         </div>
-        <div className="mt-1 flex flex-wrap items-center gap-1">
+        <div className="mt-1 flex flex-wrap items-center justify-center gap-1">
           <span
             className={cn(
               "inline-block rounded px-1.5 py-0.5 text-[10px] font-semibold",
@@ -425,6 +456,11 @@ function StepRow({
           {!dense && <OwnerBadge step={step.id} compact />}
         </div>
       </button>
+      {connector === "down" && (
+        <span
+          className={cn("h-5 w-px", state === "done" ? "bg-primary/60" : "bg-border")}
+        />
+      )}
     </div>
   )
 }
@@ -433,7 +469,7 @@ function StepRow({
  *  and the reader has to infer why they sit side by side. */
 function LaneHeader({ label }: { label: string }) {
   return (
-    <p className="min-w-0 flex-1 px-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+    <p className="min-w-0 flex-1 text-center text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
       {label}
     </p>
   )
