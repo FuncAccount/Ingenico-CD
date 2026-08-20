@@ -537,9 +537,11 @@ export type Artifact =
        * sanctions hit, there is no external authority behind it, so the agent's
        * rate card is a proposal and nothing more. The panel's own note promised
        * "every line is yours to overrule" while offering no way to overrule it:
-       * a claim in prose that the interface contradicted. Same slot and same
-       * reasoning as `records` — it names WHERE the change lands rather than
-       * pretending this screen writes the rate.
+       * a claim in prose that the interface contradicted.
+       *
+       * Unlike `records`, this is NOT a pointer at some other system — the rows
+       * are genuinely typeable here, and `where` explains what happens to the
+       * agent's own figure when you do.
        */
       editable?: { label: string; where: string }
       /** The modelled consequence of the bundle, stated as a RANGE — a single
@@ -1209,7 +1211,7 @@ export function artifactFor(
         editable: {
           label: "Set your own rates",
           where:
-            "Your pricing engine — the agent proposes from the merchant profile, your rate card overrides it line by line",
+            "Type over any rate to set your own. The agent proposes from the merchant profile; your figure wins, and its proposal stays on the line so you can see what you moved away from.",
         },
         rows: [
           { label: "Monthly fee", value: "£19", basis: "Median for single-site hospitality on your book" },

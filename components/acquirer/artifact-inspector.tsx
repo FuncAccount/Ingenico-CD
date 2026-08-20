@@ -921,55 +921,119 @@ function ChecksView({ artifact }: { artifact: Extract<Artifact, { kind: "checks"
  *  recommendation the acquirer is expected to argue with — a bare rate can only
  *  be accepted or ignored, not corrected. */
 function TariffView({ artifact }: { artifact: Extract<Artifact, { kind: "tariff" }> }) {
-  // Same disclosure as RecordsView: the control names where the change lands
-  // instead of faking an inline editor this screen cannot commit.
-  const [showEdit, setShowEdit] = useState(false)
+  // Real inputs, not a disclosure. Pricing is the one lane step with no external
+  // authority behind it — the rate is the acquirer's own commercial call — so a
+  // read-only box under the words "every line is yours to overrule" was a
+  // capability claimed in prose and denied by the interface.
+  //
+  // Keyed by label and held OUTSIDE the artefact: the artefact is the record of
+  // what the AGENT recommended, and overwriting it would destroy the evidence of
+  // what was proposed the moment someone disagreed with it.
+  const [rates, setRates] = useState<Record<string, string>>({})
+  const valueOf = (r: { label: string; value: string }) => rates[r.label] ?? r.value
+  const changed = artifact.rows.filter((r) => valueOf(r).trim() !== r.value.trim())
+
   return (
     <Shell title={artifact.title} note={artifact.note} editable={!!artifact.editable}>
       {artifact.editable && (
-        <div className="mb-2.5">
-          <button
-            type="button"
-            onClick={() => setShowEdit((v) => !v)}
-            aria-expanded={showEdit}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-white/70 px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:border-primary/40 hover:text-primary"
-          >
-            <Pencil className="h-3.5 w-3.5" />
-            {artifact.editable.label}
-          </button>
-          {showEdit && (
-            <p className="mt-2 rounded-lg border border-primary/25 bg-primary/[0.06] px-3 py-2 text-[11px] leading-relaxed text-foreground">
-              {artifact.editable.where}
-            </p>
-          )}
-        </div>
+        <p className="mb-2.5 rounded-lg border border-border bg-white/60 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
+          {artifact.editable.where}
+        </p>
       )}
+
       <div className="space-y-1.5">
-        {artifact.rows.map((r) => (
-          <div
-            key={r.label}
-            className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 rounded-xl border border-border/70 bg-white/60 p-3"
-          >
-            <p className="min-w-0 flex-1 text-sm font-medium text-foreground">{r.label}</p>
-            <p className="font-mono text-sm font-semibold tabular-nums text-foreground">{r.value}</p>
-            <p className="w-full text-xs leading-relaxed text-muted-foreground">{r.basis}</p>
-          </div>
-        ))}
+        {artifact.rows.map((r) => {
+          const v = valueOf(r)
+          const isChanged = v.trim() !== r.value.trim()
+          return (
+            <div
+              key={r.label}
+              className={cn(
+                "flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border p-3 transition-colors",
+                isChanged ? "border-primary/45 bg-primary/[0.04]" : "border-border/70 bg-white/60",
+              )}
+            >
+              <label
+                htmlFor={`rate-${r.label}`}
+                className="min-w-0 flex-1 text-sm font-medium text-foreground"
+              >
+                {r.label}
+              </label>
+              <input
+                id={`rate-${r.label}`}
+                value={v}
+                onChange={(e) => setRates((s) => ({ ...s, [r.label]: e.target.value }))}
+                inputMode="decimal"
+                spellCheck={false}
+                aria-label={`${r.label} rate`}
+                // Free text, not a number field: the card mixes currency and
+                // percentages, and forcing a unit model here would either strip
+                // the acquirer's own notation or refuse a rate they can charge.
+                className="w-24 rounded-lg border border-border bg-white px-2 py-1 text-right font-mono text-sm font-semibold tabular-nums text-foreground outline-none transition-colors focus:border-primary focus:ring-2 focus:ring-primary/20"
+              />
+              <p className="w-full text-xs leading-relaxed text-muted-foreground">{r.basis}</p>
+              {isChanged && (
+                <p className="flex w-full items-center gap-2 text-[11px] text-muted-foreground">
+                  {/* The agent's figure survives the disagreement. */}
+                  <span>
+                    Agent proposed{" "}
+                    <span className="font-mono font-semibold text-foreground">{r.value}</span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setRates((s) => {
+                        const next = { ...s }
+                        delete next[r.label]
+                        return next
+                      })
+                    }
+                    className="font-medium text-primary underline-offset-2 hover:underline"
+                  >
+                    Restore
+                  </button>
+                </p>
+              )}
+            </div>
+          )
+        })}
       </div>
 
-      {/* The consequence of the bundle, as a RANGE. A single percentage would
-          read as a forecast the model cannot support. */}
-      <div className="mt-2.5 rounded-xl border border-primary/40 bg-primary/[0.05] p-3">
-        <div className="flex flex-wrap items-baseline justify-between gap-x-3">
-          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            {artifact.projection.label}
-          </p>
-          <p className="font-mono text-base font-semibold tabular-nums text-foreground">
-            {artifact.projection.range}
+      {/* The consequence of the bundle, as a RANGE — and only while the bundle is
+          the one it was measured on. Re-deriving this from hand-typed rates would
+          be inventing a measurement: there is no model behind it, just comparable
+          merchants on the agent's own card. So an override WITHHOLDS it and says
+          which lines took it away, rather than quietly recomputing a figure that
+          would look every bit as authoritative as the real one. */}
+      {changed.length === 0 ? (
+        <div className="mt-2.5 rounded-xl border border-primary/40 bg-primary/[0.05] p-3">
+          <div className="flex flex-wrap items-baseline justify-between gap-x-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              {artifact.projection.label}
+            </p>
+            <p className="font-mono text-base font-semibold tabular-nums text-foreground">
+              {artifact.projection.range}
+            </p>
+          </div>
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+            {artifact.projection.basis}
           </p>
         </div>
-        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{artifact.projection.basis}</p>
-      </div>
+      ) : (
+        <div className="mt-2.5 rounded-xl border border-dashed border-border bg-muted/25 p-3">
+          <div className="flex flex-wrap items-baseline justify-between gap-x-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              {artifact.projection.label}
+            </p>
+            <p className="font-mono text-base font-semibold text-muted-foreground">Not modelled</p>
+          </div>
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+            {artifact.projection.range} was measured on the agent&apos;s bundle. You changed{" "}
+            {changed.map((r) => r.label.toLowerCase()).join(", ")}, and no comparable merchants have
+            been priced that way — so there is no rate to report rather than a re-estimated one.
+          </p>
+        </div>
+      )}
 
       <p className="mt-2.5 text-[11px] leading-relaxed text-muted-foreground">{artifact.illustrative}</p>
     </Shell>
