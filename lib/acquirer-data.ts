@@ -732,10 +732,17 @@ export function laneState(
   step: PipelineStep,
   /** Steps completed during this session, on top of the fixture's position.
    *
-   *  Optional so the many read-only callers (estate rollups, the portfolio
-   *  table) need no change, and because omitting it is the honest default:
-   *  those surfaces genuinely have no session to consult. */
-  progressed: ReadonlySet<StepId> = EMPTY_PROGRESS,
+   *  REQUIRED, and deliberately so. This was optional, on the reasoning that
+   *  read-only callers have no session and omitting it is the honest default.
+   *  It is not: an omission and "nothing has happened yet" are different
+   *  claims, and the default quietly converted the first into the second. The
+   *  Ship gate forgot the argument and therefore judged a fully-built file
+   *  against the bare fixture, reporting three finished build steps as
+   *  outstanding while the rail beside it showed them done.
+   *
+   *  A surface with genuinely no session passes `NO_SESSION_PROGRESS`, which
+   *  says so. */
+  progressed: ReadonlySet<StepId>,
 ): "done" | "active" | "upcoming" {
   if (step.lane === "risk") {
     const lane = merchant.riskLane
@@ -788,9 +795,17 @@ export function laneState(
   return "upcoming"
 }
 
-/** Shared empty set, so the default argument does not allocate on every call
- *  and `laneState` stays cheap enough for the rollups that run it per step. */
-const EMPTY_PROGRESS: ReadonlySet<StepId> = new Set()
+/**
+ * Pass this when a surface has no session to consult — estate rollups, the
+ * portfolio table, anything reading the book rather than driving one file.
+ *
+ * Named for what it MEANS rather than for being empty, because it is passed
+ * explicitly at every such call site: `laneState` used to default to it, and a
+ * default turned every forgotten argument into the confident claim that
+ * nothing had progressed. That is precisely how the Ship gate came to list
+ * three build steps as unfinished on a file whose rail showed them all ticked.
+ */
+export const NO_SESSION_PROGRESS: ReadonlySet<StepId> = new Set()
 
 /** Whether a step on the build/spine path counts as finished.
  *
@@ -893,7 +908,7 @@ export function pathOf(step: PipelineStep): PipelineStep[] {
 export function blockingPredecessor(
   merchant: Pick<Merchant, "currentStep" | "riskLane">,
   step: PipelineStep,
-  progressed: ReadonlySet<StepId> = EMPTY_PROGRESS,
+  progressed: ReadonlySet<StepId>,
 ): PipelineStep | null {
   if (laneState(merchant, step, progressed) !== "upcoming") return null
   const path = pathOf(step)

@@ -34,6 +34,7 @@ import {
   type PipelineStep,
   laneState,
   blockingPredecessor,
+  NO_SESSION_PROGRESS,
   REJOIN_STEP,
   type StepId,
 } from "@/lib/acquirer-data"
@@ -59,6 +60,7 @@ import {
 import { StepGate } from "@/components/acquirer/step-gate"
 import { ownerOf, waitingOn, type HandoffState } from "@/lib/handoffs"
 import { blockers, checkBrand, defaultTheme, type BrandTheme } from "@/lib/branding"
+import { useProgress } from "@/components/acquirer/progress-provider"
 import { defaultAcceptance, type AcceptanceState } from "@/lib/scheme-acceptance"
 import { pendingReleases, type Releases } from "@/lib/releases"
 import { edgeResolved, outstandingDocuments, type EdgeResolution } from "@/lib/underwriting"
@@ -67,9 +69,6 @@ import { exceptionDetailMissing, exceptionOnStep } from "@/lib/exceptions"
 import { ExceptionPanel } from "@/components/acquirer/exception-panel"
 
 type StepState = "done" | "active" | "upcoming"
-
-/** Shared empty progress set — see the note at `progress` below. */
-const EMPTY_STEPS: ReadonlySet<StepId> = new Set()
 
 /**
  * Why a step's run is refused, in the refusal's own words.
@@ -150,23 +149,16 @@ export function MerchantJourney({
      Lives here rather than in the cockpit because the rail draws from it too,
      and a second copy is how the rail and the cockpit come to disagree about
      the same step. */
-  const [progress, setProgress] = useState<Record<string, Set<StepId>>>({})
-  /* Falls back to the shared EMPTY_STEPS rather than a fresh `new Set()`: a new
-     identity each render would re-fire every memo and effect downstream. */
-  const progressed = progress[current.id] ?? EMPTY_STEPS
+  /* Held in a provider ABOVE the screen switch, not in this component. It was
+     `useState` here, and because `app/page.tsx` renders one screen at a time,
+     opening the full sign-off screen unmounted this journey and took the
+     record with it — so approving a step destroyed the evidence of every step
+     already done, and Ship kept withholding a shipment whose prerequisites had
+     all passed. See ProgressProvider. */
+  const { progressFor, markDone } = useProgress()
+  const progressed = progressFor(current.id)
 
-  const markStepDone = useCallback(
-    (id: StepId) => {
-      setProgress((prev) => {
-        const own = prev[current.id]
-        if (own?.has(id)) return prev
-        const next = new Set(own ?? [])
-        next.add(id)
-        return { ...prev, [current.id]: next }
-      })
-    },
-    [current.id],
-  )
+  const markStepDone = useCallback((id: StepId) => markDone(current.id, id), [markDone, current.id])
 
   // Delegates to the model so the risk lane is read from `riskLane` rather
   // than from a position on the build path it no longer shares.
@@ -367,6 +359,7 @@ export function MerchantJourney({
           exceptionCtx={exceptionCtx}
           onStepDone={markStepDone}
           awaiting={blockingPredecessor(current, focused, progressed)}
+          progressed={progressed}
         />
       </div>
     </div>
@@ -699,6 +692,7 @@ function StepCockpit({
   exceptionCtx,
   onStepDone,
   awaiting,
+  progressed,
 }: {
   step: PipelineStep
   state: StepState
@@ -716,6 +710,9 @@ function StepCockpit({
    *  reachable yet. Passed in rather than computed here because only the
    *  parent holds the session's progress. */
   awaiting: PipelineStep | null
+  /** The session's completed steps, for the Ship clearance gate. Same set the
+   *  rail draws from, so the gate and the ticks cannot disagree. */
+  progressed: ReadonlySet<StepId>
 }) {
   // Null unless the risk lane is genuinely outstanding — see the banner below.
   /* Computed for every step, not just Ship, because the Play gate below reads
@@ -723,8 +720,8 @@ function StepCockpit({
      disagree today, but a panel saying "cleared" above a button saying
      "withheld" is the defect this app keeps producing, so there is one. */
   const clearance = useMemo(
-    () => shipClearance(merchant, exceptionCtx),
-    [merchant, exceptionCtx],
+    () => shipClearance(merchant, exceptionCtx, progressed),
+    [merchant, exceptionCtx, progressed],
   )
 
   // How many tasks have completed. Upcoming steps start at 0 (preview),

@@ -24,7 +24,7 @@
  *    appears in its WITHHELD state, where it has something real to say.
  */
 
-import type { Merchant, PipelineStep } from "@/lib/acquirer-data"
+import type { Merchant, PipelineStep, StepId } from "@/lib/acquirer-data"
 import { PIPELINE, REJOIN_STEP, laneState } from "@/lib/acquirer-data"
 import type { ExceptionContext } from "@/lib/artifacts"
 import { blockingFinding } from "@/lib/artifacts"
@@ -94,11 +94,29 @@ export type ShipClearance = {
   released: boolean
 }
 
-export function shipClearance(merchant: Merchant, ctx: ExceptionContext): ShipClearance {
+export function shipClearance(
+  merchant: Merchant,
+  ctx: ExceptionContext,
+  /**
+   * Steps completed during this session.
+   *
+   * This gate runs on the live journey, beside a rail that passes its own
+   * progress. The argument was missing here, `laneState` filled the gap from
+   * its default, and the two then read one file from different evidence: every
+   * step ticked on the rail while this panel still called B2 "in progress" and
+   * held the shipment. A gate answering from staler facts than the screen
+   * around it is worse than no gate, because it looks authoritative.
+   *
+   * `laneState` no longer defaults the argument, so that omission is a compile
+   * error now rather than a wrong answer. Surfaces with genuinely no session —
+   * the estate rollups, the portfolio table — pass `NO_SESSION_PROGRESS`.
+   */
+  progressed: ReadonlySet<StepId>,
+): ShipClearance {
   const holds: ClearanceHold[] = []
 
   for (const step of SHIP_PREREQUISITES) {
-    const state = laneState(merchant, step)
+    const state = laneState(merchant, step, progressed)
 
     /* A finding is only counted on a step the file has actually REACHED.
        `blockingFinding` derives from artefacts, which exist for every step
@@ -128,7 +146,11 @@ export function shipClearance(merchant: Merchant, ctx: ExceptionContext): ShipCl
     holds,
     checked: SHIP_PREREQUISITES,
     failing: holds.some((h) => h.kind === "failed"),
-    released: laneState(merchant, shipStep) === "done",
+    // Also progress-aware: a Ship completed in this session has released its
+    // parcels just as surely as one the fixture placed at Install, and reading
+    // only the fixture would keep offering to withhold a dispatch that has
+    // already gone.
+    released: laneState(merchant, shipStep, progressed) === "done",
   }
 }
 

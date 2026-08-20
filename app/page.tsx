@@ -9,6 +9,7 @@ import { MerchantJourney } from "@/components/acquirer/merchant-journey"
 import { MERCHANTS, type Merchant } from "@/lib/acquirer-data"
 import { applyDecisions, awaitingSignOff } from "@/lib/decisions"
 import { DecisionsProvider, useDecisions } from "@/components/acquirer/decisions-provider"
+import { ProgressProvider } from "@/components/acquirer/progress-provider"
 import { DemoProvider } from "@/components/acquirer/demo-provider"
 import { Dashboard } from "@/components/ingenico/dashboard"
 import { Deployments } from "@/components/ingenico/deployments"
@@ -22,9 +23,13 @@ import type { AcquirerScreen, IngenicoScreen, AnyScreen } from "@/lib/nav"
 export default function Page() {
   return (
     <DecisionsProvider>
-      <DemoProvider>
-        <PlatformApp />
-      </DemoProvider>
+      {/* Above the screen switch below, so completing a step survives the
+          navigation to the screen that completes it — see ProgressProvider. */}
+      <ProgressProvider>
+        <DemoProvider>
+          <PlatformApp />
+        </DemoProvider>
+      </ProgressProvider>
     </DecisionsProvider>
   )
 }

@@ -14,6 +14,7 @@
 
 import {
   laneState,
+  NO_SESSION_PROGRESS,
   MERCHANTS,
   PIPELINE,
   stepById,
@@ -223,7 +224,7 @@ const OTHER_BOOKS: Merchant[] = [
     sector: "Hospitality",
     location: "Prague, CZ",
     size: "Kč 18m / yr",
-    terminals: "4× A920",
+    terminals: "4�� A920",
     terminalCount: 4,
     riskLane: { verdict: "cleared" },
     currentStep: 9,
@@ -503,7 +504,9 @@ export function automationCensus(rows: EstateRow[]): AutomationCensus {
       // and 11 sit above every currentStep) while still crediting Underwriting
       // whenever the kit had moved on — undercounting one lane and overclaiming
       // the other. Only "done" counts; an in-flight step is not cleared work.
-      if (laneState(r.merchant, step) !== "done") continue
+      // NO_SESSION_PROGRESS explicitly: this is a census of the whole book, so
+      // there is no one journey whose in-session progress it could consult.
+      if (laneState(r.merchant, step, NO_SESSION_PROGRESS) !== "done") continue
       stepsCleared += 1
       if (step.band === "Automate") unattended += 1
     }
