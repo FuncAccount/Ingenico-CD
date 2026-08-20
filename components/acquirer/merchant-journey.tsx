@@ -1012,7 +1012,15 @@ function StepCockpit({
     // What arrives is the exception's own `summary` and `consequence`, which
     // is the part the acquirer needs: not merely that something failed, but
     // what placing anyway would cost.
-    if (finding) return `${finding.headline}. ${finding.detail}`
+    // Joined with exactly one sentence break. The two sources punctuate
+    // differently and each is right on its own terms: an exception's `summary`
+    // is a finished sentence because its own panel renders it alone, while a
+    // derived headline ("2 of 5 checks failed") is a fragment. Editing either
+    // set of strings would break the surface it was written for; normalising
+    // at the join does not.
+    if (finding) {
+      return `${finding.headline.replace(/[.\s]+$/, "")}. ${finding.detail}`
+    }
     return null
   }, [step.id, merchant, edge, theme, finding])
 
