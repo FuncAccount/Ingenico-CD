@@ -18,8 +18,10 @@ import {
   stepById,
   type Merchant,
 } from "@/lib/acquirer-data"
-import { decisionAtStep, signOffQueue } from "@/lib/decisions"
+import { liveDecisionAtStep, signOffQueue } from "@/lib/decisions"
+import { decisionBasis } from "@/lib/decision-basis"
 import { useDecisions } from "@/components/acquirer/decisions-provider"
+import { useBrandTheme } from "@/components/acquirer/brand-theme-provider"
 import { fmtDateTime } from "@/lib/handoffs"
 import { cn } from "@/lib/utils"
 
@@ -41,6 +43,7 @@ export function SignOff({
       : (queue[0]?.id ?? ""),
   )
   const { decisions, record } = useDecisions()
+  const { themeFor } = useBrandTheme()
 
   const selected = queue.find((m) => m.id === selectedId)
 
@@ -68,9 +71,17 @@ export function SignOff({
 
   // Scoped to the gate the merchant is actually standing at, so an underwriting
   // sign-off cannot silently satisfy a branding approval further down the line.
-  const decision = decisionAtStep(decisions, selected.id, selected.currentStep)
+  // Live, so a superseded approval puts the merchant back in front of you here
+  // too rather than showing as already decided.
+  const decision = liveDecisionAtStep(decisions, selected.id, selected.currentStep)
   const isBranding = selected.currentStep === 4
   const step = stepById(selected.currentStep)
+
+  // The SAME design the cockpit shows, read from the shared provider, and the
+  // same basis function it records with. Computing a second fingerprint here
+  // would differ from the cockpit's the moment anyone edited the design, and
+  // the app would then report an edit the acquirer never made.
+  const basis = decisionBasis(selected.currentStep, selected, themeFor(selected))
 
   return (
     <div className="mx-auto max-w-7xl px-6 py-8">

@@ -33,6 +33,16 @@ interface ProgressContextValue {
   progressFor: (merchantId: string) => ReadonlySet<StepId>
   /** Record a step as finished. Idempotent. */
   markDone: (merchantId: string, step: StepId) => void
+  /**
+   * Un-record a step, for a stage reset. Idempotent.
+   *
+   * The reset flag used to be a `useRef` inside the cockpit, which is BELOW the
+   * rail — so the rail went on drawing the step as done, and because it was
+   * also carrying a finding, it drew the amber warning marker over a stage that
+   * had just been cleared. A reset that the rail cannot see is not a reset; it
+   * is two surfaces disagreeing about the same step.
+   */
+  clearStep: (merchantId: string, step: StepId) => void
 }
 
 /**
@@ -60,14 +70,24 @@ export function ProgressProvider({ children }: { children: React.ReactNode }) {
     })
   }, [])
 
+  const clearStep = useCallback((merchantId: string, step: StepId) => {
+    setProgress((prev) => {
+      const current = prev[merchantId]
+      if (!current?.has(step)) return prev
+      const next = new Set(current)
+      next.delete(step)
+      return { ...prev, [merchantId]: next }
+    })
+  }, [])
+
   const progressFor = useCallback(
     (merchantId: string) => progress[merchantId] ?? NO_SESSION_PROGRESS,
     [progress],
   )
 
   const value = useMemo(
-    () => ({ progress, progressFor, markDone }),
-    [progress, progressFor, markDone],
+    () => ({ progress, progressFor, markDone, clearStep }),
+    [progress, progressFor, markDone, clearStep],
   )
 
   return <ProgressContext.Provider value={value}>{children}</ProgressContext.Provider>

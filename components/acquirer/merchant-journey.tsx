@@ -38,8 +38,10 @@ import {
   REJOIN_STEP,
   type StepId,
 } from "@/lib/acquirer-data"
-import { decisionAtStep } from "@/lib/decisions"
+import { decisionAtStep, liveDecisionAtStep } from "@/lib/decisions"
+import { decisionBasis } from "@/lib/decision-basis"
 import { useDecisions } from "@/components/acquirer/decisions-provider"
+import { useBrandTheme } from "@/components/acquirer/brand-theme-provider"
 import { clearanceLine, shipClearance } from "@/lib/ship-clearance"
 import { cn } from "@/lib/utils"
 import {
@@ -121,8 +123,39 @@ export function MerchantJourney({
   // same step the cockpit does — left inside the cockpit, the rail could only
   // have read a second copy, and the two would disagree the moment anyone
   // edited the design. One source, both surfaces.
-  const [theme, setTheme] = useState<BrandTheme>(() => defaultTheme(current))
+  // ...and lifted again, out of this component and into a provider, so the
+  // SIGN-OFF SCREEN can read it too. While it lived here, "Approve branding"
+  // over there committed a decision about a design that surface had never seen.
+  // Keyed per merchant inside the provider, which is why the merchant-change
+  // effect below no longer has to reset it: each file carries its own.
+  const { themeFor, setTheme: writeTheme, resetTheme, hasOverride } = useBrandTheme()
+  const theme = themeFor(current)
+  const setTheme = useCallback(
+    (t: BrandTheme) => writeTheme(current.id, t),
+    [writeTheme, current.id],
+  )
   const exceptionCtx = useMemo(() => ({ brandRules: checkBrand(theme) }), [theme])
+
+  /* AN APPROVAL IS EVIDENCE ABOUT A PARTICULAR DESIGN, NOT A PERMANENT
+     PROPERTY OF THE STEP.
+
+     Approve the branding, then correct the design, and the approval on file is
+     about something that no longer exists — yet it went on rendering as a
+     settled green row, and a settled row shows no controls, so there was no way
+     to approve the corrected design. The gate reported the work done while
+     displaying work nobody had signed.
+
+     One writer, here, above every step: the design is a property of the
+     merchant, so a check that only ran on the focused step would miss an edit
+     made anywhere else. `reconcile` returns the same object when nothing has
+     moved, which is what keeps this effect from re-firing on its own output. */
+  const { reconcile } = useDecisions()
+  useEffect(() => {
+    reconcile(
+      current.id,
+      new Map(PIPELINE.map((s) => [s.id, decisionBasis(s.id, current, theme)])),
+    )
+  }, [current, theme, reconcile])
 
   // Which steps are carrying an unresolved finding, so the marker cannot show
   // a tick over one. Positional state alone could never know this: it only
@@ -155,10 +188,14 @@ export function MerchantJourney({
      record with it — so approving a step destroyed the evidence of every step
      already done, and Ship kept withholding a shipment whose prerequisites had
      all passed. See ProgressProvider. */
-  const { progressFor, markDone } = useProgress()
+  const { progressFor, markDone, clearStep } = useProgress()
   const progressed = progressFor(current.id)
 
   const markStepDone = useCallback((id: StepId) => markDone(current.id, id), [markDone, current.id])
+  // The counterpart, for a stage reset. Reported UP for the same reason
+  // `markStepDone` is: the rail reads this set, and a reset it cannot see left
+  // the amber finding marker sitting on a stage that had just been cleared.
+  const clearStepDone = useCallback((id: StepId) => clearStep(current.id, id), [clearStep, current.id])
 
   // Delegates to the model so the risk lane is read from `riskLane` rather
   // than from a position on the build path it no longer shares.
@@ -356,8 +393,11 @@ export function MerchantJourney({
           onOpenSignoff={() => onOpenSignoff(current)}
           theme={theme}
           setTheme={setTheme}
-          exceptionCtx={exceptionCtx}
-          onStepDone={markStepDone}
+                exceptionCtx={exceptionCtx}
+                onStepDone={markStepDone}
+                onStepCleared={clearStepDone}
+                resetTheme={() => resetTheme(current.id)}
+                themeEdited={hasOverride(current.id)}
           awaiting={blockingPredecessor(current, focused, progressed)}
           progressed={progressed}
         />
@@ -691,6 +731,9 @@ function StepCockpit({
   setTheme,
   exceptionCtx,
   onStepDone,
+  onStepCleared,
+  resetTheme,
+  themeEdited,
   awaiting,
   progressed,
 }: {
@@ -706,6 +749,14 @@ function StepCockpit({
    *  it — a copy kept in this component would be invisible to every one of
    *  them, which is how completing a step came to change nothing. */
   onStepDone: (id: StepId) => void
+  /** Un-report it, for a reset. The rail draws from the same set, so without
+   *  this a cleared stage kept its tick — and its finding marker. */
+  onStepCleared: (id: StepId) => void
+  /** Drop the brand override for this merchant, back to the agent's proposal. */
+  resetTheme: () => void
+  /** Whether anyone has edited this merchant's design. Asked of the provider
+   *  rather than compared structurally here, so "unedited" has one definition. */
+  themeEdited: boolean
   /** The step in front of this one that is still open, when this one is not
    *  reachable yet. Passed in rather than computed here because only the
    *  parent holds the session's progress. */
@@ -832,8 +883,10 @@ function StepCockpit({
     completed > 0 ||
     Object.keys(handoffs).some((k) => k.startsWith(stagePrefix)) ||
     (stageWrites.edge && edge !== undefined) ||
-    (stageWrites.theme &&
-      JSON.stringify(theme) !== JSON.stringify(defaultTheme(merchant))) ||
+    // Asked of the provider, which knows whether an override exists at all, so
+    // "edited" has one definition rather than a structural comparison here that
+    // could drift from the one the reset performs.
+    (stageWrites.theme && themeEdited) ||
     (stageWrites.acceptance &&
       JSON.stringify(acceptance) !== JSON.stringify(defaultAcceptance(merchant))) ||
     (stageWrites.draft &&
@@ -860,11 +913,15 @@ function StepCockpit({
   }, [step.id, merchant.id, state, step.tasks.length])
 
   // A different merchant means a different order, never the last one's basket.
-  // The same applies to the brand design and the underwriting determination:
-  // carrying either across would attribute one merchant's decision to another.
+  // The same applies to the underwriting determination: carrying it across
+  // would attribute one merchant's decision to another.
+  //
+  // The brand design is absent from this list because it is no longer held
+  // here: the provider keys it by merchant, so nothing can leak between files
+  // and — better than the old behaviour — switching away and back no longer
+  // discards an edit the acquirer had made.
   useEffect(() => {
     setDraft({ lines: defaultBasket(merchant), serviceId: "standard", requestedIso: null })
-    setTheme(defaultTheme(merchant))
     setEdge(undefined)
     // An instruction sent about one merchant must never show against another.
     setAcceptance(defaultAcceptance(merchant))
@@ -940,6 +997,30 @@ function StepCockpit({
     setStatus("idle")
     setSelected(0)
 
+    /* THE DECISION IS PART OF THE STAGE, AND WAS THE ONE THING RESET LEFT
+       STANDING.
+
+       Clearing the run, the handoffs and the artefacts while leaving the
+       approval on file produced a stage that read 0/4 tasks with its acquirer
+       row still ticked "Approved by you" — an approval of work the same button
+       had just erased. And because a settled row draws no controls, the
+       approval could not be given again, so the reset made the gate
+       permanently unusable rather than fresh.
+
+       WITHDRAWN, not superseded: superseding preserves a record of something
+       that happened, which is right when the design moves underneath a real
+       decision. A reset asserts the opposite — that this stage is being shown
+       for the first time — so leaving a tombstone would contradict the very
+       claim the button makes. */
+    withdraw(merchant.id, step.id)
+
+    /* And un-report the step, so the RAIL agrees. `resetSteps` is a ref inside
+       this component, which the rail cannot read; it went on drawing the step
+       as done, and — since the restored default design breaches a brand rule —
+       drew the amber finding marker over it. That is the reported symptom: a
+       warning on a stage that had just been cleared. */
+    onStepCleared(step.id)
+
     // Only THIS stage's handoffs. The map is shared across every step, so
     // clearing all of it would silently undo a chase raised on another one.
     setHandoffs((prev) => {
@@ -955,7 +1036,9 @@ function StepCockpit({
     if (stageWrites.draft) {
       setDraft({ lines: defaultBasket(merchant), serviceId: "standard", requestedIso: null })
     }
-    if (stageWrites.theme) setTheme(defaultTheme(merchant))
+    // Drops the override rather than writing the default back, so the stage
+    // returns to "nobody has touched this" and `themeEdited` goes false.
+    if (stageWrites.theme) resetTheme()
     if (stageWrites.acceptance) setAcceptance(defaultAcceptance(merchant))
     if (stageWrites.edge) setEdge(undefined)
   }
@@ -1098,8 +1181,11 @@ function StepCockpit({
   // The SHARED record, the same one StepGate and the sign-off screen write to
   // — so approving on either surface advances the file. A local copy here
   // would make this component's idea of "approved" a fourth opinion.
-  const { decisions } = useDecisions()
-  const decision = decisionAtStep(decisions, merchant.id, step.id)
+  const { decisions, withdraw } = useDecisions()
+  // LIVE, not raw: a superseded approval must not finish the step. Reading the
+  // raw record here would leave the stage ticked and the file advancing on the
+  // strength of a decision taken against a design that has since been edited.
+  const decision = liveDecisionAtStep(decisions, merchant.id, step.id)
   const needsDecision = step.acquirerRole === "signs-off" || step.acquirerRole === "approves"
 
   /* WHAT FINISHES A STEP.
@@ -1131,6 +1217,21 @@ function StepCockpit({
   useEffect(() => {
     if (stepFinished) onStepDone(step.id)
   }, [stepFinished, step.id, onStepDone])
+
+  /* AND THE REVERSE, for the one case that can un-finish a step already
+     recorded: an approval superseded because its subject was edited.
+
+     Deliberately narrow. The tempting version is to mirror the effect above and
+     clear whenever `stepFinished` is false, but that reads `ranToEnd`, which is
+     animation state — it is zero for a moment on every navigation, so the
+     symmetric form would erase the progress of any observed step merely by
+     looking at it. Only a supersession is a durable fact that revokes a
+     completion, so only a supersession clears one. */
+  const supersededHere =
+    needsDecision && Boolean(decisionAtStep(decisions, merchant.id, step.id)?.supersededIso)
+  useEffect(() => {
+    if (supersededHere) onStepCleared(step.id)
+  }, [supersededHere, step.id, onStepCleared])
 
   // What stops the acquirer's own decision on THIS step. Different steps are
   // blocked by different things, so this is computed per step rather than by
@@ -1869,9 +1970,12 @@ function StepCockpit({
         runComplete={completed >= step.tasks.length}
         states={handoffs}
         onStates={setHandoffs}
-        precondition={precondition}
-        wasReset={stageReset}
-      />
+              precondition={precondition}
+              wasReset={stageReset}
+              // What an approval taken here would be ABOUT, so the record can
+              // later tell whether the design has moved underneath it.
+              basis={decisionBasis(step.id, merchant, theme)}
+            />
 
       {/* Agent trace — the same ink as the rest of the page, so it reads as
           part of the surface rather than a hole punched through it. */}

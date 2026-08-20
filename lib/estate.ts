@@ -23,7 +23,7 @@ import {
 } from "./acquirer-data"
 import { handoffsFor, ownerOf, statusPossibleAt, STEP_HANDOFFS, type Party } from "./handoffs"
 import { physicalUnits } from "./artifacts"
-import { applyDecisions, decisionAtStep, type Decisions } from "./decisions"
+import { applyDecisions, liveDecisionAtStep, type Decisions } from "./decisions"
 
 // ---------------------------------------------------------------------------
 // Scope
@@ -394,7 +394,10 @@ export function waitingParty(m: Merchant, decisions: Decisions): Party | null {
   // through to `ownerOf`, which reports the acquirer as the owner of a
   // decision they have already taken, and the lane never empties. This is the
   // same stale-claim bug as the sign-off badge, one layer down.
-  if (decisionAtStep(decisions, m.id, m.currentStep)?.kind === "signed") return null
+  // Read live: a superseded approval hands the step BACK to the acquirer, so
+  // reading the raw record here would drop the merchant out of the lane on the
+  // strength of a decision that no longer stands.
+  if (liveDecisionAtStep(decisions, m.id, m.currentStep)?.kind === "signed") return null
 
   return ownerOf(m.currentStep)
 }

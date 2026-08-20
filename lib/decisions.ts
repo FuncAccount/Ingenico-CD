@@ -36,6 +36,26 @@ export interface Decision {
    *  `new Date()` at render time would restate an old decision with today's
    *  clock every time the component re-rendered. */
   atIso: string
+  /**
+   * A fingerprint of the artefact this decision was taken against — see
+   * `lib/decision-basis`. Null when nothing editable underpins it.
+   *
+   * REQUIRED, not optional. Optional would let a call site forget it and get
+   * "never goes stale" by default, which is the silent-approval failure this
+   * field exists to close: every surface that records a decision has to say
+   * what it was looking at.
+   */
+  basis: string | null
+  /**
+   * When the artefact moved out from under this decision.
+   *
+   * The decision is SUPERSEDED, not deleted: it is a true record of something
+   * that genuinely happened, and erasing it would leave the acquirer looking at
+   * a gate that had reverted to untouched with no account of why. Keeping it
+   * lets the gate say "you approved this on Tuesday; the design changed after
+   * that", which is the sentence the reader actually needs.
+   */
+  supersededIso?: string
 }
 
 /**
@@ -81,12 +101,39 @@ export function decisionAtStep(
  * the fixture. This is the ONLY place a decision is allowed to change a status,
  * so no surface can hold a private opinion about it.
  */
+/**
+ * The decision that STILL SPEAKS for this gate, as opposed to the full record.
+ *
+ * A superseded decision is history. It says what was decided and when, but it
+ * cannot answer "has this gate been passed", because the thing it was taken
+ * against no longer exists. Every surface that gates on a decision must read
+ * through here; only the one surface that REPORTS the decision — the gate
+ * panel itself, which needs to explain the supersession — reads the raw record.
+ *
+ * This is why supersession lives on the record rather than being compared at
+ * read time. A comparison would need the live artefact, which the portfolio
+ * table and the KPI count have no way to obtain — so they would have gone on
+ * counting a withdrawn approval as a passed gate, and the merchant would sit at
+ * "On track" while the cockpit asked for the approval again.
+ */
+export function liveDecisionAtStep(
+  decisions: Decisions,
+  merchantId: string,
+  step: StepId,
+): Decision | null {
+  const d = decisionAtStep(decisions, merchantId, step)
+  return d && !d.supersededIso ? d : null
+}
+
 export function effectiveStatus(merchant: Merchant, decisions: Decisions): MerchantStatus {
   // Only the decision taken at the gate the merchant is STANDING AT can speak
   // for their status now. Asking by key rather than fetching their one record
   // and comparing its step: with a history to read, "their decision" is no
   // longer a meaningful phrase.
-  const d = decisionAtStep(decisions, merchant.id, merchant.currentStep)
+  // `liveDecisionAtStep`, not `decisionAtStep`: an approval whose subject has
+  // since been edited must put the merchant back in the queue, not leave them
+  // reading "On track" on the strength of a decision about an older design.
+  const d = liveDecisionAtStep(decisions, merchant.id, merchant.currentStep)
   if (!d) return merchant.status
 
   // Only a merchant who was waiting on you can be moved by your decision.

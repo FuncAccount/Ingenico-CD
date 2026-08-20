@@ -15,7 +15,7 @@ import {
 } from "lucide-react"
 import type { Merchant, StepId } from "@/lib/acquirer-data"
 import { physicalUnits } from "@/lib/artifacts"
-import { decisionAtStep } from "@/lib/decisions"
+import { decisionAtStep, liveDecisionAtStep, type Decision } from "@/lib/decisions"
 import { useDecisions } from "@/components/acquirer/decisions-provider"
 import {
   type AcquirerDecisionState,
@@ -125,6 +125,9 @@ interface Props {
   /** The stage was reset by hand, so it is being driven live rather than read
    *  back as history — see `isPast` below. */
   wasReset?: boolean
+  /** A fingerprint of what an approval taken here would be about, stored on the
+   *  decision so a later edit to the same artefact can supersede it. */
+  basis: string | null
 }
 
 export function StepGate({
@@ -135,6 +138,7 @@ export function StepGate({
   onStates,
   precondition = null,
   wasReset = false,
+  basis,
 }: Props) {
   // Keyed by step AND by what was ordered: steps 7 and 8 otherwise promise a
   // consignment and a boxed terminal to a merchant who bought only software.
@@ -161,7 +165,19 @@ export function StepGate({
   // the sign-off screen are two unrelated events, and each surface goes on
   // saying the other one's decision has not been taken.
   const { decisions, record } = useDecisions()
-  const decision = decisionAtStep(decisions, merchant.id, step)
+  // TWO READS OF THE SAME RECORD, on purpose.
+  //
+  // `decision` is what STILL STANDS, and everything that gates behaves as
+  // though a superseded approval had never been given — which is what reopens
+  // the row so the corrected design can be approved. `superseded` is the
+  // history, and this panel is the one place entitled to read it, because it is
+  // the one place that can explain what happened. Without the explanation the
+  // approval would simply vanish, and a tick that disappears on its own reads
+  // as the app losing the decision rather than withdrawing it.
+  const decision = liveDecisionAtStep(decisions, merchant.id, step)
+  const superseded = decisionAtStep(decisions, merchant.id, step)?.supersededIso
+    ? decisionAtStep(decisions, merchant.id, step)
+    : null
 
   function read(i: number): HandoffState {
     if (list[i].party === "acquirer" && decision?.kind === "signed") {
@@ -272,7 +288,8 @@ export function StepGate({
                 runComplete={runComplete}
                 precondition={precondition}
                 onChange={(next) => write(i, next)}
-                onApprove={() => record(merchant.id, "signed", step)}
+                superseded={superseded}
+                onApprove={() => record(merchant.id, "signed", step, basis)}
               />
             </li>
           )
@@ -296,6 +313,7 @@ function HandoffRow({
   merchant,
   runComplete,
   precondition,
+  superseded,
   onChange,
   onApprove,
 }: {
@@ -308,6 +326,8 @@ function HandoffRow({
   merchant: Merchant
   runComplete: boolean
   precondition: string | null
+  /** A previous approval at this gate that no longer stands, or null. */
+  superseded: Decision | null
   onChange: (next: HandoffState) => void
   onApprove: () => void
 }) {
@@ -363,6 +383,7 @@ function HandoffRow({
                   handoff={handoff}
                   runComplete={runComplete}
                   precondition={precondition}
+                  superseded={superseded}
                   // Writes to the shared record, not to this component's local
                   // handoff state, so the nav badge, the portfolio KPI and the
                   // sign-off queue all move with it.
@@ -442,6 +463,7 @@ function AcquirerPanel({
   handoff,
   runComplete,
   precondition,
+  superseded,
   onApprove,
 }: {
   handoff: Extract<Handoff, { party: "acquirer" }>
@@ -450,11 +472,26 @@ function AcquirerPanel({
    *  Passed in rather than computed here: what blocks an underwriting sign-off
    *  and what blocks a branding approval are different things. */
   precondition: string | null
+  superseded: Decision | null
   onApprove: () => void
 }) {
   if (!runComplete) return <Blocked>Run the agent first — there is nothing to approve yet.</Blocked>
   return (
     <div>
+      {/* WHY THIS IS BEING ASKED AGAIN.
+          An approval that quietly disappears looks like the app losing your
+          decision. Saying when it was given, and that the design has changed
+          since, makes the reopened gate a consequence of your own edit rather
+          than a fault — and it is the only place the superseded record is
+          shown, so it does not linger anywhere as a live-looking tick. */}
+      {superseded && (
+        <p className="mb-2 flex items-start gap-1.5 rounded-lg border border-warning/30 bg-warning/[0.07] p-2.5 text-[11px] leading-relaxed text-warning-foreground">
+          <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+          <span>
+            {`You approved this on ${fmtDateTime(superseded.atIso)}. The design has been edited since, so that approval no longer covers what is on screen — it needs approving again.`}
+          </span>
+        </p>
+      )}
       <p className="rounded-lg border border-border/70 bg-background/70 p-2.5 text-xs leading-relaxed text-muted-foreground">
         {handoff.commits}
       </p>
