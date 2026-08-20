@@ -23,6 +23,7 @@ import type { AcceptanceState } from "@/lib/scheme-acceptance"
 import type { BrandTheme } from "@/lib/branding"
 import type { EdgeResolution } from "@/lib/underwriting"
 import type { Merchant } from "@/lib/acquirer-data"
+import { formatRate, projectSignUp, type Projection } from "@/lib/tariff-model"
 import {
   type Artifact,
   type BasketLine,
@@ -920,6 +921,123 @@ function ChecksView({ artifact }: { artifact: Extract<Artifact, { kind: "checks"
 /** The merchant's rate card. Every line carries its BASIS, because this is a
  *  recommendation the acquirer is expected to argue with — a bare rate can only
  *  be accepted or ignored, not corrected. */
+/**
+ * The projection panel. Four states, deliberately not collapsed into two:
+ * a measurement, a model, a rate nobody could read, and a line the model was
+ * never fitted on. The last two are different objections and lead to different
+ * fixes — retype the box, versus this lever has no evidence behind it.
+ */
+function TariffProjection({
+  artifact,
+  projection,
+}: {
+  artifact: Extract<Artifact, { kind: "tariff" }>
+  projection: Projection
+}) {
+  const label = artifact.projection.label
+
+  if (projection.state === "measured") {
+    return (
+      <Frame label={label} tone="measured" value={`${projection.low}–${projection.high}%`}>
+        {artifact.projection.basis}
+      </Frame>
+    )
+  }
+
+  if (projection.state === "unreadable") {
+    return (
+      <Frame label={label} tone="gap" value="Not modelled">
+        {projection.labels.join(" and ")} could not be read as a rate. An empty or unparsable
+        box is a figure nobody has stated, not a zero — so nothing is projected from it.
+      </Frame>
+    )
+  }
+
+  if (projection.state === "unmodelled") {
+    return (
+      <Frame label={label} tone="gap" value="Not modelled">
+        No sensitivity has been fitted for {projection.labels.join(" or ")}, so the effect of
+        changing it is unknown rather than nil. Reporting the anchor unchanged would claim your
+        change made no difference — a measurement nobody took.
+      </Frame>
+    )
+  }
+
+  const extrapolating = projection.extrapolated.length > 0
+  return (
+    <Frame
+      label={label}
+      tone={extrapolating ? "extrapolated" : "modelled"}
+      value={`${projection.low.toFixed(0)}–${projection.high.toFixed(0)}%`}
+      badge={extrapolating ? "Extrapolated" : "Modelled"}
+    >
+      {/* Prints the arithmetic: anchor, net movement, and the widening — so the
+          reader can reproduce the headline instead of taking it on trust. */}
+      {artifact.projection.low}–{artifact.projection.high}% measured on the agent&apos;s bundle,{" "}
+      {projection.netPoints >= 0 ? "+" : "−"}
+      {Math.abs(projection.netPoints).toFixed(1)} pts from your changes, band widened{" "}
+      {projection.widening.toFixed(1)} pts for distance from the rates comparables were priced at.
+      {extrapolating &&
+        // Starts a sentence, so the first label keeps its capital — the others
+        // are lowercased mid-list.
+        ` ${projection.extrapolated
+          .map((d, i) => (i === 0 ? d.label : d.label.toLowerCase()))
+          .join(" and ")} ${projection.extrapolated.length === 1 ? "sits" : "sit"} outside that set entirely, so this runs the curve past its last observation.`}
+    </Frame>
+  )
+}
+
+function Frame({
+  label,
+  value,
+  tone,
+  badge,
+  children,
+}: {
+  label: string
+  value: string
+  tone: "measured" | "modelled" | "extrapolated" | "gap"
+  badge?: string
+  children: React.ReactNode
+}) {
+  const style = {
+    measured: "border-primary/40 bg-primary/[0.05]",
+    modelled: "border-primary/30 bg-primary/[0.03] border-dashed",
+    extrapolated: "border-warning/45 bg-warning/[0.06] border-dashed",
+    gap: "border-border border-dashed bg-muted/25",
+  }[tone]
+  return (
+    <div className={cn("mt-2.5 rounded-xl border p-3", style)}>
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3">
+        <p className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          {label}
+          {badge && (
+            <span
+              className={cn(
+                "rounded-md px-1.5 py-0.5 text-[10px] font-semibold tracking-normal",
+                tone === "extrapolated"
+                  ? "bg-warning/20 text-warning-foreground"
+                  : "bg-primary/15 text-primary",
+              )}
+            >
+              {badge}
+            </span>
+          )}
+        </p>
+        <p
+          className={cn(
+            "font-mono text-base font-semibold tabular-nums",
+            tone === "gap" ? "text-muted-foreground" : "text-foreground",
+          )}
+        >
+          {value}
+        </p>
+      </div>
+      <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{children}</p>
+    </div>
+  )
+}
+
 function TariffView({ artifact }: { artifact: Extract<Artifact, { kind: "tariff" }> }) {
   // Real inputs, not a disclosure. Pricing is the one lane step with no external
   // authority behind it — the rate is the acquirer's own commercial call — so a
@@ -931,7 +1049,7 @@ function TariffView({ artifact }: { artifact: Extract<Artifact, { kind: "tariff"
   // what was proposed the moment someone disagreed with it.
   const [rates, setRates] = useState<Record<string, string>>({})
   const valueOf = (r: { label: string; value: string }) => rates[r.label] ?? r.value
-  const changed = artifact.rows.filter((r) => valueOf(r).trim() !== r.value.trim())
+  const projection = projectSignUp(artifact.rows, rates, artifact.projection)
 
   return (
     <Shell title={artifact.title} note={artifact.note} editable={!!artifact.editable}>
@@ -999,40 +1117,42 @@ function TariffView({ artifact }: { artifact: Extract<Artifact, { kind: "tariff"
         })}
       </div>
 
-      {/* The consequence of the bundle, as a RANGE — and only while the bundle is
-          the one it was measured on. Re-deriving this from hand-typed rates would
-          be inventing a measurement: there is no model behind it, just comparable
-          merchants on the agent's own card. So an override WITHHOLDS it and says
-          which lines took it away, rather than quietly recomputing a figure that
-          would look every bit as authoritative as the real one. */}
-      {changed.length === 0 ? (
-        <div className="mt-2.5 rounded-xl border border-primary/40 bg-primary/[0.05] p-3">
-          <div className="flex flex-wrap items-baseline justify-between gap-x-3">
-            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              {artifact.projection.label}
-            </p>
-            <p className="font-mono text-base font-semibold tabular-nums text-foreground">
-              {artifact.projection.range}
-            </p>
-          </div>
-          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-            {artifact.projection.basis}
-          </p>
-        </div>
-      ) : (
-        <div className="mt-2.5 rounded-xl border border-dashed border-border bg-muted/25 p-3">
-          <div className="flex flex-wrap items-baseline justify-between gap-x-3">
-            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              {artifact.projection.label}
-            </p>
-            <p className="font-mono text-base font-semibold text-muted-foreground">Not modelled</p>
-          </div>
-          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-            {artifact.projection.range} was measured on the agent&apos;s bundle. You changed{" "}
-            {changed.map((r) => r.label.toLowerCase()).join(", ")}, and no comparable merchants have
-            been priced that way — so there is no rate to report rather than a re-estimated one.
-          </p>
-        </div>
+      {/* The consequence of the bundle. Recomputed live off the typed rates, but
+          the MEASURED anchor and the MODELLED result are never rendered the same
+          way: one is comparable merchants actually priced on this card, the other
+          is that measurement pushed along a stated sensitivity. The arithmetic is
+          printed so the figure can be checked rather than trusted. */}
+      <TariffProjection artifact={artifact} projection={projection} />
+      {projection.state === "modelled" && (
+        <ul className="mt-1.5 space-y-1">
+          {projection.deltas.map((d) => (
+            <li
+              key={d.label}
+              className="flex flex-wrap items-baseline gap-x-2 text-[11px] leading-relaxed text-muted-foreground"
+            >
+              <span className="font-medium text-foreground">{d.label}</span>
+              <span className="font-mono tabular-nums">
+                {formatRate(d.from, d.unit)} → {formatRate(d.to, d.unit)}
+              </span>
+              <span
+                className={cn(
+                  "font-mono font-semibold tabular-nums",
+                  d.points >= 0 ? "text-success" : "text-destructive",
+                )}
+              >
+                {d.points >= 0 ? "+" : "−"}
+                {Math.abs(d.points).toFixed(1)} pts
+              </span>
+              {d.extrapolated && (
+                <span className="text-warning">
+                  outside the comparable span ({formatRate(d.supported[0], d.unit)}–
+                  {formatRate(d.supported[1], d.unit)})
+                </span>
+              )}
+              <span className="w-full text-muted-foreground/80">{d.note}</span>
+            </li>
+          ))}
+        </ul>
       )}
 
       <p className="mt-2.5 text-[11px] leading-relaxed text-muted-foreground">{artifact.illustrative}</p>

@@ -492,6 +492,8 @@ export interface CheckRow {
   evidence: string
 }
 
+import type { Sensitivity } from "./tariff-model"
+
 /** One line of a commercial tariff. */
 export interface TariffRow {
   label: string
@@ -499,6 +501,15 @@ export interface TariffRow {
   /** Why the agent landed on it. A rate with no rationale cannot be argued
    *  with, and this is a number the acquirer is expected to overrule. */
   basis: string
+  /**
+   * How this line moves sign-up, so an overridden card can be re-projected
+   * with its arithmetic shown rather than a bare new number.
+   *
+   * OPTIONAL ON PURPOSE. A line with no fitted sensitivity yields "unmodelled",
+   * never a 0-point contribution — reporting that a change had no effect is a
+   * measurement, and one nobody took.
+   */
+  sensitivity?: Sensitivity
 }
 
 export interface TableArtifact {
@@ -544,9 +555,16 @@ export type Artifact =
        * agent's own figure when you do.
        */
       editable?: { label: string; where: string }
-      /** The modelled consequence of the bundle, stated as a RANGE — a single
-       *  conversion number would imply a precision the model does not have. */
-      projection: { label: string; range: string; basis: string }
+      /**
+       * The consequence of the bundle, stated as a RANGE — a single conversion
+       * number would imply a precision the model does not have.
+       *
+       * `low`/`high` are the MEASURED anchor: comparable merchants priced on the
+       * agent's own card. They are held as numbers so an overridden card can be
+       * re-projected off them, and the result kept visibly distinct from this
+       * measurement rather than overwriting it.
+       */
+      projection: { label: string; low: number; high: number; basis: string }
       illustrative: string
     }
   | {
@@ -1213,21 +1231,71 @@ export function artifactFor(
           where:
             "Type over any rate to set your own. The agent proposes from the merchant profile; your figure wins, and its proposal stays on the line so you can see what you moved away from.",
         },
+        // Each `supported` span is the range of that rate ACROSS THE COMPARABLE
+        // SET, not a policy limit. It is what lets an override say whether it is
+        // interpolating between observations or running past the last one.
         rows: [
-          { label: "Monthly fee", value: "£19", basis: "Median for single-site hospitality on your book" },
-          { label: "Setup fee", value: "£0", basis: "Waived — the upfront fee is the sharpest lever on sign-up" },
-          { label: "Card present", value: "1.40%", basis: "Your standard band for this risk category" },
-          { label: "Card not present", value: "1.75%", basis: "Higher chargeback exposure on remote sales" },
-          { label: "Wallet", value: "0.90%", basis: "Lower scheme cost passes through to the merchant" },
+          {
+            label: "Monthly fee",
+            value: "£19",
+            basis: "Median for single-site hospitality on your book",
+            sensitivity: {
+              unit: "gbp",
+              pointsPerUnit: -0.45,
+              supported: [0, 49],
+              note: "Recurring fees are discounted against expected turnover, so they bite less per pound than the upfront charge",
+            },
+          },
+          {
+            label: "Setup fee",
+            value: "£0",
+            basis: "Waived — the upfront fee is the sharpest lever on sign-up",
+            sensitivity: {
+              unit: "gbp",
+              pointsPerUnit: -0.55,
+              supported: [0, 99],
+              note: "The sharpest lever per pound: it lands before the merchant has taken a payment",
+            },
+          },
+          {
+            label: "Card present",
+            value: "1.40%",
+            basis: "Your standard band for this risk category",
+            sensitivity: {
+              unit: "pct",
+              pointsPerUnit: -34,
+              supported: [1.1, 1.95],
+              note: "Carries most of this segment's volume, so it dominates the headline rate a merchant compares on",
+            },
+          },
+          {
+            label: "Card not present",
+            value: "1.75%",
+            basis: "Higher chargeback exposure on remote sales",
+            sensitivity: {
+              unit: "pct",
+              pointsPerUnit: -12,
+              supported: [1.4, 2.4],
+              note: "A minority of hospitality volume, and merchants expect a premium on remote sales",
+            },
+          },
+          {
+            label: "Wallet",
+            value: "0.90%",
+            basis: "Lower scheme cost passes through to the merchant",
+            sensitivity: {
+              unit: "pct",
+              pointsPerUnit: -8,
+              supported: [0.6, 1.3],
+              note: "Rarely quoted in a competitive comparison at this size",
+            },
+          },
         ],
         projection: {
           label: "Modelled sign-up rate",
-          range: "58–71%",
-          // States its DEPENDENCY on the rates above, not just its width. Once
-          // the acquirer can overrule a line, a projection that only explains
-          // why it is a range would go on asserting 58–71% against a rate card
-          // it was never modelled on.
-          basis: "Modelled on the rates above — overrule a line and this no longer holds. A range, not a point: conversion moves sharply by merchant type and this bundle is untested on this segment.",
+          low: 58,
+          high: 71,
+          basis: "Measured on the rates above, from comparable merchants priced on this bundle. A range, not a point: conversion moves sharply by merchant type.",
         },
         illustrative: "Illustrative. Modelled from comparable merchants — not an offer, and not a commitment to a rate.",
       }
