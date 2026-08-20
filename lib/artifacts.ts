@@ -9,7 +9,14 @@
 // both the promised date and the shipping line. Change a quantity and
 // every downstream figure moves, because none of them are typed by hand.
 
-import { MERCHANTS, type Merchant, type StepId } from "@/lib/acquirer-data"
+import {
+  laneState,
+  MERCHANTS,
+  NO_SESSION_PROGRESS,
+  PIPELINE,
+  type Merchant,
+  type StepId,
+} from "@/lib/acquirer-data"
 import { bookPeersByDistance } from "@/lib/comparables"
 import { ACQUIRER } from "@/lib/branding"
 import { MODELS, configProfile, orderLines, type ModelId } from "@/lib/devices"
@@ -1537,6 +1544,63 @@ export function outstandingChecks(stepId: StepId, merchant: Merchant): number {
   return n
 }
 
+/** The KYC step. Named, because the liveness rule below is about THIS step and
+ *  a bare `10` beside the risk lane's 10 → 11 → 2 ordering reads as a rank. */
+const KYC_STEP: StepId = 10
+
+/**
+ * Whether the second owner's liveness check is genuinely still out.
+ *
+ * Two conditions, and both are about the LANE, not the build:
+ *
+ *  - the lane must still be in flight — a `cleared` verdict means underwriting
+ *    signed off, which it could not have done on an unreturned identity check;
+ *  - and it must still be sitting ON KYC. `laneState` treats the steps ahead of
+ *    the open one as finished, so a file parked at Underwriting has KYC behind
+ *    it and its checks have all reported.
+ *
+ * A `referred` file is not open either: the referral IS the answer that came
+ * back, and showing it as still waiting would offer a wait instead of the
+ * decision someone has to make.
+ */
+function livenessOpen(merchant: Merchant): boolean {
+  const lane = merchant.riskLane
+  return lane.verdict === "in-flight" && lane.at === KYC_STEP
+}
+
+/**
+ * Every step with checks still out, for the portfolio list.
+ *
+ * Returns the STEP as well as the count, and that is the whole point of the
+ * shape: on the portfolio a file sits at its current step — SolMar reads "03
+ * Install" — while the open check belongs to KYC, several steps back on the
+ * other lane. A bare count beside the step pill would say "Install is in
+ * progress", naming the wrong step and pointing anyone chasing it at the wrong
+ * provider.
+ *
+ * A list, not a first match: the two lanes can each be waiting, and reporting
+ * one would silently hide the other.
+ *
+ * Reached-ness comes from `laneState` — the same function the rail uses — and
+ * NOT from a PIPELINE-index comparison against `currentStep`. `currentStep`
+ * tracks the build/spine path only, so measuring a risk step against it is the
+ * fork's own trap one level up: Ravenswood sits at Merchant capture with its
+ * screening open, and an index gate would have decided KYC was unreached and
+ * hidden the one genuinely outstanding check in the book.
+ */
+export function pendingCheckSteps(merchant: Merchant): { step: StepId; count: number }[] {
+  const out: { step: StepId; count: number }[] = []
+  for (const s of PIPELINE) {
+    // Artefacts are derived from the merchant and exist whether or not the
+    // agent got there, so an ungated read would report a wait on work nobody
+    // has started.
+    if (laneState(merchant, s, NO_SESSION_PROGRESS) === "upcoming") continue
+    const n = outstandingChecks(s.id, merchant)
+    if (n > 0) out.push({ step: s.id, count: n })
+  }
+  return out
+}
+
 /** Resolve the artefact a given task produced. Returning null is a real
  *  answer — some tasks only write to the trace — and the UI says so rather
  *  than rendering an empty panel that looks broken. */
@@ -1928,15 +1992,31 @@ export function artifactFor(
         rows: [
           { label: "Photo ID", state: "pass", evidence: "2 of 2 owners matched to a valid document" },
           { label: "Address", state: "pass", evidence: "Residential address confirmed against the credit file" },
-          {
-            label: "Liveness",
-            // The one row left OPEN, and the reason this panel exists: the
-            // build lane is still moving behind it. A tick here would make the
-            // parallel design invisible by showing a lane with nothing left
-            // running.
-            state: "running",
-            evidence: "Second owner's selfie check is with the provider — typically clears within the hour",
-          },
+          // The one row that can be left OPEN, and the reason this panel
+          // exists: the build lane keeps moving behind it. A tick on every
+          // merchant would make the parallel design invisible by showing a
+          // lane with nothing running.
+          //
+          // But it was UNCONDITIONALLY running, which was invisible while it
+          // only showed inside this one panel and became a false claim the
+          // moment the portfolio surfaced it: two LIVE merchants were reported
+          // as still waiting on a selfie check. A check cannot outlive the
+          // decision it fed — underwriting could not have signed off, and the
+          // merchant could not have gone live, on an identity that never came
+          // back. So the lane's own verdict decides, and `livenessOpen` states
+          // that rule once for every caller.
+          livenessOpen(merchant)
+            ? {
+                label: "Liveness",
+                state: "running" as const,
+                evidence:
+                  "Second owner's selfie check is with the provider — typically clears within the hour",
+              }
+            : {
+                label: "Liveness",
+                state: "pass" as const,
+                evidence: "Second owner's selfie check returned a match",
+              },
         ],
       }
     case "10.3":

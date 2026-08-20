@@ -575,6 +575,13 @@ function StepRow({
   // finding is something to answer and this is something to wait out, so when
   // a step carries both the marker shows the one that needs a person.
   const pending = !flagged && state === "done" && awaiting > 0
+  // The CHIP is gated more widely than the marker, and the two differ on
+  // purpose. The marker for an `active` step already carries the primary glow
+  // meaning "the agent is working here" — a true, distinct claim — so amber
+  // must not overwrite it. But the check is out either way, and the portfolio
+  // says so on its row: a reader who opens Ravenswood from that row has to
+  // find the same fact here, or the two surfaces read as disagreeing.
+  const awaitingChip = !flagged && state !== "upcoming" && awaiting > 0
   return (
     <div className="flex flex-col items-center">
       {/* THE WHOLE NODE IS THE TARGET — circle included.
@@ -688,7 +695,9 @@ function StepRow({
                 something is still moving but not what, and this is the one
                 view a reader scans without opening anything — if the wait is
                 not named here it is not named anywhere they will look. */}
-            {pending && <InProgressTag label={dense ? "In progress" : `${awaiting} in progress`} />}
+            {awaitingChip && (
+              <InProgressTag label={dense ? "In progress" : `${awaiting} in progress`} />
+            )}
             {!dense && <OwnerBadge step={step.id} compact />}
           </div>
         </div>
@@ -1890,6 +1899,19 @@ function StepCockpit({
             const isPending = i >= completed && !isRunning && !isFailed && !isHalted
             const art = artifactFor(step.id, i, merchant)
             const outcome = artifactOutcome(art)
+            // The task RAN and DISPATCHED a check that has not come back. Same
+            // defect as the rail, one register lower: a green tick here reports
+            // a verdict no provider has returned, and this row is the only
+            // place the open check is visible at all.
+            //
+            // Ranked below every failure state above and gated on `isDone` for
+            // the same reason `exception` is — the artefacts exist whether or
+            // not the agent reached them, so an ungated read would show a task
+            // nobody has started as waiting on something.
+            const awaitingHere =
+              isDone && !isFailed && !isHalted && !isSkipped && !exception && art?.kind === "checks"
+                ? art.rows.filter((r) => r.state === "running").length
+                : 0
             return (
               <button
                 key={task.label}
@@ -1912,7 +1934,9 @@ function StepCockpit({
                           ? "border-destructive/45 bg-destructive/15 text-destructive"
                           : exception
                             ? "border-destructive/45 bg-destructive/15 text-destructive"
-                            : isDone
+                            : awaitingHere > 0
+                              ? "border-warning/45 bg-warning/15 text-warning"
+                              : isDone
                               ? "border-success/40 bg-success/15 text-success"
                               : isRunning
                                 ? "border-primary bg-primary/15 text-primary"
@@ -1927,6 +1951,8 @@ function StepCockpit({
                     <Pause className="h-3.5 w-3.5" />
                   ) : exception ? (
                     <AlertTriangle className="h-3.5 w-3.5" />
+                  ) : awaitingHere > 0 ? (
+                    <PulseDot />
                   ) : isDone ? (
                     <Check className="h-3.5 w-3.5" />
                   ) : isRunning ? (
@@ -1966,6 +1992,18 @@ function StepCockpit({
                       Exception · {exception.headline}
                       <span className="block font-normal text-muted-foreground">
                         {exception.detail}
+                      </span>
+                    </p>
+                  )}
+                  {/* Says WHO is being waited on. Without it the amber reads as
+                      a problem with the merchant, when the file is legitimate
+                      and the delay is entirely on the provider's side. */}
+                  {awaitingHere > 0 && (
+                    <p className="mt-1 flex flex-wrap items-center gap-1.5 text-xs font-medium leading-relaxed text-warning">
+                      <InProgressTag />
+                      <span className="font-normal text-muted-foreground">
+                        {awaitingHere === 1 ? "1 check is" : `${awaitingHere} checks are`} still out
+                        with the provider — nothing is needed from you.
                       </span>
                     </p>
                   )}

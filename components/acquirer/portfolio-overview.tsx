@@ -18,6 +18,8 @@ import {
   stepById,
   type Merchant,
 } from "@/lib/acquirer-data"
+import { pendingCheckSteps as pendingChecks } from "@/lib/artifacts"
+import { PulseDot } from "@/components/acquirer/in-progress-tag"
 import { applyDecisions } from "@/lib/decisions"
 import { useDecisions } from "@/components/acquirer/decisions-provider"
 import { cn } from "@/lib/utils"
@@ -221,6 +223,27 @@ export function PortfolioOverview({
                     </td>
                     <td className="px-5 py-4">
                       <StepPill step={m.currentStep} />
+                      {/* NAMES ITS OWN STEP, because it is usually not the one
+                          above it: the file sits at Install while the open
+                          check belongs to KYC, back on the risk lane. Without
+                          the name this reads as "Install is in progress" and
+                          sends anyone chasing it to the wrong provider.
+
+                          Placed here rather than in the Status column on
+                          purpose — the file really is On track, and overwriting
+                          a health verdict with a wait would report a problem
+                          that does not exist. */}
+                      {pendingChecks(m).map(({ step, count }) => (
+                        <span
+                          key={step}
+                          className="mt-1.5 flex items-center gap-1.5 whitespace-nowrap text-[11px] text-muted-foreground"
+                        >
+                          <PulseDot />
+                          <span>
+                            {stepById(step).name} · {count} in progress
+                          </span>
+                        </span>
+                      ))}
                     </td>
                     <td className="px-5 py-4">
                       <MiniTrack current={m.currentStep} />
