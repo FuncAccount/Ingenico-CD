@@ -325,11 +325,15 @@ function StepRow({
             : "border-transparent hover:border-border hover:bg-secondary/50",
         )}
       >
-        <div className="flex items-center gap-1.5">
+        {/* `items-start`, and NO `truncate` in a lane column: at half width
+            "Underwrite" clipped to "Underw…", and a step whose name is cut to
+            nonsense reads as a rendering fault rather than a narrow column.
+            These names are one or two short words, so wrapping is safe. */}
+        <div className={cn("flex gap-1.5", dense ? "items-start" : "items-center")}>
           <span
             className={cn(
-              "truncate font-semibold",
-              dense ? "text-[13px]" : "text-sm",
+              "font-semibold",
+              dense ? "text-[13px] leading-tight" : "truncate text-sm",
               state === "upcoming" ? "text-muted-foreground" : "text-foreground",
             )}
           >
