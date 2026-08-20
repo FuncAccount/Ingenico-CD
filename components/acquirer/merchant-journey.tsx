@@ -41,6 +41,7 @@ import {
   artifactOutcome,
   blockingFinding,
   taskExceptions,
+  type ExceptionContext,
   defaultBasket,
   taskDetail,
   taskSkipped,
@@ -85,6 +86,25 @@ export function MerchantJourney({
   }, [current.id, current.currentStep])
 
   const tone = statusTone(current.status)
+
+  // LIFTED OUT OF THE COCKPIT so the rail can see it. The brand rules are
+  // computed from this live theme, and the rail marker makes a claim about the
+  // same step the cockpit does — left inside the cockpit, the rail could only
+  // have read a second copy, and the two would disagree the moment anyone
+  // edited the design. One source, both surfaces.
+  const [theme, setTheme] = useState<BrandTheme>(() => defaultTheme(current))
+  const exceptionCtx = useMemo(() => ({ brandRules: checkBrand(theme) }), [theme])
+
+  // Which steps are carrying an unresolved finding, so the marker cannot show
+  // a tick over one. Positional state alone could never know this: it only
+  // tracks how far the agent has travelled, not what it found on the way.
+  const findingSteps = useMemo(() => {
+    const s = new Set<StepId>()
+    for (const st of PIPELINE) {
+      if (blockingFinding(st.id, current, exceptionCtx)) s.add(st.id)
+    }
+    return s
+  }, [current, exceptionCtx])
 
   // Delegates to the model so the risk lane is read from `riskLane` rather
   // than from a position on the build path it no longer shares.
@@ -219,6 +239,7 @@ export function MerchantJourney({
               isFocus={step.id === focusStep}
               onFocus={setFocusStep}
               connector="none"
+              hasFinding={findingSteps.has(step.id)}
             />
           ))}
 
@@ -246,12 +267,14 @@ export function MerchantJourney({
               stepState={stepState}
               focusStep={focusStep}
               onFocus={setFocusStep}
+              findingSteps={findingSteps}
             />
             <LaneColumn
               steps={buildLane}
               stepState={stepState}
               focusStep={focusStep}
               onFocus={setFocusStep}
+              findingSteps={findingSteps}
             />
           </div>
 
@@ -266,6 +289,7 @@ export function MerchantJourney({
               isFocus={step.id === focusStep}
               onFocus={setFocusStep}
               connector={i === spine.after.length - 1 ? "none" : "down"}
+              hasFinding={findingSteps.has(step.id)}
             />
           ))}
         </div>
@@ -276,6 +300,9 @@ export function MerchantJourney({
           state={focusedState}
           merchant={current}
           onOpenSignoff={() => onOpenSignoff(current)}
+          theme={theme}
+          setTheme={setTheme}
+          exceptionCtx={exceptionCtx}
         />
       </div>
     </div>
@@ -358,11 +385,13 @@ function LaneColumn({
   stepState,
   focusStep,
   onFocus,
+  findingSteps,
 }: {
   steps: PipelineStep[]
   stepState: (step: PipelineStep) => StepState
   focusStep: StepId
   onFocus: (id: StepId) => void
+  findingSteps: Set<StepId>
 }) {
   return (
     <div className="flex min-w-0 flex-1 flex-col">
@@ -375,6 +404,7 @@ function LaneColumn({
           onFocus={onFocus}
           connector={i === steps.length - 1 ? "none" : "down"}
           dense
+          hasFinding={findingSteps.has(step.id)}
         />
       ))}
       <div className="relative min-h-3 flex-1">
@@ -396,7 +426,8 @@ function StepRow({
   isFocus,
   onFocus,
   connector,
-  dense = false,
+  dense,
+  hasFinding,
 }: {
   step: PipelineStep
   state: StepState
@@ -404,7 +435,13 @@ function StepRow({
   onFocus: (id: StepId) => void
   connector: "down" | "none"
   dense?: boolean
+  /** The step is behind us but something in its artefacts is unresolved. */
+  hasFinding?: boolean
 }) {
+  // Only meaningful once the step is behind us: an upcoming step's artefacts
+  // describe work nobody has done, and marking it would report a failure
+  // against a step the agent has not reached.
+  const flagged = hasFinding && state === "done"
   return (
     <div className="flex flex-col items-center">
       {/* THE WHOLE NODE IS THE TARGET — circle included.
@@ -422,7 +459,9 @@ function StepRow({
         <span
           className={cn(
             "flex h-8 w-8 shrink-0 items-center justify-center rounded-full border text-[11px] font-semibold transition-all",
-            state === "done"
+            flagged
+              ? "border-warning bg-warning/15 text-warning"
+              : state === "done"
               ? "border-primary bg-primary text-primary-foreground"
               : state === "active"
                 ? "border-primary bg-primary/15 text-primary glow-primary"
@@ -433,7 +472,17 @@ function StepRow({
             "group-focus-visible:ring-2 group-focus-visible:ring-primary/60",
           )}
         >
-          {state === "done" ? <Check className="h-4 w-4" /> : step.code}
+          {/* The tick is withheld, not overdrawn: it is the whole claim this
+              marker makes, and a step carrying an unresolved finding has not
+              earned it. Amber rather than red — the step ran and produced its
+              work, and red is already spoken for by a task that failed. */}
+          {flagged ? (
+            <AlertTriangle className="h-4 w-4" />
+          ) : state === "done" ? (
+            <Check className="h-4 w-4" />
+          ) : (
+            step.code
+          )}
           {/* Folding the marker into the button makes it part of the button's
               accessible name, and a bare tick contributes nothing to that.
               Prefixed with "Step" because the header badge already uses the
@@ -442,7 +491,11 @@ function StepRow({
               ambiguous to a reader and to any text assertion. */}
           {state !== "upcoming" && (
             <span className="sr-only">
-              {state === "done" ? "Step complete" : "Step in progress"}
+              {flagged
+                ? "Step has an unresolved finding"
+                : state === "done"
+                  ? "Step complete"
+                  : "Step in progress"}
             </span>
           )}
         </span>
@@ -577,11 +630,17 @@ function StepCockpit({
   state,
   merchant,
   onOpenSignoff,
+  theme,
+  setTheme,
+  exceptionCtx,
 }: {
   step: PipelineStep
   state: StepState
   merchant: Merchant
   onOpenSignoff: () => void
+  theme: BrandTheme
+  setTheme: (t: BrandTheme) => void
+  exceptionCtx: ExceptionContext
 }) {
   // Null unless the risk lane is genuinely outstanding — see the banner below.
   const rejoinRisk = shipRisk(merchant)
@@ -627,9 +686,10 @@ function StepCockpit({
   // about one merchant never shows against another.
   const [handoffs, setHandoffs] = useState<Record<string, HandoffState>>({})
 
-  // Branding and the underwriting determination live here rather than inside
-  // the panels that draw them, because the sign-off gate has to read both.
-  const [theme, setTheme] = useState<BrandTheme>(() => defaultTheme(merchant))
+  // The underwriting determination lives here rather than inside the panel
+  // that draws it, because the sign-off gate has to read it. `theme` used to
+  // sit beside it and now arrives as a prop — it went one level higher still,
+  // so the rail marker and this cockpit judge the design by the same rules.
   const [edge, setEdge] = useState<EdgeResolution | undefined>(undefined)
 
   // Scheme acceptance. Lifted for the same reason: the requested set and the
@@ -832,12 +892,6 @@ function StepCockpit({
   // the list cannot disagree about how many tasks this order actually has.
   const skippedCount = step.tasks.filter((_, i) => taskSkipped(step.id, i, merchant)).length
   const runnableCount = step.tasks.length - skippedCount
-
-  // The brand rules are computed from the LIVE theme, not a stored field, so a
-  // failing rule clears the moment the acquirer fixes the design and returns if
-  // they undo it. Anything derived from a frozen copy would keep reporting a
-  // failure the screen beside it had already resolved.
-  const exceptionCtx = useMemo(() => ({ brandRules: checkBrand(theme) }), [theme])
 
   // Read out of this step's own artefacts. A step can finish every task and
   // still not have passed — the run is what turns the finding up.
