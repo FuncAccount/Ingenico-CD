@@ -804,6 +804,24 @@ function StepCockpit({
   // "5/5 tasks" directly above a panel saying the run had stopped.
   const haltedCount = finding?.taskIndex !== undefined ? 1 : 0
 
+  // Checks this step ASKED FOR that have not come back yet.
+  //
+  // "Every task ran" and "every answer arrived" are different claims, and the
+  // parallel lanes made the gap between them routine: KYC dispatches a liveness
+  // check to a provider and the file legitimately moves on. The badge read
+  // "Complete" directly above a spinner saying otherwise — the same defect this
+  // file already fixed for held dispatches and halted runs, one register lower.
+  // Counted off the artefacts themselves so the badge and the panel beneath it
+  // are reading one source and cannot drift apart.
+  const outstandingChecks = useMemo(() => {
+    let n = 0
+    for (let i = 0; i < step.tasks.length; i++) {
+      const a = artifactFor(step.id, i, merchant)
+      if (a?.kind === "checks") n += a.rows.filter((r) => r.state === "running").length
+    }
+    return n
+  }, [step.id, merchant, step.tasks.length])
+
   // What stops the acquirer's own decision on THIS step. Different steps are
   // blocked by different things, so this is computed per step rather than by
   // one shared "is everything fine" flag that could not name its own blocker.
@@ -935,7 +953,12 @@ function StepCockpit({
                       ? "bg-destructive"
                       : finding
                         ? "bg-warning"
-                        : "bg-success"
+                        : // Waiting is not a warning. Amber here would raise an
+                          // alarm about a check that is proceeding normally, and
+                          // green would assert a result nobody has returned.
+                          outstandingChecks > 0
+                          ? "bg-muted-foreground/60"
+                          : "bg-success"
                     : blocker
                       ? "bg-destructive"
                       : "bg-muted-foreground/60",
@@ -954,7 +977,12 @@ function StepCockpit({
                     ? "Halted"
                     : finding
                       ? "Finding"
-                      : "Complete"
+                      : // Reports the outstanding count rather than a verdict:
+                        // the step is genuinely waiting, not finished and not
+                        // stuck, and that is a third thing.
+                        outstandingChecks > 0
+                        ? `${outstandingChecks} awaiting`
+                        : "Complete"
                 : // "Ready" on a blocked step is a false all-clear: this is the
                   // one step that cannot be run to completion.
                   blocker

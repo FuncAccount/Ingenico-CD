@@ -34,7 +34,12 @@ export const SCORE_THE_RISK_TASK: number =
   ) ?? -1
 
 function pastUnderwriting(merchant: Merchant): boolean {
-  return merchant.currentStep > UNDERWRITING_STEP
+  // Reads the RISK LANE, not the build position. `currentStep > 2` was sound
+  // while the pipeline was a single file, but the lanes now run in parallel:
+  // a merchant can be at Configure with underwriting still open, and that test
+  // would have called the file approved because the KIT had moved on. The lane
+  // is the only thing that carries this verdict.
+  return merchant.riskLane.verdict === "cleared"
 }
 
 /** The score actually recorded for this merchant — from the underwriting block

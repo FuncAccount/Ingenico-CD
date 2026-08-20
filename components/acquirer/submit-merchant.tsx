@@ -88,11 +88,16 @@ export function SubmitMerchant({
               <h2 className="mt-5 text-xl font-semibold text-foreground">
                 {name} submitted
               </h2>
+              {/* Names the step the file ACTUALLY lands on. Since Underwrite
+                  was split, a submission opens at KYC — and both lanes start
+                  together, which is the behaviour worth stating here rather
+                  than implying a single queue. */}
               <p className="mt-2 text-sm text-muted-foreground">
-                The agent has started underwriting automatically. Your merchant
-                is now in the portfolio at{" "}
-                <span className="font-mono font-semibold text-primary">02 Underwrite</span>{" "}
-                and will return to you for regulated sign-off.
+                The agent has started screening automatically. Your merchant is
+                now in the portfolio at{" "}
+                <span className="font-mono font-semibold text-primary">R1 KYC</span>, with
+                the build lane running alongside it, and will return to you for
+                regulated sign-off.
               </p>
               <div className="mt-6 flex flex-col justify-center gap-3 sm:flex-row">
                 <button

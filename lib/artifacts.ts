@@ -988,7 +988,7 @@ export function artifactFor(
             source: "not supplied at intake",
             resolution: {
               owner: "Agent",
-              when: "looked up at Underwrite from the registry",
+              when: "looked up at KYC from the registry",
               blocking: false,
             },
           },
@@ -1096,7 +1096,7 @@ export function artifactFor(
             source: "retrieved at underwriting, not at intake",
             resolution: {
               owner: "Agent",
-              when: "at Underwrite · Verify the business",
+              when: "at KYC · Verify the entity",
               blocking: false,
             },
           },
@@ -1106,7 +1106,10 @@ export function artifactFor(
             source: "collected from the merchant with the KYB documents",
             resolution: {
               owner: "Merchant",
-              when: "with the KYB document request at Underwrite",
+              // Underwriting owns the single document chase — see the handoff
+              // comment on step 2. Pointing this at KYC would name a second,
+              // competing request for the same pile of paperwork.
+              when: "with the document request at Underwriting",
               blocking: false,
             },
           },

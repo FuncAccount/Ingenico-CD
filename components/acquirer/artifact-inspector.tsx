@@ -11,6 +11,7 @@ import {
   CheckCircle2,
   FileText,
   Info,
+  Loader2,
   Pencil,
   Wrench,
 } from "lucide-react"
@@ -870,6 +871,7 @@ function ChecksView({ artifact }: { artifact: Extract<Artifact, { kind: "checks"
     fail: "text-destructive",
     running: "text-primary",
   } as const
+  const open = artifact.rows.filter((r) => r.state === "running").length
   return (
     <Shell title={artifact.title} note={artifact.note}>
       <div className="space-y-2">
@@ -911,6 +913,44 @@ function ChecksView({ artifact }: { artifact: Extract<Artifact, { kind: "checks"
           resolve — only Ship waits on the outcome.
         </p>
       )}
+    </Shell>
+  )
+}
+
+/** The merchant's rate card. Every line carries its BASIS, because this is a
+ *  recommendation the acquirer is expected to argue with — a bare rate can only
+ *  be accepted or ignored, not corrected. */
+function TariffView({ artifact }: { artifact: Extract<Artifact, { kind: "tariff" }> }) {
+  return (
+    <Shell title={artifact.title} note={artifact.note}>
+      <div className="space-y-1.5">
+        {artifact.rows.map((r) => (
+          <div
+            key={r.label}
+            className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 rounded-xl border border-border/70 bg-white/60 p-3"
+          >
+            <p className="min-w-0 flex-1 text-sm font-medium text-foreground">{r.label}</p>
+            <p className="font-mono text-sm font-semibold tabular-nums text-foreground">{r.value}</p>
+            <p className="w-full text-xs leading-relaxed text-muted-foreground">{r.basis}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* The consequence of the bundle, as a RANGE. A single percentage would
+          read as a forecast the model cannot support. */}
+      <div className="mt-2.5 rounded-xl border border-primary/40 bg-primary/[0.05] p-3">
+        <div className="flex flex-wrap items-baseline justify-between gap-x-3">
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            {artifact.projection.label}
+          </p>
+          <p className="font-mono text-base font-semibold tabular-nums text-foreground">
+            {artifact.projection.range}
+          </p>
+        </div>
+        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{artifact.projection.basis}</p>
+      </div>
+
+      <p className="mt-2.5 text-[11px] leading-relaxed text-muted-foreground">{artifact.illustrative}</p>
     </Shell>
   )
 }
@@ -1002,6 +1042,8 @@ export function ArtifactInspector(props: Props) {
       return <ConsignmentView {...props} title={artifact.title} note={artifact.note} />
     case "pricing":
       return <PricingView {...props} title={artifact.title} note={artifact.note} />
+    case "tariff":
+      return <TariffView artifact={artifact} />
     case "records":
       return <RecordsView artifact={artifact} />
     case "checks":
