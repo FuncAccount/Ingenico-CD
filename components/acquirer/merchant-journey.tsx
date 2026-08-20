@@ -71,6 +71,28 @@ type StepState = "done" | "active" | "upcoming"
 /** Shared empty progress set — see the note at `progress` below. */
 const EMPTY_STEPS: ReadonlySet<StepId> = new Set()
 
+/**
+ * Why a step's run is refused, in the refusal's own words.
+ *
+ * Every field travels WITH the reason rather than being decided at the point
+ * of display, because there is now more than one kind of block and they mean
+ * opposite things: a held dispatch is a warning about a file that failed its
+ * checks, an unreached step is the ordinary state of work that has not started.
+ * When the label was a single hardcoded string, focusing an unreached build
+ * step showed "Release withheld" — Ship's wording, on a step that dispatches
+ * nothing.
+ */
+type RunBlock = {
+  /** Short status word for the step badge. */
+  badge: string
+  /** What the disabled run button says instead of "Play agent run". */
+  action: string
+  /** The full sentence, naming what is being waited on. */
+  reason: string
+  /** Neutral = not its turn yet, warning = held, destructive = something failed. */
+  tone: "neutral" | "warning" | "destructive"
+}
+
 export function MerchantJourney({
   merchant,
   onSelectMerchant,
@@ -1037,9 +1059,11 @@ function StepCockpit({
         badge: "Not started",
         action: `Waiting on ${awaiting.code}`,
         reason: `${awaiting.code} ${awaiting.name} has not finished. Steps on this lane run in order.`,
-        // Nothing has failed. This step simply has not had its turn, and
-        // colouring it red would report a fault where there is none.
-        failing: false,
+        // Neutral, not amber. Nothing has failed and nothing is being held —
+        // this step simply has not had its turn, which is the ordinary state
+        // of most of the pipeline. Amber here would put a warning on every
+        // step the file has yet to reach.
+        tone: "neutral",
       }
     }
     if (step.id !== REJOIN_STEP || clearance.granted) return null
@@ -1052,7 +1076,10 @@ function StepCockpit({
       badge: "Held",
       action: "Release withheld",
       reason: `${clearanceLine(clearance)} Ingenico cannot dispatch until every prior step passes.`,
-      failing: clearance.failing,
+      // Red only when something actually failed; amber when the file is merely
+      // still in flight. Matches the clearance panel's own reading rather than
+      // inventing a second opinion about the same hold.
+      tone: clearance.failing ? "destructive" : "warning",
     }
   }, [step.id, clearance, awaiting])
 
@@ -1287,14 +1314,15 @@ function StepCockpit({
                             : "bg-success"
                     : blocker
                       ? "bg-destructive"
-                      : // Matches the panel's own tone rather than inventing a
-                        // second reading of the same hold: red only when
-                        // something actually failed, amber when the file is
-                        // merely still in flight.
+                      : // The block states its own tone — see RunBlock. A step
+                        // that has not had its turn is neutral, a held
+                        // dispatch is amber, a real failure is red.
                         runBlocked
-                        ? clearance.failing
+                        ? runBlocked.tone === "destructive"
                           ? "bg-destructive"
-                          : "bg-warning"
+                          : runBlocked.tone === "warning"
+                            ? "bg-warning"
+                            : "bg-muted-foreground/60"
                         : "bg-muted-foreground/60",
                 )}
               />
@@ -1334,7 +1362,7 @@ function StepCockpit({
                     // the screenshot caught this; every text assertion
                     // passed.
                     runBlocked
-                    ? "Held"
+                    ? runBlocked.badge
                     : "Ready"}
           </span>
         </div>
@@ -1578,12 +1606,16 @@ function StepCockpit({
             <button
               onClick={play}
               disabled={runBlocked !== null}
-              title={runBlocked ?? undefined}
+              title={runBlocked?.reason}
               className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary/90 glow-soft disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none disabled:hover:bg-primary"
             >
               <Play className="h-3.5 w-3.5" />
+              {/* The block names its own refusal. A single hardcoded label was
+                  written when Ship was the only gate, so an unreached build
+                  step announced "Release withheld" — Ship's wording, about a
+                  dispatch that step has nothing to do with. */}
               {runBlocked
-                ? "Release withheld"
+                ? runBlocked.action
                 : completed >= step.tasks.length
                   ? "Replay agent"
                   : completed > 0
