@@ -33,7 +33,7 @@ import {
   type Merchant,
   type PipelineStep,
   laneState,
-
+  blockingPredecessor,
   REJOIN_STEP,
   type StepId,
 } from "@/lib/acquirer-data"
@@ -128,9 +128,9 @@ export function MerchantJourney({
      Lives here rather than in the cockpit because the rail draws from it too,
      and a second copy is how the rail and the cockpit come to disagree about
      the same step. */
-  /* Module-scope constant, not `new Set()` inline: a fresh set each render is a
-     new identity, which would re-fire every memo and effect downstream of it. */
   const [progress, setProgress] = useState<Record<string, Set<StepId>>>({})
+  /* Falls back to the shared EMPTY_STEPS rather than a fresh `new Set()`: a new
+     identity each render would re-fire every memo and effect downstream. */
   const progressed = progress[current.id] ?? EMPTY_STEPS
 
   const markStepDone = useCallback(
@@ -344,6 +344,7 @@ export function MerchantJourney({
           setTheme={setTheme}
           exceptionCtx={exceptionCtx}
           onStepDone={markStepDone}
+          awaiting={blockingPredecessor(current, focused, progressed)}
         />
       </div>
     </div>
@@ -675,6 +676,7 @@ function StepCockpit({
   setTheme,
   exceptionCtx,
   onStepDone,
+  awaiting,
 }: {
   step: PipelineStep
   state: StepState
@@ -688,6 +690,10 @@ function StepCockpit({
    *  it — a copy kept in this component would be invisible to every one of
    *  them, which is how completing a step came to change nothing. */
   onStepDone: (id: StepId) => void
+  /** The step in front of this one that is still open, when this one is not
+   *  reachable yet. Passed in rather than computed here because only the
+   *  parent holds the session's progress. */
+  awaiting: PipelineStep | null
 }) {
   // Null unless the risk lane is genuinely outstanding — see the banner below.
   /* Computed for every step, not just Ship, because the Play gate below reads
@@ -1017,15 +1023,38 @@ function StepCockpit({
      Only Ship has one today, which is why this is a narrow named value rather
      than another enumeration — the last one of those was hand-listed for two
      steps and silently left the order button ungated. */
-  const runBlocked = useMemo<string | null>(() => {
+  const runBlocked = useMemo<RunBlock | null>(() => {
+    /* A STEP THAT IS NOT YET REACHABLE CANNOT BE RUN.
+    
+       The rail lets you focus any step, which is right — reading ahead is not
+       the same as acting — but focusing B4 also armed its Play button, so the
+       last step of the lane could be run while the first was still open. The
+       refusal NAMES the outstanding step: "not yet" alone leaves the reader
+       guessing which of eight is holding them up, and a control that cannot
+       say why it is disabled looks broken rather than deliberate. */
+    if (awaiting) {
+      return {
+        badge: "Not started",
+        action: `Waiting on ${awaiting.code}`,
+        reason: `${awaiting.code} ${awaiting.name} has not finished. Steps on this lane run in order.`,
+        // Nothing has failed. This step simply has not had its turn, and
+        // colouring it red would report a fault where there is none.
+        failing: false,
+      }
+    }
     if (step.id !== REJOIN_STEP || clearance.granted) return null
     /* Nothing left to gate once the parcels have gone. Disabling Replay on a
        delivered shipment would offer to withhold something already in the
        merchant's hands — the control would be claiming a power it does not
        have. The panel above still reports the open findings. */
     if (clearance.released) return null
-    return `${clearanceLine(clearance)} Ingenico cannot dispatch until every prior step passes.`
-  }, [step.id, clearance])
+    return {
+      badge: "Held",
+      action: "Release withheld",
+      reason: `${clearanceLine(clearance)} Ingenico cannot dispatch until every prior step passes.`,
+      failing: clearance.failing,
+    }
+  }, [step.id, clearance, awaiting])
 
   /* WHEN A STEP IS FINISHED — the write that was missing.
   
@@ -1048,11 +1077,32 @@ function StepCockpit({
   const { decisions } = useDecisions()
   const decision = decisionAtStep(decisions, merchant.id, step.id)
   const needsDecision = step.acquirerRole === "signs-off" || step.acquirerRole === "approves"
+
+  /* WHAT FINISHES A STEP.
+  
+     Read from DURABLE facts only. `completed` is how far the animation has
+     played ON THIS VISIT — the navigation effect resets it to 0 whenever the
+     focused step changes — so a rule that also required it to still read 4/4
+     could never be satisfied alongside an approval, because approving means
+     opening the sign-off screen, and coming back had already wiped the
+     evidence. That is the reported bug exactly: approve B1, return, B1 still
+     "in progress". Animation state cannot stand as the record of work.
+  
+     Which fact counts depends on who owns the step, so this is derived from
+     `acquirerRole` rather than listing step ids:
+  
+     - A GATED step is finished by the DECISION, and by nothing else. The run
+       is presentation; the gate's own `precondition` is what stops anyone
+       signing off before the evidence is in, and it has already run by the
+       time a decision exists.
+     - An OBSERVED step is finished when the run reaches its last task, which
+       is the only completion event it has.
+  
+     A blocker vetoes either — a step carrying an unresolved finding has not
+     passed, however much of it ran. */
+  const ranToEnd = completed >= step.tasks.length
   const stepFinished =
-    completed >= step.tasks.length &&
-    !blocker &&
-    !runBlocked &&
-    (!needsDecision || decision?.kind === "signed")
+    !blocker && !runBlocked && (needsDecision ? decision?.kind === "signed" : ranToEnd)
 
   useEffect(() => {
     if (stepFinished) onStepDone(step.id)

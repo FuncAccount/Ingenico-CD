@@ -773,7 +773,9 @@ export function laneState(
      enforced at Ship by `shipClearance`, which can say WHICH risk step is
      open. Folding it in here would only make Ship `upcoming`, which reads as
      "not your turn yet" rather than "held".) */
-  const lane = step.lane === "build" ? BUILD_LANE : SPINE_PATH
+  // Via `pathOf`, so this and `blockingPredecessor` cannot come to disagree
+  // about which path a step travels — the risk branch above has returned.
+  const lane = pathOf(step)
   const here = lane.findIndex((s) => s.id === step.id)
 
   /* The first step on this lane that is not yet finished. A step is `active`
@@ -867,6 +869,40 @@ export const SPINE_PATH: PipelineStep[] = (() => {
   const rejoinAt = SPINE_LANE.findIndex((s) => s.id === REJOIN_STEP)
   return [...SPINE_LANE.slice(0, rejoinAt), ...BUILD_LANE, ...SPINE_LANE.slice(rejoinAt)]
 })()
+
+/** The path a step travels on — the same three definitions `laneState` uses,
+ *  named once so a caller cannot pick a different one and disagree with it. */
+export function pathOf(step: PipelineStep): PipelineStep[] {
+  if (step.lane === "risk") return RISK_LANE
+  if (step.lane === "build") return BUILD_LANE
+  return SPINE_PATH
+}
+
+/**
+ * The earliest step still outstanding in front of `step`, or null when it is
+ * reachable now.
+ *
+ * Exists so a refusal can NAME what it is waiting for. "Not yet" on its own
+ * leaves the reader to guess which of eight steps is holding them up, and a
+ * control that cannot say why it is disabled is indistinguishable from one
+ * that is broken.
+ *
+ * Derived from `laneState` rather than re-deriving order, so the rail's
+ * "upcoming" and this explanation always agree about the reason.
+ */
+export function blockingPredecessor(
+  merchant: Pick<Merchant, "currentStep" | "riskLane">,
+  step: PipelineStep,
+  progressed: ReadonlySet<StepId> = EMPTY_PROGRESS,
+): PipelineStep | null {
+  if (laneState(merchant, step, progressed) !== "upcoming") return null
+  const path = pathOf(step)
+  const here = path.findIndex((s) => s.id === step.id)
+  for (let i = 0; i < here; i++) {
+    if (laneState(merchant, path[i], progressed) !== "done") return path[i]
+  }
+  return null
+}
 
 /* `shipRisk` lived here. It warned and allowed the run anyway, and it read
  * ONLY `riskLane` — so a rejected order or a failed terminal configuration on
