@@ -76,6 +76,22 @@ export type ShipClearance = {
    * colour stops meaning anything.
    */
   failing: boolean
+  /**
+   * Whether the parcels have ALREADY gone — Ship itself is done.
+   *
+   * Separate from `granted` because a gate can only govern a decision still
+   * to be taken, and this one is applied to files that moved before it
+   * existed. Three fixtures sit at Install with an open branding finding, and
+   * telling their operator the release is "withheld" would be plainly false:
+   * the terminals are on site.
+   *
+   * Not a fixture quirk to be tidied away, either. The branding rules are
+   * evaluated live against an editable theme, so anyone can break the theme of
+   * a merchant already at Go-live and reach this state at runtime. A shipment
+   * that went out over a finding still open is a recall question, not a hold,
+   * and it needs saying rather than rounding to either clean or blocked.
+   */
+  released: boolean
 }
 
 export function shipClearance(merchant: Merchant, ctx: ExceptionContext): ShipClearance {
@@ -105,11 +121,14 @@ export function shipClearance(merchant: Merchant, ctx: ExceptionContext): ShipCl
     }
   }
 
+  const shipStep = PIPELINE.find((s) => s.id === REJOIN_STEP)!
+
   return {
     granted: holds.length === 0,
     holds,
     checked: SHIP_PREREQUISITES,
     failing: holds.some((h) => h.kind === "failed"),
+    released: laneState(merchant, shipStep) === "done",
   }
 }
 
@@ -132,5 +151,10 @@ export function clearanceLine(c: ShipClearance): string {
     failed > 0 ? `${failed} failed` : null,
     pending > 0 ? `${pending} not finished` : null,
   ].filter(Boolean)
-  return `Release withheld — ${parts.join(", ")} of ${c.checked.length} prior steps.`
+  const detail = `${parts.join(", ")} of ${c.checked.length} prior steps`
+  // Past tense once the parcels have gone. "Withheld" would describe a hold
+  // that is not in force on hardware already delivered.
+  return c.released
+    ? `Released before this was resolved — ${detail}.`
+    : `Release withheld — ${detail}.`
 }

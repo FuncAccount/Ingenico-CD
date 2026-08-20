@@ -975,6 +975,11 @@ function StepCockpit({
      steps and silently left the order button ungated. */
   const runBlocked = useMemo<string | null>(() => {
     if (step.id !== REJOIN_STEP || clearance.granted) return null
+    /* Nothing left to gate once the parcels have gone. Disabling Replay on a
+       delivered shipment would offer to withhold something already in the
+       merchant's hands — the control would be claiming a power it does not
+       have. The panel above still reports the open findings. */
+    if (clearance.released) return null
     return `${clearanceLine(clearance)} Ingenico cannot dispatch until every prior step passes.`
   }, [step.id, clearance])
 
@@ -1355,11 +1360,13 @@ function StepCockpit({
                   <Clock className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
                 )}
                 <div className="min-w-0">
-                  <p className="text-sm font-semibold text-foreground">Release withheld</p>
+                  <p className="text-sm font-semibold text-foreground">
+                    {clearance.released ? "Released with findings still open" : "Release withheld"}
+                  </p>
                   <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
-                    Ingenico cannot dispatch without your clearance, and clearance needs every prior
-                    step on both lanes to pass. Reaching this step is not itself an approval — the
-                    build lane does not wait for the risk lane.
+                    {clearance.released
+                      ? "The parcels have already gone — this file cleared Ship before the findings below were raised, so there is no shipment left to hold. Whether the terminals stay on site is a recall decision now, not a clearance one."
+                      : "Ingenico cannot dispatch without your clearance, and clearance needs every prior step on both lanes to pass. Reaching this step is not itself an approval — the build lane does not wait for the risk lane."}
                   </p>
 
                   {/* Each hold NAMED. A count alone ("2 outstanding") tells the
@@ -1389,9 +1396,11 @@ function StepCockpit({
                   {/* Says what makes it move, so a withheld release does not
                       read as a dead end. */}
                   <p className="mt-2.5 text-xs text-muted-foreground">
-                    {clearance.failing
-                      ? "Resolve the findings above. Release is granted automatically once every step passes."
-                      : "No action needed here — release is granted automatically as the remaining steps pass."}
+                    {clearance.released
+                      ? "Resolve the findings above. Doing so will not change this shipment, which has already left."
+                      : clearance.failing
+                        ? "Resolve the findings above. Release is granted automatically once every step passes."
+                        : "No action needed here — release is granted automatically as the remaining steps pass."}
                   </p>
                 </div>
               </div>
