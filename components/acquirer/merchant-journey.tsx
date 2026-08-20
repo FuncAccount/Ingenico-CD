@@ -1153,13 +1153,19 @@ function StepCockpit({
               <>0 tasks apply · {skippedCount} skipped</>
             ) : (
               <>
-                {Math.min(completed, step.tasks.length) - skippedCount}/{runnableCount} tasks ·{" "}
-                {skippedCount} skipped
+                {/* Clamped for the same reason as the halted branch below. */}
+                {Math.max(0, Math.min(completed, step.tasks.length) - skippedCount)}/
+                {runnableCount} tasks · {skippedCount} skipped
               </>
             )
           ) : (
             <>
-              {Math.min(completed, step.tasks.length) - haltedCount}/{step.tasks.length} tasks
+              {/* Clamped at 0. The subtraction assumes the halted task sits
+                  INSIDE `completed`, which is false when the run halts before
+                  ever reaching it — a file that stops on its first task showed
+                  "-1/4 tasks", a negative count of work done. */}
+              {Math.max(0, Math.min(completed, step.tasks.length) - haltedCount)}/
+              {step.tasks.length} tasks
               {haltedCount > 0 && " · 1 halted"}
             </>
           )}
