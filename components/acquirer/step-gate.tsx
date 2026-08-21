@@ -13,6 +13,7 @@ import {
   Store,
 } from "lucide-react"
 import type { Merchant, StepId } from "@/lib/acquirer-data"
+import { stepById } from "@/lib/acquirer-data"
 import { physicalUnits } from "@/lib/artifacts"
 import { decisionAtStep, liveDecisionAtStep, type Decision } from "@/lib/decisions"
 import { useDecisions } from "@/components/acquirer/decisions-provider"
@@ -124,6 +125,13 @@ interface Props {
   /** The stage was reset by hand, so it is being driven live rather than read
    *  back as history — see `isPast` below. */
   wasReset?: boolean
+  /** This step is carrying an unresolved blocking finding.
+   *
+   *  REQUIRED, not defaulted: `false` is the claim "this step is clean", and a
+   *  forgotten argument must not be able to make it. Passed from the same
+   *  `haltedSteps` set the rail and the ship gate read, so the three cannot
+   *  disagree about one step. */
+  hasFinding: boolean
   /** A fingerprint of what an approval taken here would be about, stored on the
    *  decision so a later edit to the same artefact can supersede it. */
   basis: string | null
@@ -137,6 +145,7 @@ export function StepGate({
   onStates,
   precondition = null,
   wasReset = false,
+  hasFinding,
   basis,
 }: Props) {
   // Keyed by step AND by what was ordered: steps 7 and 8 otherwise promise a
@@ -157,7 +166,27 @@ export function StepGate({
   // first time", which is a claim about the VIEW, not about the merchant's
   // real position, so only this default flips: `merchant.currentStep` is
   // untouched and the pipeline rail still shows the step as passed.
-  const isPast = step < merchant.currentStep && !wasReset
+  /* A HALTED STEP IS NEVER "PAST", however far the file has travelled.
+  
+     Two faults met on this line. First, `step < merchant.currentStep` is the
+     raw id comparison the rest of the codebase has spent so long eradicating —
+     the risk lane runs 10 → 11 → 2, so KYC and Pricing compared as "past" only
+     by accident of numbering. Second and worse, `isPast` does two jobs at once:
+     it forces `blocking` to null (printing "Step clear") and it makes `read()`
+     fall back to `settledState`, which SYNTHESISES an approval. That is where
+     "Approved by you · date not recorded" came from — the phrase is the tell,
+     because there is no date to record when nobody ever approved anything.
+  
+     So SolMar, sitting at 03 Install, rendered a green "Approved by you" over a
+     brand rule tagged BLOCKS APPROVAL, with the agent log directly beneath
+     reading "agent run stopped". `hasFinding` is passed in from the same
+     `haltedSteps` set the rail and the ship gate read, so all three surfaces
+     answer this from one source. */
+  const isPast = stepById(step).lane !== "risk"
+    ? step < merchant.currentStep && !wasReset && !hasFinding
+    : // Risk steps carry no meaningful id order, so position cannot be read off
+      // `currentStep` at all. The lane's own verdict is the only honest source.
+      merchant.riskLane.verdict === "cleared" && !wasReset && !hasFinding
 
   // The acquirer's own decision is held in the shared record, not in this
   // component's handoff state — otherwise signing off here and signing off on
@@ -179,7 +208,15 @@ export function StepGate({
     : null
 
   function read(i: number): HandoffState {
-    if (list[i].party === "acquirer" && decision?.kind === "signed") {
+    /* `!hasFinding` guards the OTHER route to a false green, and it is a
+       different case from `isPast`: this one is a real, recorded approval with
+       a real timestamp, taken when the design was clean and invalidated by a
+       later edit. The supersession machinery covers an edit to the artefact the
+       approval names, but a brand rule is evaluated live against the theme, so
+       a colour change can break the design without touching that basis. Until
+       the finding clears, the row reverts to unapproved and the controls come
+       back — which is the only way the corrected design can be signed. */
+    if (list[i].party === "acquirer" && decision?.kind === "signed" && !hasFinding) {
       return { approvedIso: decision.atIso }
     }
     return (

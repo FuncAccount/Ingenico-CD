@@ -881,7 +881,38 @@ export function laneState(
    *  A surface with genuinely no session passes `NO_SESSION_PROGRESS`, which
    *  says so. */
   progressed: ReadonlySet<StepId>,
+  /** Steps carrying an unresolved blocking finding.
+   *
+   *  REQUIRED, for precisely the reason `progressed` is. The signal already
+   *  existed: the journey built a `findingSteps` set — under a comment saying
+   *  "positional state alone could never know this" — and wired it to the amber
+   *  MARKER while withholding it from this function. So the model that decides
+   *  doneness could not see what the agent had found. Branding drew a halt
+   *  while Configure and Test, which consume its output, drew ticks, and the
+   *  handoff beneath them synthesised "Approved by you · date not recorded".
+   *
+   *  A default of "nothing is blocked" would let any forgotten call site make
+   *  that same confident claim, so surfaces that genuinely cannot evaluate
+   *  findings pass `NO_HALTS` and say so. */
+  halted: ReadonlySet<StepId>,
 ): "done" | "active" | "upcoming" {
+  /* A BLOCKING FINDING VETOES COMPLETION — on every lane, at any position.
+  
+     Checked before anything else, because position and session progress are
+     both claims about how far the file has TRAVELLED, while a finding is a
+     claim about what is TRUE of it. The second has to win: SolMar sits at 03
+     Install, so whole-journey order marked every build step done, brand rule or
+     not. It must also beat `progressed` specifically — approve the branding,
+     then pick a clashing colour, and the approval on file describes a design
+     that no longer exists.
+  
+     "active", not a fourth state and not "upcoming". This mirrors the risk
+     lane's own treatment of a referred file a few lines down — stalled work is
+     still active work — and the amber marker already separates held from
+     working. "upcoming" would be worse than the tick it replaces: it would file
+     a step that ran and failed as one that never started. */
+  if (halted.has(step.id)) return "active"
+
   if (step.lane === "risk") {
     const lane = merchant.riskLane
     if (lane.verdict === "cleared") return "done"
@@ -926,7 +957,7 @@ export function laneState(
   /* The first step on this lane that is not yet finished. A step is `active`
      only if it IS that step — so B4 stays `upcoming` while B1 is outstanding,
      which is what stops you starting at the end of the lane. */
-  const openIdx = lane.findIndex((s) => !isLaneStepDone(merchant, s, progressed))
+  const openIdx = lane.findIndex((s) => !isLaneStepDone(merchant, s, progressed, halted))
   if (openIdx === -1) return "done"
   if (here < openIdx) return "done"
   if (here === openIdx) return "active"
@@ -945,6 +976,23 @@ export function laneState(
  */
 export const NO_SESSION_PROGRESS: ReadonlySet<StepId> = new Set()
 
+/**
+ * Pass this where findings genuinely cannot be evaluated.
+ *
+ * A blocking finding is computed in `lib/artifacts.ts`, which imports THIS
+ * module — so `laneState` cannot reach it without a cycle, and the set has to
+ * arrive from the caller. Book-level surfaces are the honest users: the brand
+ * rule is measured against the theme held in session, and a rollup reading the
+ * estate has no session to measure.
+ *
+ * Named for what it MEANS, like `NO_SESSION_PROGRESS`, and for the same reason:
+ * this is a real gap in what the caller can see, not a statement that the file
+ * is clean. Anywhere the caller CAN evaluate findings — the journey, the ship
+ * gate — must pass the real set, or it re-opens exactly the bug this parameter
+ * was added to close.
+ */
+export const NO_HALTS: ReadonlySet<StepId> = new Set()
+
 /** Whether a step on the build/spine path counts as finished.
  *
  *  Split out because `laneState` needs it while it is still computing its own
@@ -955,7 +1003,23 @@ function isLaneStepDone(
   merchant: Pick<Merchant, "currentStep" | "riskLane">,
   step: PipelineStep,
   progressed: ReadonlySet<StepId>,
+  halted: ReadonlySet<StepId>,
 ): boolean {
+  /* THE SAME VETO, AND THIS IS THE HALF THAT REACHES THE SUCCESSORS.
+  
+     `laneState` returning "active" for Branding fixes only Branding. What made
+     Configure and Test draw ticks is this function: it is what `openIdx`
+     consults to find the first unfinished step on the lane, so until a halt
+     counts as unfinished HERE, the open index runs straight past Branding and
+     everything behind it reports done. With the veto, `openIdx` stops at the
+     halted step and its successors fall out as "upcoming" — which is the
+     truth. Configure and Test consume a device theme that was never approved.
+  
+     Before `progressed`, deliberately: a step approved earlier in the session
+     and broken since is not done, and checking progress first would let the
+     stale approval win. */
+  if (halted.has(step.id)) return false
+
   if (progressed.has(step.id)) return true
 
   const cur = PIPELINE.find((s) => s.id === merchant.currentStep)
@@ -1047,12 +1111,17 @@ export function blockingPredecessor(
   merchant: Pick<Merchant, "currentStep" | "riskLane">,
   step: PipelineStep,
   progressed: ReadonlySet<StepId>,
+  /** Threaded through for the same reason the caller needs it: a halted step is
+   *  the most likely thing to be holding a successor up, and without this the
+   *  scan would walk straight past it and report "nothing is blocking you" to a
+   *  step that cannot in fact start. */
+  halted: ReadonlySet<StepId>,
 ): PipelineStep | null {
-  if (laneState(merchant, step, progressed) !== "upcoming") return null
+  if (laneState(merchant, step, progressed, halted) !== "upcoming") return null
   const path = pathOf(step)
   const here = path.findIndex((s) => s.id === step.id)
   for (let i = 0; i < here; i++) {
-    if (laneState(merchant, path[i], progressed) !== "done") return path[i]
+    if (laneState(merchant, path[i], progressed, halted) !== "done") return path[i]
   }
   return null
 }

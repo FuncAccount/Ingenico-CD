@@ -14,6 +14,7 @@
 
 import {
   laneState,
+  NO_HALTS,
   NO_SESSION_PROGRESS,
   MERCHANTS,
   PIPELINE,
@@ -509,7 +510,11 @@ export function automationCensus(rows: EstateRow[]): AutomationCensus {
       // the other. Only "done" counts; an in-flight step is not cleared work.
       // NO_SESSION_PROGRESS explicitly: this is a census of the whole book, so
       // there is no one journey whose in-session progress it could consult.
-      if (laneState(r.merchant, step, NO_SESSION_PROGRESS) !== "done") continue
+      // NO_HALTS for the same reason, one field along: the brand rule is
+      // measured against a theme held in session, and a census of every book
+      // has no session to measure. The alternative is not a better number here
+      // but a fabricated one.
+      if (laneState(r.merchant, step, NO_SESSION_PROGRESS, NO_HALTS) !== "done") continue
       stepsCleared += 1
       if (step.band === "Automate") unattended += 1
     }

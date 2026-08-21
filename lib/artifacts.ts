@@ -12,6 +12,7 @@
 import {
   laneState,
   MERCHANTS,
+  NO_HALTS,
   NO_SESSION_PROGRESS,
   PIPELINE,
   type Merchant,
@@ -1656,13 +1657,39 @@ function livenessOpen(merchant: Merchant): boolean {
  * screening open, and an index gate would have decided KYC was unreached and
  * hidden the one genuinely outstanding check in the book.
  */
+/**
+ * Every step carrying an unresolved blocking finding.
+ *
+ * The set `laneState` needs in order to refuse a tick. It lives HERE, beside
+ * `blockingFinding`, because this module imports `acquirer-data` and not the
+ * reverse — which is the whole reason `laneState` takes the answer as an
+ * argument rather than computing it.
+ *
+ * ONE implementation, deliberately. The journey built this set inline for its
+ * amber marker while the ship gate re-derived the same judgement in its own
+ * loop; two surfaces answering "is this step blocked?" from separate code is
+ * how they come to disagree about a single file. Both call this now.
+ */
+export function haltedSteps(merchant: Merchant, ctx: ExceptionContext): ReadonlySet<StepId> {
+  const out = new Set<StepId>()
+  for (const s of PIPELINE) {
+    if (blockingFinding(s.id, merchant, ctx)) out.add(s.id)
+  }
+  return out
+}
+
 export function pendingCheckSteps(merchant: Merchant): { step: StepId; count: number }[] {
   const out: { step: StepId; count: number }[] = []
   for (const s of PIPELINE) {
     // Artefacts are derived from the merchant and exist whether or not the
     // agent got there, so an ungated read would report a wait on work nobody
     // has started.
-    if (laneState(merchant, s, NO_SESSION_PROGRESS) === "upcoming") continue
+    //
+    // NO_HALTS: the portfolio's book-level read has no session theme to measure
+    // the brand rule against. Safe here specifically because this gates
+    // REACHED-ness only, and a halted step is "active" — still reached — so the
+    // count returned for it is the same either way.
+    if (laneState(merchant, s, NO_SESSION_PROGRESS, NO_HALTS) === "upcoming") continue
     const n = outstandingChecks(s.id, merchant)
     if (n > 0) out.push({ step: s.id, count: n })
   }

@@ -49,6 +49,7 @@ import {
   artifactFor,
   artifactOutcome,
   blockingFinding,
+  haltedSteps,
   outstandingChecks as countOutstandingChecks,
   taskExceptions,
   type ExceptionContext,
@@ -167,13 +168,14 @@ export function MerchantJourney({
   // Which steps are carrying an unresolved finding, so the marker cannot show
   // a tick over one. Positional state alone could never know this: it only
   // tracks how far the agent has travelled, not what it found on the way.
-  const findingSteps = useMemo(() => {
-    const s = new Set<StepId>()
-    for (const st of PIPELINE) {
-      if (blockingFinding(st.id, current, exceptionCtx)) s.add(st.id)
-    }
-    return s
-  }, [current, exceptionCtx])
+  //
+  // This set now drives the STATE MODEL as well as the marker. It used to feed
+  // the marker alone, which is why Branding could draw a halt while Configure
+  // and Test — which consume its output — drew ticks beneath it.
+  const findingSteps = useMemo(
+    () => haltedSteps(current, exceptionCtx),
+    [current, exceptionCtx],
+  )
 
   // How many checks each step is still waiting on, so the rail marker cannot
   // show a finished tick over one either.
@@ -225,7 +227,9 @@ export function MerchantJourney({
   // Delegates to the model so the risk lane is read from `riskLane` rather
   // than from a position on the build path it no longer shares.
   function stepState(step: PipelineStep): StepState {
-    return laneState(current, step, progressed)
+    // `findingSteps` is the fix: without it this returned "done" for every step
+    // the file had travelled past, whatever the agent found there.
+    return laneState(current, step, progressed, findingSteps)
   }
 
   const focused = PIPELINE.find((s) => s.id === focusStep)!
@@ -433,7 +437,7 @@ export function MerchantJourney({
                 onStepCleared={clearStepDone}
                 resetTheme={() => resetTheme(current.id)}
                 themeEdited={hasOverride(current.id)}
-          awaiting={blockingPredecessor(current, focused, progressed)}
+          awaiting={blockingPredecessor(current, focused, progressed, findingSteps)}
           progressed={progressed}
         />
       </div>
@@ -524,7 +528,8 @@ function LaneColumn({
   stepState: (step: PipelineStep) => StepState
   focusStep: StepId
   onFocus: (id: StepId) => void
-  findingSteps: Set<StepId>
+  // Readonly: a renderer has no business adding to the finding set.
+  findingSteps: ReadonlySet<StepId>
   /** Step id → checks dispatched and not yet returned. A count, not a flag,
    *  because the marker has to say how many are outstanding. */
   awaitingSteps: Map<StepId, number>
@@ -2183,6 +2188,10 @@ function StepCockpit({
         onStates={setHandoffs}
               precondition={precondition}
               wasReset={stageReset}
+              // The same `blockingFinding` the badge and the task rows read, so
+              // the handoff cannot report an approval over a step the panel
+              // directly above it is calling blocked.
+              hasFinding={finding !== null}
               // What an approval taken here would be ABOUT, so the record can
               // later tell whether the design has moved underneath it.
               basis={decisionBasis(step.id, merchant, theme)}

@@ -20,7 +20,9 @@ import {
   type PipelineStep,
   type StepId,
 } from "@/lib/acquirer-data"
-import { pendingCheckSteps as pendingChecks } from "@/lib/artifacts"
+import { haltedSteps, pendingCheckSteps as pendingChecks } from "@/lib/artifacts"
+import { checkBrand } from "@/lib/branding"
+import { useBrandTheme } from "@/components/acquirer/brand-theme-provider"
 import { PulseDot } from "@/components/acquirer/in-progress-tag"
 import { applyDecisions } from "@/lib/decisions"
 import { useDecisions } from "@/components/acquirer/decisions-provider"
@@ -79,7 +81,16 @@ function MiniTrack({
   merchant: Merchant
   progressed: ReadonlySet<StepId>
 }) {
-  const stateOf = (s: PipelineStep) => laneState(merchant, s, progressed)
+  /* Passes the REAL halt set, not `NO_HALTS`. `themeFor` is available on every
+     screen, so this surface genuinely can evaluate findings — and this is the
+     same false tick as the journey's, multiplied by the size of the book: every
+     row drew Configure and Test complete behind a halted Branding. */
+  const { themeFor } = useBrandTheme()
+  const halted = useMemo(
+    () => haltedSteps(merchant, { brandRules: checkBrand(themeFor(merchant)) }),
+    [merchant, themeFor],
+  )
+  const stateOf = (s: PipelineStep) => laneState(merchant, s, progressed, halted)
   const doneIn = (steps: PipelineStep[]) =>
     steps.filter((s) => stateOf(s) === "done").length
 
@@ -100,9 +111,18 @@ function MiniTrack({
       role="img"
       // The picture asserts something the Stage column cannot: that these run
       // together. Left aria-hidden, that claim would reach nobody.
-      aria-label={`Risk ${doneIn(RISK_STEPS)} of ${RISK_STEPS.length}, build ${doneIn(
-        BUILD_STEPS,
-      )} of ${BUILD_STEPS.length}, running in parallel`}
+      // A halt is stated, not left to the colour. The segment renders in the
+      // "active" tone, which a sighted reader sees as amber-ish progress but
+      // which reads to a screen reader as nothing at all — so the one row that
+      // is stuck would announce identically to one quietly working.
+      aria-label={
+        `Risk ${doneIn(RISK_STEPS)} of ${RISK_STEPS.length}, build ${doneIn(
+          BUILD_STEPS,
+        )} of ${BUILD_STEPS.length}, running in parallel` +
+        (halted.size > 0
+          ? `. ${halted.size} step${halted.size > 1 ? "s" : ""} held by a finding`
+          : "")
+      }
     >
       <Trunk steps={LEAD_STEPS} />
       {/* Split and merge ticks. The full diagram draws arches; at 8px the

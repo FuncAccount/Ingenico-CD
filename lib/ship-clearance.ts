@@ -27,7 +27,7 @@
 import type { Merchant, PipelineStep, StepId } from "@/lib/acquirer-data"
 import { PIPELINE, REJOIN_STEP, laneState } from "@/lib/acquirer-data"
 import type { ExceptionContext } from "@/lib/artifacts"
-import { blockingFinding } from "@/lib/artifacts"
+import { blockingFinding, haltedSteps } from "@/lib/artifacts"
 
 /**
  * Every step that must be finished before hardware may leave: both lanes plus
@@ -115,8 +115,20 @@ export function shipClearance(
 ): ShipClearance {
   const holds: ClearanceHold[] = []
 
+  /* This gate CAN evaluate findings — it already holds `ctx` — so it passes the
+     real set and never `NO_HALTS`. It is also the safety-critical caller: a
+     halted build step reading "done" here would clear parcels for a terminal
+     whose theme was never approved.
+  
+     It already caught that case, because the loop below asks `blockingFinding`
+     per step on its own account. Passing the set makes the two agree on the
+     same evidence rather than reaching the same answer twice by different
+     routes — and, more importantly, propagates the halt to the step's
+     SUCCESSORS, which this loop had no way to do. */
+  const halted = haltedSteps(merchant, ctx)
+
   for (const step of SHIP_PREREQUISITES) {
-    const state = laneState(merchant, step, progressed)
+    const state = laneState(merchant, step, progressed, halted)
 
     /* A finding is only counted on a step the file has actually REACHED.
        `blockingFinding` derives from artefacts, which exist for every step
@@ -150,7 +162,7 @@ export function shipClearance(
     // parcels just as surely as one the fixture placed at Install, and reading
     // only the fixture would keep offering to withhold a dispatch that has
     // already gone.
-    released: laneState(merchant, shipStep, progressed) === "done",
+    released: laneState(merchant, shipStep, progressed, halted) === "done",
   }
 }
 
