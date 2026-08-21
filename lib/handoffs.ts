@@ -318,8 +318,22 @@ export function waitingOn(
    *  starts empty and an unrecorded handoff is indistinguishable from an
    *  unfinished one. A step the journey has moved past is settled by fact. */
   currentStep?: StepId,
+  /** This step is carrying an unresolved blocking finding.
+   *
+   *  REQUIRED, because the shortcut below is the thing it has to override and a
+   *  defaulted `false` would silently restore the bug. */
+  hasFinding?: boolean,
 ): Party | null {
-  if (currentStep !== undefined && step < currentStep) return null
+  /* A HALT OUTRANKS POSITION. The shortcut below reasons "the journey has moved
+     past this step, so it is settled by fact" — sound for an unrecorded handoff
+     on finished work, false for a step that is stopped. It also uses the raw id
+     comparison the rest of the codebase has been removing.
+  
+     Left in place rather than replaced because it is doing a real job: handoff
+     state starts empty, so without it every completed step reports "waiting on
+     merchant" forever. Only the halted case is carved out, and a halted step is
+     waiting on whoever can clear it — which the line below works out properly. */
+  if (currentStep !== undefined && step < currentStep && !hasFinding) return null
   const i = blockingIndex(step, merchantId, states)
   return i === null ? null : STEP_HANDOFFS[step][i].party
 }

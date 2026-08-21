@@ -1499,7 +1499,16 @@ function StepCockpit({
                   step={step.id}
                   waiting={
                     completed >= step.tasks.length
-                      ? waitingOn(step.id, merchant.id, handoffs, merchant.currentStep)
+                      ? waitingOn(
+                          step.id,
+                          merchant.id,
+                          handoffs,
+                          merchant.currentStep,
+                          // Without this the badge reported nobody waiting on a
+                          // halted step, because position alone had already
+                          // declared it settled.
+                          finding !== null,
+                        )
                       : null
                   }
                 />
@@ -2251,7 +2260,10 @@ function StepCockpit({
                   {/* Read from LIVE state, not the static map: once a handoff is
                       settled the trace must stop saying it is waiting on them. */}
                   {(() => {
-                    const w = waitingOn(step.id, merchant.id, handoffs, merchant.currentStep)
+                    // Already inside the `!finding` branch, so this is `false`
+                    // by construction — passed anyway so the argument list
+                    // cannot be read as "findings do not apply here".
+                    const w = waitingOn(step.id, merchant.id, handoffs, merchant.currentStep, false)
                     return w === "acquirer"
                       ? "waiting on your decision"
                       : w === "merchant"
