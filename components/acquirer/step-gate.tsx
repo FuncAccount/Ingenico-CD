@@ -391,6 +391,7 @@ export function StepGate({
                 total={list.length}
                 merchant={merchant}
                 runComplete={runComplete}
+                hasFinding={hasFinding}
                 precondition={precondition}
                 onChange={(next) => write(i, next)}
                 superseded={superseded}
@@ -417,6 +418,7 @@ function HandoffRow({
   total,
   merchant,
   runComplete,
+  hasFinding,
   precondition,
   superseded,
   onChange,
@@ -430,6 +432,9 @@ function HandoffRow({
   total: number
   merchant: Merchant
   runComplete: boolean
+  /** Passed through to `AcquirerPanel`, which needs to tell a run that has not
+   *  happened from one that went and stopped. */
+  hasFinding: boolean
   precondition: string | null
   /** A previous approval at this gate that no longer stands, or null. */
   superseded: Decision | null
@@ -487,6 +492,7 @@ function HandoffRow({
                 <AcquirerPanel
                   handoff={handoff}
                   runComplete={runComplete}
+                  hasFinding={hasFinding}
                   precondition={precondition}
                   superseded={superseded}
                   // Writes to the shared record, not to this component's local
@@ -567,12 +573,17 @@ function Blocked({ children }: { children: React.ReactNode }) {
 function AcquirerPanel({
   handoff,
   runComplete,
+  hasFinding,
   precondition,
   superseded,
   onApprove,
 }: {
   handoff: Extract<Handoff, { party: "acquirer" }>
   runComplete: boolean
+  /** Whether the step carries a finding — i.e. the run went and STOPPED.
+   *  Distinguishes the two ways a run can be incomplete, which this panel used
+   *  to collapse into one sentence. */
+  hasFinding: boolean
   /** A named reason the decision cannot be taken yet, or null when it can.
    *  Passed in rather than computed here: what blocks an underwriting sign-off
    *  and what blocks a branding approval are different things. */
@@ -580,6 +591,16 @@ function AcquirerPanel({
   superseded: Decision | null
   onApprove: () => void
 }) {
+  /* TWO WAYS TO BE SHORT OF A COMPLETE RUN, AND THEY ASK FOR OPPOSITE THINGS.
+  
+     Both used to print "Run the agent first". On a halted step that is simply
+     false — the agent has been, which is how the finding above got there — and
+     it sends the reader to a Play button that will stop in the same place. The
+     blocker is the finding, and it is already on screen directly above, so this
+     points at it rather than restating it. */
+  if (!runComplete && hasFinding) {
+    return <Blocked>The agent run stopped at the finding above — clear that first.</Blocked>
+  }
   if (!runComplete) return <Blocked>Run the agent first — there is nothing to approve yet.</Blocked>
   return (
     <div>

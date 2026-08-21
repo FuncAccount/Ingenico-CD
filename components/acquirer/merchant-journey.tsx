@@ -1094,19 +1094,54 @@ function StepCockpit({
      executed and the ones after it did not: the run stopped there. Anything
      higher would tick tasks the halt prevented; anything lower would hide the
      one that found the problem. */
-  const authored = exceptionOnStep(merchant, step.id)
-  /* The timeline-only register. It records THAT the step ran but not WHICH task
-     stopped, so its tasks resume fully run rather than at a guessed index —
-     picking one would put a red mark on a task chosen at random. */
-  const locatedHere = locatedException(merchant)?.step === step.id
+  /* Read out of this step's own artefacts. A step can finish every task and
+     still not have passed — the run is what turns the finding up.
+  
+     Declared HERE, above `initialProgress`, because that is now its first
+     consumer: where the run stopped decides where the panel opens. */
+  const finding = useMemo(
+    () => blockingFinding(step.id, merchant, exceptionCtx, played),
+    [step.id, merchant, exceptionCtx, played],
+  )
+
+  /* ASK THE TWO FUNCTIONS THAT ALREADY OWN THESE ANSWERS — DO NOT RE-ENUMERATE
+     THE REGISTERS.
+  
+     This used to list the registers by hand: `exceptionOnStep` for an authored
+     exception, then `locatedException` for the timeline-only one. Both are real
+     registers, and the list was still wrong, because there is a THIRD — the
+     document-bundle halt — and Orchard Lane is held by exactly that one. So the
+     file opened at 0/5 while the task row beside it read "Halted · Bundle
+     incomplete — 2 documents outstanding" and the artefact pane said "This task
+     has not run yet", of a run that had plainly gone and stopped. A finding IS
+     the record of a run.
+  
+     `stepHasRun` carries the warning this ignored — "THESE TWO LISTS MUST
+     MATCH", written when `stepHasRun` and `blockingFinding` disagreed about
+     Glasswing and produced this identical contradiction one function to the
+     left. This was a third list, matching neither, and hand-enumerating
+     registers is what guarantees the next one gets missed. Both functions are
+     already used elsewhere in this very component — `stepHasRun` is passed to
+     the gate below as "whether the agent has actually been here" — so the
+     cockpit could state the fact in the handoff and deny it in the counter.
+  
+     Two questions, two owners: `stepHasRun` = did the agent come, `finding
+     .taskIndex` = where did it stop. Neither is re-derived here. */
   const initialProgress =
     state === "done"
       ? step.tasks.length
-      : authored
-        ? Math.min(authored.taskIndex + 1, step.tasks.length)
-        : locatedHere
-          ? step.tasks.length
-          : 0
+      : !stepHasRun(merchant, step.id, played)
+        ? 0
+        : /* It ran. `taskIndex` names the task that raised the finding: it
+             executed and the ones after it did not, so the run resumes there
+             and no further. A finding WITHOUT an index records that the step
+             ran but not where it stopped, so those resume fully run rather than
+             at a guessed index — picking one would put a red mark on a task
+             chosen at random. No finding at all means it ran clean (its checks
+             may still be out), which is also fully run. */
+          finding?.taskIndex !== undefined
+          ? Math.min(finding.taskIndex + 1, step.tasks.length)
+          : step.tasks.length
   const [completed, setCompleted] = useState(initialProgress)
   const [status, setStatus] = useState<RunStatus>(
     state === "done" ? "done" : "idle",
@@ -1267,13 +1302,42 @@ function StepCockpit({
     // A hand-reset step stays reset until it is run again, rather than being
     // re-derived back to "done" from the merchant's pipeline position.
     const wasReset = resetSteps.current.has(step.id)
-    const showDone = state === "done" && !wasReset
-    setCompleted(showDone ? step.tasks.length : 0)
-    setStatus(showDone ? "done" : "idle")
-    setSelected(0)
+
+    /* READ `initialProgress`, DO NOT RE-DERIVE IT.
+    
+       This used to be its own cruder rule — `state === "done" ? tasks.length :
+       0` — which knew about finished steps and nothing else. A HALTED step is
+       neither: it ran, and it stopped. So arriving at one reset it to zero and
+       the panel said "This task has not run yet" beside its own finding
+       ("Bundle incomplete — 2 documents outstanding"), a result only a run
+       could have produced. An exception IS the record of a run.
+    
+       `initialProgress` twelve hundred lines up already handled all three cases
+       and was used ONCE, in the `useState` initialiser — so the file opened
+       correctly and the first navigation wrecked it. Since the landing rule now
+       moves focus on arrival for blocked files, that navigation happens before
+       the reader sees anything, which is why this looked like the default.
+    
+       One expression, two consumers. Re-deriving it here is what let them
+       disagree, and the mount path being right is what made it invisible. */
+    setCompleted(wasReset ? 0 : initialProgress)
+    setStatus(!wasReset && state === "done" ? "done" : "idle")
+    /* Open on the task that halted, not task 1. It is the one carrying the
+       finding, and its artefact — the dossier naming the outstanding documents
+       — is the reason to be on this step at all. Same principle as the landing
+       rule one register up: put the reader where the work is. */
+    setSelected(
+      !wasReset && finding?.taskIndex !== undefined
+        ? Math.min(finding.taskIndex, step.tasks.length - 1)
+        : 0,
+    )
     return () => {
       if (timer.current) clearTimeout(timer.current)
     }
+    /* `initialProgress` and `authored` are recomputed every render, but the
+       `lastNav` guard above means only a genuine navigation gets past this
+       point — so they cannot re-fire the reset mid-session. */
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [navKey, state, step.tasks.length])
 
   // A different merchant means a different order, never the last one's basket.
@@ -1435,12 +1499,7 @@ function StepCockpit({
   const skippedCount = step.tasks.filter((_, i) => taskSkipped(step.id, i, merchant)).length
   const runnableCount = step.tasks.length - skippedCount
 
-  // Read out of this step's own artefacts. A step can finish every task and
-  // still not have passed — the run is what turns the finding up.
-  const finding = useMemo(
-    () => blockingFinding(step.id, merchant, exceptionCtx, played),
-    [step.id, merchant, exceptionCtx, played],
-  )
+  // `finding` is declared above `initialProgress`, which is its first consumer.
 
   // Per-task census of failures the artefacts themselves record. Same call the
   // step badge resolves through, so a row cannot show a tick under a badge
