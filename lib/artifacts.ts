@@ -29,6 +29,8 @@ import { MODELS, configProfile, orderLines, type ModelId } from "@/lib/devices"
 // constant derived from these would evaluate mid-cycle and read `undefined`.
 import { defaultAcceptance, liveSchemeLabel } from "@/lib/scheme-acceptance"
 import { exceptionOnStep, locatedException } from "@/lib/exceptions"
+// No cycle: `handoffs` imports only types from `acquirer-data`.
+import { statusPossibleAt } from "@/lib/handoffs"
 import { streetFor } from "@/lib/addresses"
 import { countryOf, distanceKm } from "@/lib/geo"
 // No cycle: `underwriting` only reaches back to `acquirer-data`.
@@ -1831,6 +1833,41 @@ export function stepHasRun(
      the left. THESE TWO LISTS MUST MATCH. */
   const located = locatedException(merchant)
   if (located?.step === stepId) return true
+
+  /* The THIRD self-evidencing register: AN OUTSTANDING SIGN-OFF.
+  
+     "Needs sign-off" is an authored claim that a decision is still the
+     acquirer's to take — and a decision is always ABOUT something. The agent
+     drafts the theme, prices the tariff, shapes the application; you approve
+     it. So the status cannot be true unless the run happened, exactly as an
+     exception cannot be true unless the run happened.
+  
+     Missing it produced the same contradiction the two registers above exist to
+     prevent, on four files: Nordwind Apotheke opened on B2 Branding badged
+     "Needs sign-off" over "0/4 tasks", four un-run tasks, "This task has not run
+     yet", and "Run the agent first — there is nothing to approve yet". The pill
+     demanded a decision and the panel showed nothing to decide on.
+  
+     `statusPossibleAt` is the gate rather than a bare status check, and it is
+     borrowed rather than restated: it already owns which statuses a step can
+     legitimately carry, and its docstring names this very failure one level up
+     — a sign-off on a step with no acquirer handoff is "a decision nobody can
+     take, on a screen with no control to take it". Deferring to it means an
+     impossible authored combination stays visible as the fixture bug it is,
+     rather than being laundered into a claim that the agent ran.
+  
+     Scoped to `currentStep`: the status describes where the file is NOW. An
+     earlier step whose sign-off was already given is covered by `stepEvidenced`
+     below, on lane position. Deliberately NOT extended to "With merchant",
+     where the wait can be on a physical act — a merchant installing terminals
+     is no evidence that the agent produced anything. */
+  if (
+    merchant.status === "Needs sign-off" &&
+    stepId === merchant.currentStep &&
+    statusPossibleAt(stepId, merchant.status)
+  ) {
+    return true
+  }
 
   return stepEvidenced(merchant, stepById(stepId), played)
 }
