@@ -79,6 +79,74 @@ import { ExceptionPanel } from "@/components/acquirer/exception-panel"
 
 type StepState = "done" | "active" | "upcoming"
 
+const STATE_WORD: Record<StepState, string> = {
+  done: "complete",
+  active: "in progress",
+  upcoming: "not started",
+}
+
+/**
+ * One step of the header track — and the reason the header now has a track at
+ * all rather than a bar.
+ *
+ * What sat here was `<div style={{ width: `${pct}%` }} />`: a single fill over
+ * `doneCount / 11`. The count was honest (it came from `laneState`, same as
+ * everything else) but the SHAPE was not, in two ways that compounded.
+ *
+ * A continuous fill claims a POSITION ALONG ONE PATH. The pipeline forks, and
+ * the sentence directly beneath the bar says so — "Both lanes run at the same
+ * time and rejoin at Ship." At 36% the fill edge landed in the middle of the
+ * bar, which corresponded to no step, no lane and no moment; a merchant with
+ * the whole build lane done and the whole risk lane untouched drew the exact
+ * same bar as one halfway down both. The estate table had already been through
+ * this and fixed it — its MiniTrack draws the fork as two rows sharing one
+ * span — so the flat bar was the last surface still asserting a single file of
+ * eleven sequential steps, on the one page that draws the fork full size.
+ *
+ * And it carried NO PER-STEP DATA. A percentage is an aggregate; there was
+ * nothing in it that could be pointed at a step, which is why the bar and the
+ * diagram could not be connected even in principle. Each segment is now a step
+ * — its width comes from the lane it sits in, its tone from the same
+ * `stepState` the rail reads, and clicking it focuses that step in the diagram
+ * below. The link is the data, not a coincidence of layout.
+ */
+function TrackSeg({
+  step,
+  state,
+  focused,
+  thin,
+  onFocus,
+}: {
+  step: PipelineStep
+  state: StepState
+  focused: boolean
+  /** Lane segments are lighter than trunk segments: two of them stack in the
+   *  height one trunk step occupies, which is what makes the fork read as one
+   *  span rather than as extra steps. */
+  thin?: boolean
+  onFocus: (id: StepId) => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => onFocus(step.id)}
+      title={`${step.code} ${step.name} — ${STATE_WORD[state]}`}
+      aria-label={`${step.code} ${step.name}, ${STATE_WORD[state]}. Show this step in the diagram`}
+      aria-current={focused ? "step" : undefined}
+      className={cn(
+        "min-w-0 flex-1 rounded-full transition-all hover:opacity-70",
+        thin ? "h-[5px]" : "h-2.5",
+        state === "done"
+          ? "bg-primary"
+          : state === "active"
+            ? "bg-primary/60"
+            : "bg-border",
+        focused && "ring-2 ring-primary/50 ring-offset-2 ring-offset-background",
+      )}
+    />
+  )
+}
+
 /**
  * Why a step's run is refused, in the refusal's own words.
  *
@@ -291,7 +359,13 @@ export function MerchantJourney({
   const focusedState = stepState(focused)
 
   const doneCount = PIPELINE.filter((s) => stepState(s) === "done").length
-  const pct = Math.round((doneCount / PIPELINE.length) * 100)
+  /* `pct` is gone with the bar it drove. As a width it claimed a position on a
+     path that forks; as a caption beside "4/11 steps" it was that same fraction
+     said twice. The per-lane counts below are the figure "4 of 11" actually
+     hides — all of build done and none of risk reads identically to steady
+     progress on both, and those are not the same file. */
+  const doneIn = (steps: PipelineStep[]) =>
+    steps.filter((s) => stepState(s) === "done").length
 
   // Grouped by lane, not sliced by index, so adding a step to a lane cannot
   // silently land it in the wrong branch of the fork.
@@ -367,16 +441,70 @@ export function MerchantJourney({
         </span>
       </div>
 
-      {/* Progress bar */}
+      {/* Progress track — the same shape, steps and states as the diagram below.
+          Widths are FLEX UNITS TAKEN FROM THE LANES, never fixed: the fork band
+          is `flex-[N]` where N is the longer lane, so three risk steps occupy
+          exactly the width four build steps do. Sharing extent is what says
+          "at the same time"; laid end to end they would read as seven more
+          sequential steps, which is the picture this replaced. */}
       <div className="mt-5 flex items-center gap-4">
-        <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-secondary">
+        <div
+          className="flex flex-1 items-center gap-1.5"
+          role="group"
+          aria-label={`Pipeline progress: ${doneCount} of ${PIPELINE.length} steps complete. Risk lane ${doneIn(riskLane)} of ${riskLane.length}, build lane ${doneIn(buildLane)} of ${buildLane.length}, running in parallel.`}
+        >
+          {spine.before.map((s) => (
+            <TrackSeg
+              key={s.id}
+              step={s}
+              state={stepState(s)}
+              focused={s.id === focusStep}
+              onFocus={setFocusStep}
+            />
+          ))}
+          <span className="h-5 w-px shrink-0 bg-border" />
           <div
-            className="h-full rounded-full bg-primary transition-all duration-500 glow-soft"
-            style={{ width: `${pct}%` }}
-          />
+            className="flex flex-col gap-1.5"
+            style={{ flex: Math.max(riskLane.length, buildLane.length) }}
+          >
+            {([["Risk", riskLane], ["Build", buildLane]] as const).map(
+              ([label, lane]) => (
+                <div key={label} className="flex items-center gap-2">
+                  <span className="w-8 shrink-0 text-[9px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    {label}
+                  </span>
+                  <span className="w-7 shrink-0 font-mono text-[9px] tabular-nums text-muted-foreground">
+                    {doneIn(lane)}/{lane.length}
+                  </span>
+                  <div className="flex flex-1 gap-1">
+                    {lane.map((s) => (
+                      <TrackSeg
+                        key={s.id}
+                        step={s}
+                        state={stepState(s)}
+                        focused={s.id === focusStep}
+                        onFocus={setFocusStep}
+                        thin
+                      />
+                    ))}
+                  </div>
+                </div>
+              ),
+            )}
+          </div>
+          <span className="h-5 w-px shrink-0 bg-border" />
+          {spine.after.map((s) => (
+            <TrackSeg
+              key={s.id}
+              step={s}
+              state={stepState(s)}
+              focused={s.id === focusStep}
+              onFocus={setFocusStep}
+            />
+          ))}
         </div>
-        <span className="font-mono text-xs text-muted-foreground tabular-nums">
-          {doneCount}/{PIPELINE.length} steps · {pct}%
+        <span className="shrink-0 font-mono text-xs text-muted-foreground tabular-nums">
+          {doneCount}/{PIPELINE.length} steps
         </span>
       </div>
 
