@@ -1407,6 +1407,23 @@ import { blockers, checkBrand, type BrandRule, type BrandTheme } from "./brandin
 export interface TaskException {
   headline: string
   detail: string
+  /**
+   * How bad it is, in the artefact's OWN vocabulary.
+   *
+   * The census used to record failures only, so a `warn` row returned null and
+   * the task above it kept its green tick: "Registry match — no registry
+   * response on file" sat under a ticked "Verify the entity". A parent that
+   * reports a clean pass over an unresolved child is the same false all-clear
+   * this file keeps fixing, one register lower.
+   *
+   * But a warning is NOT a failure, and promoting it to one would be a
+   * different wrong claim — an unreturned registry response is an ABSENCE, not
+   * a mismatch. So the severity travels with the exception and the parent
+   * mirrors the child's own register: amber stays amber, red stays red. This
+   * is also what keeps `blockingFinding` honest, since it can now escalate the
+   * failures and leave the warnings alone.
+   */
+  severity: "warn" | "fail"
 }
 
 /**
@@ -1460,12 +1477,29 @@ export function taskException(
   switch (a.kind) {
     case "checks": {
       // `running` is not counted: a check still out with a provider has no
-      // verdict, and treating silence as a failure invents one.
+      // verdict, and treating silence as a failure invents one. The rail
+      // reports that wait separately, as a wait.
       const failed = a.rows.filter((r) => r.state === "fail")
-      if (failed.length === 0) return null
+      if (failed.length > 0) {
+        return {
+          headline: `${failed.length} of ${a.rows.length} checks failed`,
+          detail: `${failed[0].label} — ${failed[0].evidence}`,
+          severity: "fail",
+        }
+      }
+      /* A check that came back UNRESOLVED. Ranked below a failure and reported
+         in its own register, because the two are different findings: a failed
+         registry match means the filing contradicts what was submitted, while
+         an unresolved one means nothing came back to compare against. Reading
+         the second as the first would condemn a merchant on missing evidence;
+         reading it as a pass — which is what happened — credits a comparison
+         that was never made. */
+      const unresolved = a.rows.filter((r) => r.state === "warn")
+      if (unresolved.length === 0) return null
       return {
-        headline: `${failed.length} of ${a.rows.length} checks failed`,
-        detail: `${failed[0].label} — ${failed[0].evidence}`,
+        headline: `${unresolved.length} of ${a.rows.length} checks unresolved`,
+        detail: `${unresolved[0].label} — ${unresolved[0].evidence}`,
+        severity: "warn",
       }
     }
     case "txns": {
@@ -1475,11 +1509,20 @@ export function taskException(
       return {
         headline: `${blocking.length} of ${a.rows.length} declined`,
         detail: `${first.ref} on ${first.unit} — ${first.result}. ${first.fix!.owner} clears it before this step can pass.`,
+        // Already filtered to `fix.blocking`, so these genuinely stop the step.
+        severity: "fail",
       }
     }
     case "records": {
-      if (a.outcome?.state !== "fail") return null
-      return { headline: a.outcome.headline, detail: a.outcome.detail }
+      // Same widening as `checks` above, and the same reason: a records
+      // artefact that reports its own outcome as `warn` was rendering that
+      // sentence in amber directly beneath a green tick.
+      if (a.outcome?.state !== "fail" && a.outcome?.state !== "warn") return null
+      return {
+        headline: a.outcome.headline,
+        detail: a.outcome.detail,
+        severity: a.outcome.state,
+      }
     }
     case "brand": {
       // The `assets` face renders the inventory and no rules at all, so it
@@ -1498,6 +1541,8 @@ export function taskException(
         // would satisfy the rule, so falling back to it would describe the
         // passing case in a sentence reporting a failure.
         detail: `${failed[0].label} — ${failed[0].problem ?? failed[0].detail}`,
+        // `blockers()` returns rules that BLOCK, so this is a stop, not a note.
+        severity: "fail",
       }
     }
     default:
@@ -1508,6 +1553,31 @@ export function taskException(
 /** Every exception in a step, keyed by the task whose artefact records it.
  *  One census, read by the row icons, the counter and the step badge, so the
  *  three cannot disagree about how many there are. */
+/**
+ * Whether a step carries an unresolved check the reader has not seen answered.
+ *
+ * Deliberately NOT folded into `haltedSteps`: that set feeds `laneState`, so
+ * adding warnings there would move the file's POSITION backwards over a
+ * registry that simply did not reply. Position and verdict are different
+ * claims, and this one is only ever read by the rail marker.
+ */
+export function stepUnresolved(
+  stepId: StepId,
+  merchant: Merchant,
+  ctx: ExceptionContext,
+  /** REQUIRED, as everywhere else here: a default would answer for files it
+   *  knows nothing about. */
+  played: ReadonlySet<StepId>,
+): boolean {
+  // Nothing ran, so nothing came back unresolved — the same gate every other
+  // artefact-derived verdict in this file sits behind.
+  if (!stepHasRun(merchant, stepId, played)) return false
+  for (const e of taskExceptions(stepId, merchant, 8, ctx).values()) {
+    if (e.severity === "warn") return true
+  }
+  return false
+}
+
 export function taskExceptions(
   stepId: StepId,
   merchant: Merchant,
@@ -1667,7 +1737,22 @@ export function blockingFinding(
    * NO `taskIndex` is carried: that field means "the agent stopped here", and
    * these tasks ran to completion and produced their artefacts. Passing it
    * would redraw them as halted and claim the step never got past them. */
-  const first = [...taskExceptions(stepId, merchant, 8, ctx).values()][0]
+  /* ONLY THE FAILURES BLOCK.
+  
+     The census now also records unresolved checks, which is what makes the
+     tick above them honest — but this function is read by the step badge, the
+     rail marker and the ship gate, so anything returned here is treated as
+     "this step is stopped". Letting a `warn` through would hold a shipment
+     because a registry did not answer, which is a heavier consequence than the
+     evidence supports and would make the amber state unusable: every absence
+     would become a halt.
+  
+     So the two split here, and only here. A warning still changes how the step
+     LOOKS — the task row and the badge both read it off the same census — but
+     it does not claim the step stopped. */
+  const first = [...taskExceptions(stepId, merchant, 8, ctx).values()].find(
+    (e) => e.severity === "fail",
+  )
   return first ?? null
 }
 

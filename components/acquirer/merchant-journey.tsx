@@ -52,6 +52,7 @@ import {
   haltedSteps,
   outstandingChecks as countOutstandingChecks,
   stepHasRun,
+  stepUnresolved,
   taskExceptions,
   type ExceptionContext,
   taskDetail,
@@ -207,6 +208,19 @@ export function MerchantJourney({
     () => haltedSteps(current, exceptionCtx, played),
     [current, exceptionCtx, played],
   )
+
+  /* Steps whose checks came back WITHOUT an answer. Kept out of the set above
+     on purpose — that one drives the state model, and a registry that did not
+     reply must not push the file's position backwards. This only reaches the
+     rail marker, so the tick is withheld where the panel says something is
+     unresolved, and nothing else changes. */
+  const unresolvedSteps = useMemo(() => {
+    const out = new Set<StepId>()
+    for (const s of PIPELINE) {
+      if (stepUnresolved(s.id, current, exceptionCtx, played)) out.add(s.id)
+    }
+    return out
+  }, [current, exceptionCtx, played])
 
   // How many checks each step is still waiting on, so the rail marker cannot
   // show a finished tick over one either.
@@ -382,7 +396,7 @@ export function MerchantJourney({
               isFocus={step.id === focusStep}
               onFocus={setFocusStep}
               connector="none"
-              hasFinding={findingSteps.has(step.id)}
+              hasFinding={findingSteps.has(step.id) || unresolvedSteps.has(step.id)}
           awaiting={awaitingSteps.get(step.id) ?? 0}
             />
           ))}
@@ -435,7 +449,7 @@ export function MerchantJourney({
               isFocus={step.id === focusStep}
               onFocus={setFocusStep}
               connector={i === spine.after.length - 1 ? "none" : "down"}
-              hasFinding={findingSteps.has(step.id)}
+              hasFinding={findingSteps.has(step.id) || unresolvedSteps.has(step.id)}
           awaiting={awaitingSteps.get(step.id) ?? 0}
             />
           ))}
@@ -565,6 +579,7 @@ function LaneColumn({
           onFocus={onFocus}
           connector={i === steps.length - 1 ? "none" : "down"}
           dense
+          {/* Already merged by the caller — see `flaggedSteps`. */}
           hasFinding={findingSteps.has(step.id)}
           awaiting={awaitingSteps.get(step.id) ?? 0}
         />
@@ -1299,13 +1314,19 @@ function StepCockpit({
   // header cannot report a number the list does not show: an artefact exists
   // whether or not the agent has reached it, and a task that failed or halted
   // already states a stronger outcome on its row.
-  const exceptionCount = useMemo(
+  const visibleExceptions = useMemo(
     () =>
-      [...exceptions.keys()].filter(
-        (i) => i < completed && blocker?.taskIndex !== i && finding?.taskIndex !== i,
-      ).length,
+      [...exceptions.entries()].filter(
+        ([i]) => i < completed && blocker?.taskIndex !== i && finding?.taskIndex !== i,
+      ),
     [exceptions, completed, blocker, finding],
   )
+  const exceptionCount = visibleExceptions.filter(([, e]) => e.severity === "fail").length
+  /* Counted and worded separately. Folding unresolved checks into "N
+     exceptions" would report findings the checks never made, and the two ask
+     for different things: an exception needs deciding, an unresolved check
+     needs chasing. */
+  const unresolvedCount = visibleExceptions.filter(([, e]) => e.severity === "warn").length
   // A halted task ran and produced nothing. Counting it as complete gave
   // "5/5 tasks" directly above a panel saying the run had stopped.
   const haltedCount = finding?.taskIndex !== undefined ? 1 : 0
@@ -1621,7 +1642,7 @@ function StepCockpit({
                         // was printed in the success green, so the chrome said
                         // finished while the words said waiting and the chrome
                         // is what gets read at a glance.
-                        outstandingChecks > 0
+                        outstandingChecks > 0 || unresolvedCount > 0
                         ? "border-warning/40 bg-warning/15 text-warning-foreground"
                         : "border-success/30 bg-success/10 text-success"
                   : "border-border bg-secondary text-muted-foreground",
@@ -1656,7 +1677,12 @@ function StepCockpit({
                             // had finished, which is the thing it has not done.
                             heldReleases > 0
                             ? "bg-primary"
-                            : "bg-success"
+                            : // Settled amber, not the pulsing dot above: an
+                              // unresolved check is not still travelling, it
+                              // came back without an answer.
+                              unresolvedCount > 0
+                              ? "bg-warning"
+                              : "bg-success"
                     : blocker
                       ? "bg-destructive"
                       : // The block states its own tone — see RunBlock. A step
@@ -1696,7 +1722,16 @@ function StepCockpit({
                           // whereas this is waiting on the reader.
                           heldReleases > 0
                           ? `${heldReleases} to release`
-                          : "Complete"
+                          : /* A check that came back with no answer. Ranked
+                               last because every state above is a stronger
+                               claim, but still above "Complete": the badge
+                               was reading Complete over a task whose own row
+                               said the registry never responded. Worded as
+                               the gap it is, not as a finding — nothing was
+                               judged and failed. */
+                            unresolvedCount > 0
+                            ? `${unresolvedCount} unresolved`
+                            : "Complete"
                 : // "Ready" on a blocked step is a false all-clear: this is the
                   // one step that cannot be run to completion.
                   blocker
@@ -2028,6 +2063,7 @@ function StepCockpit({
                 {runnableCount} tasks · {skippedCount} skipped
                 {exceptionCount > 0 &&
                   ` · ${exceptionCount} exception${exceptionCount === 1 ? "" : "s"}`}
+                {unresolvedCount > 0 && ` · ${unresolvedCount} unresolved`}
               </>
             )
           ) : (
@@ -2045,6 +2081,9 @@ function StepCockpit({
                   wrong is the result, and that is what the suffix names. */}
               {exceptionCount > 0 &&
                 ` · ${exceptionCount} exception${exceptionCount === 1 ? "" : "s"}`}
+              {/* Same treatment, its own word. A check that came back with no
+                  answer still ran, so it is appended, not deducted. */}
+              {unresolvedCount > 0 && ` · ${unresolvedCount} unresolved`}
               {/* Appended rather than deducted from the count: unlike a halted
                   task, a task awaiting release DID run and did produce its
                   artefact. Shrinking the numerator would deny the agent work
@@ -2123,7 +2162,12 @@ function StepCockpit({
                         : isHalted
                           ? "border-destructive/45 bg-destructive/15 text-destructive"
                           : exception
-                            ? "border-destructive/45 bg-destructive/15 text-destructive"
+                            ? exception.severity === "warn"
+                              // An unresolved check is not a failed one. Amber
+                              // says "nothing came back to compare against";
+                              // red would say the comparison was made and lost.
+                              ? "border-warning/45 bg-warning/15 text-warning"
+                              : "border-destructive/45 bg-destructive/15 text-destructive"
                             : awaitingHere > 0
                               ? "border-warning/45 bg-warning/15 text-warning"
                               : isDone
@@ -2178,8 +2222,18 @@ function StepCockpit({
                       the row rather than behind the click, because a red mark
                       whose reason is hidden only tells you to go looking. */}
                   {exception && (
-                    <p className="mt-1 text-xs font-medium leading-relaxed text-destructive">
-                      Exception · {exception.headline}
+                    <p
+                      className={cn(
+                        "mt-1 text-xs font-medium leading-relaxed",
+                        exception.severity === "warn" ? "text-warning" : "text-destructive",
+                      )}
+                    >
+                      {/* "Unresolved", not "Exception": nothing was found to be
+                          wrong, the answer simply never arrived. Calling it an
+                          exception would report a finding the check never
+                          made. */}
+                      {exception.severity === "warn" ? "Unresolved" : "Exception"} ·{" "}
+                      {exception.headline}
                       <span className="block font-normal text-muted-foreground">
                         {exception.detail}
                       </span>
