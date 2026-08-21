@@ -75,7 +75,7 @@ import { CAPTURE_STEP, edgeResolved, outstandingDocuments, type EdgeResolution }
 import { withClearedFindings } from "@/lib/demo-fixes"
 import { useDemo, useLiveMerchant, responseKey } from "@/components/acquirer/demo-provider"
 import { DemoInbound } from "@/components/acquirer/demo-control"
-import { exceptionDetailMissing, exceptionOnStep, locatedException } from "@/lib/exceptions"
+import { exceptionDetailMissing, exceptionOnStep } from "@/lib/exceptions"
 import { ExceptionPanel } from "@/components/acquirer/exception-panel"
 
 type StepState = "done" | "active" | "upcoming"
@@ -1130,9 +1130,26 @@ function StepCockpit({
   const initialProgress =
     state === "done"
       ? step.tasks.length
-      : !stepHasRun(merchant, step.id, played)
+      : /* A STEP NOBODY CAN START YET HAS NOT RUN — this outranks `stepHasRun`.
+        
+           `stepEvidenced` underneath it answers from LANE POSITION alone: a risk
+           step counts as run once the lane's open position is past it. That is
+           right within the lane and blind to the spine, so on Orchard — whose
+           lane records R3 while 01 Merchant capture is halted — it reported KYC
+           and Pricing as fully run, and without this guard the fix above would
+           have shown 4/4 on two steps that cannot have started. An unreachable
+           step drawn as complete is a worse lie than the one being fixed.
+        
+           The precondition belongs here rather than in `stepEvidenced`, whose
+           comment explains why it takes no `halted` set: findings would depend
+           on evidence which depended on findings. `laneState` has already
+           resolved that cycle, and it is the same value the badge and the rail
+           read, so this cannot disagree with them. */
+        state === "upcoming"
         ? 0
-        : /* It ran. `taskIndex` names the task that raised the finding: it
+        : !stepHasRun(merchant, step.id, played)
+          ? 0
+          : /* It ran. `taskIndex` names the task that raised the finding: it
              executed and the ones after it did not, so the run resumes there
              and no further. A finding WITHOUT an index records that the step
              ran but not where it stopped, so those resume fully run rather than
@@ -1169,13 +1186,17 @@ function StepCockpit({
   // Which task's artefact is open in the inspector.
   const [selected, setSelected] = useState(0)
 
-  // The exception, if this is the step carrying it. Everything that would
-  // otherwise report a clean state reads from this one value, so the badge,
-  // the failing task and the panel cannot disagree about whether the step
-  // is blocked.
-  // Same lookup as `authored` above — one call, so the task count and the
-  // banner can never be reasoning about different exceptions.
-  const blocker = authored
+  /* The AUTHORED exception, if this is the step carrying it — the one with
+     prose to show, which is why `ExceptionPanel` below takes this and not
+     `finding`.
+  
+     It is deliberately NARROWER than `finding`: an authored exception is one of
+     several ways a step can be held, and the sites that ask "is this task the
+     held one" check `blocker?.taskIndex === i || finding?.taskIndex === i`
+     precisely because this alone would miss the derived and document-bundle
+     halts. Do not collapse the two — `initialProgress` reading a hand-listed
+     subset like this one is the bug being fixed here. */
+  const blocker = exceptionOnStep(merchant, step.id)
   /* The "no detail recorded" caption must know about DERIVED findings too, not
      just the hand-authored `EXCEPTIONS` map. Once status became derived, a
      merchant halted by a live brand rule was flagged Exception, found no
@@ -1425,7 +1446,7 @@ function StepCockpit({
    *  survived, so a second run showed the leftovers of the first rather than
    *  the real first-run behaviour.
    *
-   *  Lands PENDING — zero tasks run, status idle — even on a step the
+   *  Lands PENDING — zero tasks run, status idle ��� even on a step the
    *  merchant has already moved past. Restoring a completed step to
    *  "Complete" was the same defect one level up: the button cleared the
    *  handoffs and the saved output, then put the badge back to a verdict
