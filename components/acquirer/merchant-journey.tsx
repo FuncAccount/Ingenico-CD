@@ -71,6 +71,7 @@ import { useBook } from "@/components/acquirer/book-provider"
 import { defaultAcceptance, type AcceptanceState } from "@/lib/scheme-acceptance"
 import { pendingReleases, type Releases } from "@/lib/releases"
 import { edgeResolved, outstandingDocuments, type EdgeResolution } from "@/lib/underwriting"
+import { withClearedFindings } from "@/lib/demo-fixes"
 import { useDemo, useLiveMerchant, responseKey } from "@/components/acquirer/demo-provider"
 import { DemoInbound } from "@/components/acquirer/demo-control"
 import { exceptionDetailMissing, exceptionOnStep, locatedException } from "@/lib/exceptions"
@@ -1368,11 +1369,29 @@ function StepCockpit({
     checksResolved,
     resolveChecks,
     unresolveChecks,
+    findingsCleared,
+    clearFinding,
+    restoreFinding,
   } = useDemo()
   const responseSimulated = Boolean(responsesIn[responseKey(merchant.id, step.id)])
   /* Same key shape, separate map: a step can have been waiting AND come back
      without an answer, so one flag could not describe both. */
   const checksSimulated = Boolean(checksResolved[responseKey(merchant.id, step.id)])
+  const findingCleared = Boolean(findingsCleared[responseKey(merchant.id, step.id)])
+
+  /* ASK THE TRANSFORM WHETHER IT WOULD DO ANYTHING, rather than guessing from
+     the exception count. Two findings that reach this point have their own real
+     remedies — a brand breach is fixed in the theme editor on this very screen,
+     and outstanding documents by the upload lever — so `withClearedFindings`
+     correctly leaves both untouched. Gating on `exceptionCount` would have put
+     a button on them that flipped its own label to "Undo" while changing
+     nothing: a control that reports success and does nothing is worse than no
+     control, because it sends the presenter looking for a fault elsewhere. */
+  const canClearFinding = useMemo(
+    () =>
+      withClearedFindings(merchant, { [responseKey(merchant.id, step.id)]: "probe" }) !== merchant,
+    [merchant, step.id],
+  )
 
   // Commits this step has PREPARED that the acquirer has not released yet.
   //
@@ -2092,6 +2111,28 @@ function StepCockpit({
             <DemoInbound
               label="Undo simulated answer"
               onTrigger={() => unresolveChecks(merchant.id, step.id)}
+            />
+          )}
+
+          {/* THE THIRD DEAD-END: a hard failure, which is not a check at all.
+              An address the carrier will not run to, an invoice rejected at the
+              border, a MID range out of allocation, a brand rule in breach, a
+              refund the terminals cannot send. Nothing in the app can clear any
+              of these — the work happens outside it — so without this the
+              walkthrough ends here. Worded as the outside fix LANDING rather
+              than as an override, because "the problem was fixed" and "somebody
+              waved it through" are different claims and only the first is
+              true. */}
+          {status !== "running" && canClearFinding && !findingCleared && (
+            <DemoInbound
+              label="Simulate: fixed outside the platform"
+              onTrigger={() => clearFinding(merchant.id, step.id)}
+            />
+          )}
+          {status !== "running" && findingCleared && (
+            <DemoInbound
+              label="Undo simulated fix"
+              onTrigger={() => restoreFinding(merchant.id, step.id)}
             />
           )}
         </div>

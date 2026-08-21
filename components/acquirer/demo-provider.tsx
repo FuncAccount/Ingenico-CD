@@ -2,6 +2,7 @@
 
 import { createContext, useCallback, useContext, useMemo, useState } from "react"
 import { RISK_LANE, type Merchant } from "@/lib/acquirer-data"
+import { withClearedFindings } from "@/lib/demo-fixes"
 
 /**
  * Demo-only state: things that would happen in the real world, outside this
@@ -366,17 +367,21 @@ function withResolvedChecks(merchant: Merchant, resolved: Record<string, string>
   }
 }
 
+
 export function useLiveMerchant(merchant: Merchant): Merchant {
-  const { documentsArrived, responsesIn, checksResolved } = useDemo()
+  const { documentsArrived, responsesIn, checksResolved, findingsCleared } = useDemo()
   return useMemo(
     () =>
-      withResolvedChecks(
-        withDeliveredResponses(
-          withSuppliedDocuments(merchant, Boolean(documentsArrived[merchant.id])),
-          responsesIn,
+      withClearedFindings(
+        withResolvedChecks(
+          withDeliveredResponses(
+            withSuppliedDocuments(merchant, Boolean(documentsArrived[merchant.id])),
+            responsesIn,
+          ),
+          checksResolved,
         ),
-        checksResolved,
+        findingsCleared,
       ),
-    [merchant, documentsArrived, responsesIn, checksResolved],
+    [merchant, documentsArrived, responsesIn, checksResolved, findingsCleared],
   )
 }
