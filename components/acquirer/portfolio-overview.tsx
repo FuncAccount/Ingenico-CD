@@ -10,7 +10,6 @@ import {
   Users,
 } from "lucide-react"
 import {
-  MERCHANTS,
   PIPELINE,
   portfolioKpis,
   portfolioOrder,
@@ -22,6 +21,7 @@ import { pendingCheckSteps as pendingChecks } from "@/lib/artifacts"
 import { PulseDot } from "@/components/acquirer/in-progress-tag"
 import { applyDecisions } from "@/lib/decisions"
 import { useDecisions } from "@/components/acquirer/decisions-provider"
+import { useBook } from "@/components/acquirer/book-provider"
 import { cn } from "@/lib/utils"
 
 function StepPill({ step }: { step: number }) {
@@ -128,14 +128,16 @@ export function PortfolioOverview({
   onOpenQueue: () => void
 }) {
   const { decisions } = useDecisions()
+  const { merchants: book } = useBook()
 
   // Every figure and badge on this screen now comes off one list whose statuses
   // reflect the decisions actually taken. Previously the KPI, the filter and
   // the row badges each read the frozen fixture, so a merchant you had just
-  // signed off went on being counted and labelled as awaiting you.
+  // signed off went on being counted and labelled as awaiting you — and a
+  // merchant you had just submitted never appeared at all.
   const merchants = useMemo(
-    () => portfolioOrder(applyDecisions(MERCHANTS, decisions)),
-    [decisions],
+    () => portfolioOrder(applyDecisions(book, decisions)),
+    [book, decisions],
   )
   const kpis = portfolioKpis(merchants)
 

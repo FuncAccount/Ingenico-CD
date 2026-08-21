@@ -8,6 +8,8 @@ import {
   Loader2,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import type { Merchant } from "@/lib/acquirer-data"
+import { useBook } from "@/components/acquirer/book-provider"
 import {
   MARKETS,
   MARKET_NAMES,
@@ -34,9 +36,15 @@ const SECTORS = [
 
 export function SubmitMerchant({
   onSubmitted,
+  onOpenMerchant,
 }: {
   onSubmitted: () => void
+  onOpenMerchant: (m: Merchant) => void
 }) {
+  const { submit } = useBook()
+  // The record this submission created. Held so the success screen can offer to
+  // open the actual file rather than only pointing at the list.
+  const [created, setCreated] = useState<Merchant | null>(null)
   const [name, setName] = useState("")
   const [sector, setSector] = useState("")
   const [city, setCity] = useState("")
@@ -59,6 +67,11 @@ export function SubmitMerchant({
   const canSubmit = name && sector && city && country && volume
 
   function handleSubmit() {
+    // Write the record FIRST, then play the kickoff. The form used to do only
+    // the animation, so everything typed here was discarded and "View in
+    // portfolio" led to a book that had never heard of the merchant.
+    const merchant = submit({ name, sector, city, country, volume, terminals, recommendation })
+    setCreated(merchant)
     setPhase("kickoff")
     setTimeout(() => setPhase("done"), 1600)
   }
@@ -107,6 +120,14 @@ export function SubmitMerchant({
                   View in portfolio
                   <ArrowRight className="h-4 w-4" />
                 </button>
+                {created && (
+                  <button
+                    onClick={() => onOpenMerchant(created)}
+                    className="inline-flex items-center justify-center gap-2 rounded-lg border border-border px-4 py-2.5 text-sm font-semibold text-foreground transition-colors hover:bg-secondary"
+                  >
+                    Open the file
+                  </button>
+                )}
               </div>
             </>
           )}

@@ -13,7 +13,6 @@ import {
   TriangleAlert,
 } from "lucide-react"
 import {
-  MERCHANTS,
   bandTone,
   stepById,
   type Merchant,
@@ -22,6 +21,7 @@ import { liveDecisionAtStep, signOffQueue } from "@/lib/decisions"
 import { decisionBasis } from "@/lib/decision-basis"
 import { useDecisions } from "@/components/acquirer/decisions-provider"
 import { useBrandTheme } from "@/components/acquirer/brand-theme-provider"
+import { useBook } from "@/components/acquirer/book-provider"
 import { fmtDateTime } from "@/lib/handoffs"
 import { cn } from "@/lib/utils"
 
@@ -32,11 +32,26 @@ export function SignOff({
   focusId?: string
   onBackToPortfolio: () => void
 }) {
-  // The working set: everyone who was waiting on you. Membership is stable on
-  // purpose — a merchant disappearing the instant you sign would take the
-  // confirmation with it and you could not review what you just did. What
-  // changes is each one's recorded decision, read from the shared store.
-  const queue = useMemo(() => signOffQueue(MERCHANTS), [])
+  const { merchants } = useBook()
+
+  // MEMBERSHIP IS FROZEN AT MOUNT; CONTENT IS NOT. Those are two different
+  // claims and conflating them was the bug: the `[]` dep froze the whole
+  // merchant OBJECTS, so a basket edited back on the Order stage left this
+  // screen approving the device count as it stood when the screen opened.
+  //
+  // The ids are captured once — a merchant vanishing the instant you sign would
+  // take the confirmation with it, and you could not review what you just did.
+  // Everything else is re-read live from the book each render.
+  const [queueIds] = useState(() => signOffQueue(merchants).map((m) => m.id))
+  const queue = useMemo(
+    () =>
+      queueIds
+        .map((id) => merchants.find((m) => m.id === id))
+        // A merchant cannot leave the book mid-session today, but filtering
+        // keeps the type honest rather than rendering `undefined` as a row.
+        .filter((m): m is Merchant => Boolean(m)),
+    [queueIds, merchants],
+  )
   const [selectedId, setSelectedId] = useState<string>(
     focusId && queue.some((m) => m.id === focusId)
       ? focusId

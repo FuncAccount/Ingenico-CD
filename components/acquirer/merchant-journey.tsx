@@ -26,7 +26,6 @@ import {
   Info,
 } from "lucide-react"
 import {
-  MERCHANTS,
   PIPELINE,
   bandTone,
   statusTone,
@@ -53,7 +52,6 @@ import {
   outstandingChecks as countOutstandingChecks,
   taskExceptions,
   type ExceptionContext,
-  defaultBasket,
   taskDetail,
   taskSkipped,
   traceFor,
@@ -66,6 +64,7 @@ import { StepGate } from "@/components/acquirer/step-gate"
 import { ownerOf, waitingOn, type HandoffState } from "@/lib/handoffs"
 import { blockers, checkBrand, defaultTheme, type BrandTheme } from "@/lib/branding"
 import { useProgress } from "@/components/acquirer/progress-provider"
+import { useBook } from "@/components/acquirer/book-provider"
 import { defaultAcceptance, type AcceptanceState } from "@/lib/scheme-acceptance"
 import { pendingReleases, type Releases } from "@/lib/releases"
 import { edgeResolved, outstandingDocuments, type EdgeResolution } from "@/lib/underwriting"
@@ -110,7 +109,12 @@ export function MerchantJourney({
   // the simulated arrival here means the risk panel, the sign-off gate, the
   // trace and the timeline all move together — none of them can be left
   // asserting the file is still incomplete after the documents land.
-  const current = useLiveMerchant(merchant ?? MERCHANTS[3])
+  // The book, so the picker offers merchants submitted this session and every
+  // row reflects an edited basket.
+  const { merchants: book } = useBook()
+  // `merchant` is already the live record from the page; the fallback only
+  // matters when the journey is opened with nothing selected.
+  const current = useLiveMerchant(merchant ?? book[3] ?? book[0])
   const [pickerOpen, setPickerOpen] = useState(false)
   const [focusStep, setFocusStep] = useState<StepId>(current.currentStep)
 
@@ -264,7 +268,7 @@ export function MerchantJourney({
           </button>
           {pickerOpen && (
             <div className="absolute z-20 mt-2 max-h-80 w-80 overflow-y-auto rounded-xl border border-border bg-popover p-1.5 shadow-2xl">
-              {MERCHANTS.map((m) => (
+              {book.map((m) => (
                 <button
                   key={m.id}
                   onClick={() => {
@@ -901,11 +905,21 @@ function StepCockpit({
 
   // The order draft is shared by the basket, stock, delivery and pricing
   // artefacts, so changing a quantity moves every downstream figure.
-  const [draft, setDraft] = useState<OrderDraft>(() => ({
-    lines: defaultBasket(merchant),
-    serviceId: "standard",
-    requestedIso: null,
-  }))
+  //
+  // HELD IN THE BOOK, NOT HERE. As a `useState` it died with this component,
+  // and `app/page.tsx` renders one screen at a time — so opening sign-off
+  // unmounted the cockpit, and sign-off recomputed the kit from the fixture and
+  // approved the device count as it stood BEFORE the edit. Keyed by merchant in
+  // the provider, which also retires the reset-on-merchant-change effect this
+  // used to need: that effect existed only because a single unkeyed slot would
+  // otherwise show one merchant's basket against another, and it discarded
+  // edits you meant to keep.
+  const { orderFor, setOrder, resetOrder, orderEdited } = useBook()
+  const draft = orderFor(merchant)
+  const setDraft = useCallback<React.Dispatch<React.SetStateAction<OrderDraft>>>(
+    (next) => setOrder(merchant, next),
+    [setOrder, merchant],
+  )
 
   // What this stage can WRITE, derived from the artefacts it actually
   // produces rather than a hardcoded step number. `theme`, `edge` and `draft`
@@ -955,13 +969,10 @@ function StepCockpit({
     (stageWrites.theme && themeEdited) ||
     (stageWrites.acceptance &&
       JSON.stringify(acceptance) !== JSON.stringify(defaultAcceptance(merchant))) ||
-    (stageWrites.draft &&
-      JSON.stringify(draft) !==
-        JSON.stringify({
-          lines: defaultBasket(merchant),
-          serviceId: "standard",
-          requestedIso: null,
-        }))
+    // Asked of the provider, like the theme above it: "an override exists" is
+    // one definition, whereas a structural comparison here could drift from the
+    // one the reset performs.
+    (stageWrites.draft && orderEdited(merchant.id))
 
   // Reset the run whenever the focused step (or merchant) changes.
   //
@@ -1002,7 +1013,10 @@ function StepCockpit({
   // and — better than the old behaviour — switching away and back no longer
   // discards an edit the acquirer had made.
   useEffect(() => {
-    setDraft({ lines: defaultBasket(merchant), serviceId: "standard", requestedIso: null })
+    // The order is NOT reset here any more. It is keyed by merchant in the
+    // book, so nothing can leak between files — and, better than the old
+    // behaviour, switching away and back no longer throws away an edit. Same
+    // reasoning as the brand design, which left this list for the same reason.
     setEdge(undefined)
     // An instruction sent about one merchant must never show against another.
     setAcceptance(defaultAcceptance(merchant))
@@ -1114,9 +1128,10 @@ function StepCockpit({
 
     // Only the outputs this stage owns — resetting the determination from the
     // Order stage would discard an underwriting decision made two steps back.
-    if (stageWrites.draft) {
-      setDraft({ lines: defaultBasket(merchant), serviceId: "standard", requestedIso: null })
-    }
+    // Drops the override rather than writing the default back, so the stage
+    // returns to "nobody has touched this" and `orderEdited` goes false — the
+    // same move `resetTheme` makes just below.
+    if (stageWrites.draft) resetOrder(merchant.id)
     // Drops the override rather than writing the default back, so the stage
     // returns to "nobody has touched this" and `themeEdited` goes false.
     if (stageWrites.theme) resetTheme()

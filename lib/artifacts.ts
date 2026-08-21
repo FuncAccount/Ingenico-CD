@@ -104,6 +104,54 @@ export function defaultBasket(merchant: Merchant): BasketLine[] {
   return lines
 }
 
+/** Catalogue key by sku, so a summary can be written in the same vocabulary
+ *  `defaultBasket` reads. The keys ("A920") are NOT the display names
+ *  ("AXIUM A920"), so a summary built from names would parse back to an empty
+ *  basket — silently, since an empty basket renders as a merchant who ordered
+ *  nothing rather than as an error. */
+const CATALOGUE_KEY_BY_SKU: Record<string, string> = Object.fromEntries(
+  Object.entries(CATALOGUE).map(([key, item]) => [item.sku, key]),
+)
+
+/**
+ * The inverse of `defaultBasket`: collapse an order back into the one-line
+ * device summary the rest of the portal reads.
+ *
+ * `defaultBasket` promises the order "can never disagree with the record shown
+ * everywhere else in the portal" — but that only held while the basket was
+ * read-only. The moment a line is edited, the merchant's own `terminals`
+ * string is stale, and every surface quoting it (portfolio row, sign-off
+ * header, agent bar, Ingenico licence counts) goes on reporting the kit as it
+ * was before the edit. Deriving the summary back out keeps the promise in both
+ * directions, which is what lets ONE store serve every screen.
+ *
+ * Accessories are excluded deliberately. They are DERIVED, not chosen —
+ * `defaultBasket` adds a dock per portable and one starter pack — so listing
+ * them here would make the count grow every round trip. It also matches the
+ * fixtures: Atlas is "3× A920 + softPOS" = 4, and the three docks its basket
+ * carries are not terminals anyone was sold.
+ */
+export function summariseOrder(lines: BasketLine[]): {
+  terminals: string
+  terminalCount: number
+} {
+  const chosen = lines.filter((l) => l.qty > 0 && l.kind !== "accessory")
+  return {
+    terminals:
+      chosen
+        .map((l) => {
+          const key = CATALOGUE_KEY_BY_SKU[l.sku] ?? l.name
+          // "softPOS" not "1× softPOS", matching how the fixtures are written.
+          return l.qty === 1 ? key : `${l.qty}× ${key}`
+        })
+        .join(" + ") ||
+      // A zeroed basket is a real state the editor permits, and it is not the
+      // same claim as an unknown one — so it is named rather than left blank.
+      "No devices ordered",
+    terminalCount: chosen.reduce((n, l) => n + l.qty, 0),
+  }
+}
+
 /* --------------------------------------------------------------- geography */
 
 export interface Geo {

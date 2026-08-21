@@ -36,11 +36,19 @@ export function AgentBar({ onNavigate }: { onNavigate: (s: Screen) => void }) {
   const inputRef = useRef<HTMLInputElement>(null)
   const reduced = usePrefersReducedMotion()
 
+  const { merchants: book } = useBook()
+  const { decisions } = useDecisions()
+
   const answers = useMemo<Answer[]>(() => {
-    const k = portfolioKpis(MERCHANTS)
-    const waiting = MERCHANTS.filter((m) => m.status === "Needs sign-off")
-    const stuck = MERCHANTS.filter((m) => m.status === "Exception")
-    const nearLive = MERCHANTS.filter(
+    // The LIVE book, with decisions applied. The docblock above promises these
+    // figures cannot disagree with the table they came from, but the source was
+    // the frozen fixture — so the agent went on naming merchants you had
+    // already signed off, and had never heard of one you had just submitted.
+    const merchants = applyDecisions(book, decisions)
+    const k = portfolioKpis(merchants)
+    const waiting = merchants.filter((m) => m.status === "Needs sign-off")
+    const stuck = merchants.filter((m) => m.status === "Exception")
+    const nearLive = merchants.filter(
       (m) => m.currentStep >= 7 && m.status !== "Live",
     )
     // One field, two complementary sides, so these always sum to PIPELINE.length.

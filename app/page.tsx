@@ -6,7 +6,8 @@ import { PortfolioOverview } from "@/components/acquirer/portfolio-overview"
 import { SubmitMerchant } from "@/components/acquirer/submit-merchant"
 import { SignOff } from "@/components/acquirer/sign-off"
 import { MerchantJourney } from "@/components/acquirer/merchant-journey"
-import { MERCHANTS, type Merchant } from "@/lib/acquirer-data"
+import { type Merchant } from "@/lib/acquirer-data"
+import { BookProvider, useBook } from "@/components/acquirer/book-provider"
 import { applyDecisions, awaitingSignOff } from "@/lib/decisions"
 import { DecisionsProvider, useDecisions } from "@/components/acquirer/decisions-provider"
 import { ProgressProvider } from "@/components/acquirer/progress-provider"
@@ -24,6 +25,11 @@ import type { AcquirerScreen, IngenicoScreen, AnyScreen } from "@/lib/nav"
 export default function Page() {
   return (
     <DecisionsProvider>
+      {/* Outermost of the state providers: the book is what the others annotate.
+          Holds the writable merchant list (so a submission has somewhere to go)
+          and the order per merchant (so editing the kit survives the navigation
+          to sign-off, which unmounts the journey). */}
+      <BookProvider>
       {/* Above the screen switch below, so completing a step survives the
           navigation to the screen that completes it — see ProgressProvider. */}
       <ProgressProvider>
@@ -37,6 +43,7 @@ export default function Page() {
           </DemoProvider>
         </BrandThemeProvider>
       </ProgressProvider>
+      </BookProvider>
     </DecisionsProvider>
   )
 }
@@ -56,8 +63,12 @@ function PlatformApp() {
   const [signoffFocus, setSignoffFocus] = useState<string | undefined>(undefined)
 
   const { decisions } = useDecisions()
+  const { merchants } = useBook()
 
-  const signoffCount = useMemo(() => awaitingSignOff(MERCHANTS, decisions), [decisions])
+  const signoffCount = useMemo(
+    () => awaitingSignOff(merchants, decisions),
+    [merchants, decisions],
+  )
 
   // Badges derive from the same records their screens render, so a tab can
   // never advertise a number the page underneath disagrees with.
@@ -73,7 +84,7 @@ function PlatformApp() {
     [],
   )
 
-  const live = useMemo(() => applyDecisions(MERCHANTS, decisions), [decisions])
+  const live = useMemo(() => applyDecisions(merchants, decisions), [merchants, decisions])
   const selectedLive = selected ? live.find((m) => m.id === selected.id) : undefined
 
   function navigate(s: AnyScreen) {
@@ -125,7 +136,16 @@ function PlatformApp() {
             />
           )}
           {acqScreen === "submit" && (
-            <SubmitMerchant onSubmitted={() => setAcqScreen("portfolio")} />
+            <SubmitMerchant
+              // The form owns the fields; the book owns the record. Passing the
+              // created merchant back means "View in portfolio" can land on a
+              // book that already contains it, rather than on the old one.
+              onSubmitted={() => setAcqScreen("portfolio")}
+              onOpenMerchant={(m) => {
+                setSelected(m)
+                setAcqScreen("journey")
+              }}
+            />
           )}
           {acqScreen === "signoff" && (
             <SignOff focusId={signoffFocus} onBackToPortfolio={() => setAcqScreen("portfolio")} />
