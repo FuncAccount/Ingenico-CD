@@ -1379,19 +1379,35 @@ function StepCockpit({
   const checksSimulated = Boolean(checksResolved[responseKey(merchant.id, step.id)])
   const findingCleared = Boolean(findingsCleared[responseKey(merchant.id, step.id)])
 
-  /* ASK THE TRANSFORM WHETHER IT WOULD DO ANYTHING, rather than guessing from
-     the exception count. Two findings that reach this point have their own real
-     remedies — a brand breach is fixed in the theme editor on this very screen,
-     and outstanding documents by the upload lever — so `withClearedFindings`
-     correctly leaves both untouched. Gating on `exceptionCount` would have put
-     a button on them that flipped its own label to "Undo" while changing
-     nothing: a control that reports success and does nothing is worse than no
-     control, because it sends the presenter looking for a fault elsewhere. */
-  const canClearFinding = useMemo(
-    () =>
-      withClearedFindings(merchant, { [responseKey(merchant.id, step.id)]: "probe" }) !== merchant,
-    [merchant, step.id],
-  )
+  /* ASK WHETHER THE FINDING ON THIS PANEL WOULD GO AWAY — not whether the
+     transform touches anything.
+  
+     My first gate compared object identity, which is a different question and
+     answered yes far too often. B2 Branding on Nordwind carries a blocking
+     BRAND RULE, derived from `checkBrand`, plus an unrelated open event
+     ("Awaiting your branding approval"). Clearing closed the event, so identity
+     changed, so the button appeared — and the brand rule, which lives nowhere
+     near the timeline, survived untouched. The control announced a fix and the
+     panel did not move. That is the exact defect the old comment claimed to
+     prevent, reintroduced by testing the wrong thing.
+  
+     Three conditions, in order: there must BE a finding, the transform must
+     have a handle on it, and re-deriving afterwards must come back clean. The
+     last one is what makes this honest — the button cannot appear unless it
+     demonstrably resolves the finding the reader is looking at.
+  
+     Findings with their own real remedy therefore drop out by themselves: a
+     brand breach is fixed in the theme editor on this very screen, missing
+     documents by the upload lever. Neither needs a special case here, and
+     neither gets a button that would do nothing. */
+  const canClearFinding = useMemo(() => {
+    if (!finding) return false
+    const cleared = withClearedFindings(merchant, {
+      [responseKey(merchant.id, step.id)]: "probe",
+    })
+    if (cleared === merchant) return false
+    return blockingFinding(step.id, cleared, exceptionCtx, played) === null
+  }, [finding, merchant, step.id, exceptionCtx, played])
 
   // Commits this step has PREPARED that the acquirer has not released yet.
   //
@@ -2507,6 +2523,20 @@ function StepCockpit({
                    the acquirer. Warning tone, not success. */
                 <div className="animate-trace-in pt-0.5 text-warning">
                   {`!!  agent run stopped — ${finding.headline.toLowerCase().replace(/\.$/, "")}`}
+                </div>
+              ) : findingCleared ? (
+                /* The fix landed OUTSIDE, so neither of the other two lines is
+                   true: the run did not clear this, and it did not complete
+                   cleanly either — it stopped, and a person resolved the thing
+                   it stopped on. Without this the step flipped from "agent run
+                   stopped" straight to "agent run complete — nothing further
+                   required", crediting the agent with work it had not done and
+                   leaving no trace of the only event that actually moved the
+                   file. The events written alongside carry the same sentence,
+                   but nothing renders them today, so a receipt in the data is
+                   not a receipt the reader can see. */
+                <div className="animate-trace-in pt-0.5 text-success">
+                  {"ok  finding resolved outside the platform — not by this run"}
                 </div>
               ) : (
                 <div className="animate-trace-in pt-0.5 text-success">
