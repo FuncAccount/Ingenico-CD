@@ -597,8 +597,22 @@ export const PIPELINE: PipelineStep[] = [
     lane: "build",
     band: "Automate",
     acquirerRole: "watch",
-    blurb: "Agent builds the device profile and loads the merchant configuration.",
-    agentMission: "Build each device's profile and load the merchant configuration end to end.",
+    /* INGENICO LOADS THE CONFIGURATION. THE AGENT ONLY SPECIFIES IT.
+    
+       This said the agent "loads the merchant configuration end to end", which
+       claimed the entire act and flatly contradicted the step's own handoff two
+       panels below: "Deployment team loads settings and injects security keys",
+       Ingenico, two working days. The agent derives the parameter set and writes
+       it into Ingenico's config store; putting it onto the terminals and
+       injecting the keys is the deployment team's work.
+    
+       "End to end" was the tell. The agent's work stops at handover — which is
+       precisely why this step carries a Waiting · Ingenico chip and cannot close
+       until they return it. A step that waits on someone cannot also have done
+       the thing it is waiting for. */
+    blurb: "Agent builds the device profiles and specifies the configuration Ingenico loads.",
+    agentMission:
+      "Build each device's profile and specify the configuration Ingenico loads onto the terminals.",
     tools: [
       ingenicoTool("Device profiles"),
       externalTool("Payment schemes"),
@@ -620,9 +634,20 @@ export const PIPELINE: PipelineStep[] = [
         output: "scheme.read → live acceptance listed",
       },
       {
-        label: "Load configuration",
-        detail: "Pushes MID/TID, tipping and currency settings to each profile.",
-        output: "config.load → MID/TID bound, tipping=on, ccy=GBP",
+        /* Named for the handover, not the load. "Pushes … to each profile" put
+           the agent's hands on the terminals; it writes the set into Ingenico's
+           config store — the third tool listed on this step — and Ingenico's
+           deployment team loads it from there. Same correction as "Read scheme
+           acceptance" above: the agent states the position, Ingenico actions it. */
+        label: "Publish the configuration",
+        detail:
+          "Writes MID/TID, tipping and currency into Ingenico's config store. Ingenico's deployment team loads them onto the terminals.",
+        // Unrendered fallback — `traceFor` covers all four tasks on this step —
+        // but it said `tipping=on, ccy=GBP` while the record below derives
+        // tipping from sector and prints "Disabled" for most of them. A dead
+        // literal that contradicts the live record is a trap for whoever
+        // revives it.
+        output: "config.publish → MID/TID, tipping and currency written to the config store",
       },
       {
         label: "Sign the build",

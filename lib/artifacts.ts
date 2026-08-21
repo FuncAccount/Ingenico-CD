@@ -1118,11 +1118,15 @@ export function traceFor(
     case "5.2": {
       const art = artifactFor(5, 2, merchant)
       if (art?.kind !== "records") return null
-      // Quote the artefact's own verdict. A trace that says "loaded" while the
-      // record beneath it reports gaps is the contradiction this step is most
-      // prone to, since the trace is what scrolls past during the run.
+      // Quote the artefact's own verdict. A trace that claims a full set while
+      // the record beneath it reports gaps is the contradiction this step is
+      // most prone to, since the trace is what scrolls past during the run.
+      //
+      // `config.load → … accepted on N profiles` also had the agent loading and
+      // the terminals accepting. It writes the set to the config store; the
+      // deployment team loads it.
       const settled = art.rows.filter((r) => r.value !== null && r.value !== "").length
-      return `config.load → ${settled}/${art.rows.length} parameters accepted on ${deviceUnits(merchant).length} profiles`
+      return `config.publish → ${settled}/${art.rows.length} parameters written to the config store for ${deviceUnits(merchant).length} profiles`
     }
     case "5.3": {
       // Was the literal `build.sign → bundle signed, checksum verified ok`,
@@ -2833,25 +2837,44 @@ export function artifactFor(
         liveSchemeLabel(merchant, defaultAcceptance(merchant)),
       )
       const units = deviceUnits(merchant)
-      // Counted, not asserted. A "load successful" banner typed as a literal
-      // would go on claiming success over a record that had lost a parameter.
+      // Counted, not asserted. A banner typed as a literal would go on claiming
+      // success over a record that had lost a parameter.
       const settled = params.filter((p) => p.value !== null && p.value !== "").length
       const pending = params.length - settled
       return {
         kind: "records",
-        title: "Loaded configuration",
-        note: "The parameter set pushed to every profile above. This is the identical record Ingenico works from — not a summary of it.",
+        /* THIS PANEL IS THE SPECIFICATION, NOT A LOAD REPORT.
+        
+           It read "Loaded configuration … pushed to every profile", and said
+           "All 7 parameters accepted on 10 of 10 profiles" over a green tick —
+           while the handoff directly below said Ingenico's deployment team is
+           what loads settings and injects the keys. Two panels on one screen,
+           one act, opposite actors.
+        
+           The count made it worse than a wording slip. `settled` measures
+           whether OUR OWN record has a value in every field. That is a real and
+           useful check — an incomplete spec is the failure this step can
+           actually have — but it was being reported as an outcome observed on
+           ten terminals we never touched. Same defect as a status tag asserting
+           a check that never ran: the number was honest, its subject was not.
+        
+           So the banner now states what the count measures. Whether Ingenico has
+           since loaded it is a different claim with a different owner, and it is
+           already on screen in the handoff below, attributed to them — restating
+           it here would put one fact in two places, free to disagree. */
+        title: "Configuration handed to Ingenico",
+        note: "The parameter set that applies to every profile above — the identical record Ingenico's deployment team works from, not a summary of it. Specifying it is the agent's work; loading it onto the terminals and injecting the keys is theirs.",
         outcome:
           pending === 0
             ? {
                 state: "ok",
-                headline: "Load successful",
-                detail: `All ${params.length} parameters accepted on ${units.length} of ${units.length} profiles. No profile is running a partial set.`,
+                headline: "Ready for Ingenico",
+                detail: `All ${params.length} parameters are specified, and the same set covers all ${units.length} profiles — none is handed over partial. Nothing here is left for the deployment team to infer.`,
               }
             : {
                 state: "warn",
-                headline: "Loaded with gaps",
-                detail: `${settled} of ${params.length} parameters accepted across ${units.length} profiles. ${pending} still unset — named in the record below.`,
+                headline: "Gaps in the specification",
+                detail: `${settled} of ${params.length} parameters specified across ${units.length} profiles. ${pending} still unset — named in the record below, and Ingenico has nothing to load for those.`,
               },
         rows: params.map((item) => ({
           label: item.label,

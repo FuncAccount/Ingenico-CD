@@ -1424,7 +1424,7 @@ function StepCockpit({
   function pause() {
     setStatus("idle")
   }
-  /** Re-run the trace from the first task. PROGRESS ONLY — a chase already
+  /** Re-run the trace from the first task. PROGRESS ONLY ��� a chase already
    *  sent, a palette already chosen and a basket already edited all stand,
    *  because watching the agent work again is not the same as undoing it. */
   function replay() {
@@ -2666,7 +2666,7 @@ function StepCockpit({
                   {/* The verdict, on the row. Naming the artefact told you
                       where to look but not what it found, so "did the load
                       work?" needed a click. GATED ON `isDone`: a headline like
-                      "Load successful" on a task that has not run yet would
+                      "Ready for Ingenico" on a task that has not run yet would
                       report a result for work nobody has done — and it is
                       withheld when the task failed, halted or was skipped,
                       each of which already states its own outcome above and
