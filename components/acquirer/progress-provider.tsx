@@ -31,6 +31,31 @@ interface ProgressContextValue {
   progress: Record<string, ReadonlySet<StepId>>
   /** The set for one merchant, never undefined. */
   progressFor: (merchantId: string) => ReadonlySet<StepId>
+  /**
+   * Steps whose agent run has been PLAYED, whatever the run concluded.
+   *
+   * A SECOND SET, NOT A REUSE OF `progress`, because completion excludes
+   * failure: `stepFinished` is `!blocker && …`, so a run that halts never
+   * reaches `markDone`. Using progress as the evidence signal therefore
+   * deadlocks — the finding cannot be raised until the step passes, and the
+   * step cannot pass because of the finding.
+   *
+   * This is what makes "the agent has looked at this" answerable separately
+   * from "the agent approved it", which is the distinction the whole
+   * no-exception-without-a-run rule rests on.
+   *
+   * It lives in THIS provider rather than its own so that `clearStep` can
+   * retire both facts in a single write. Split across two providers, a stage
+   * reset could clear one and leave the other, and a step reading "not run"
+   * while still carrying its finding is precisely the kind of half-reset this
+   * file already exists to prevent.
+   */
+  played: Record<string, ReadonlySet<StepId>>
+  /** The played set for one merchant, never undefined. */
+  playedFor: (merchantId: string) => ReadonlySet<StepId>
+  /** Record that a run was started here. Idempotent. Called when the run is
+   *  PLAYED, not when it succeeds — that is the entire point. */
+  markPlayed: (merchantId: string, step: StepId) => void
   /** Record a step as finished. Idempotent. */
   markDone: (merchantId: string, step: StepId) => void
   /**
@@ -54,6 +79,17 @@ const ProgressContext = createContext<ProgressContextValue | null>(null)
 
 export function ProgressProvider({ children }: { children: React.ReactNode }) {
   const [progress, setProgress] = useState<Record<string, ReadonlySet<StepId>>>({})
+  const [played, setPlayed] = useState<Record<string, ReadonlySet<StepId>>>({})
+
+  const markPlayed = useCallback((merchantId: string, step: StepId) => {
+    setPlayed((prev) => {
+      const current = prev[merchantId]
+      if (current?.has(step)) return prev
+      const next = new Set(current ?? [])
+      next.add(step)
+      return { ...prev, [merchantId]: next }
+    })
+  }, [])
 
   const markDone = useCallback((merchantId: string, step: StepId) => {
     setProgress((prev) => {
@@ -71,13 +107,18 @@ export function ProgressProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   const clearStep = useCallback((merchantId: string, step: StepId) => {
-    setProgress((prev) => {
+    const drop = (prev: Record<string, ReadonlySet<StepId>>) => {
       const current = prev[merchantId]
       if (!current?.has(step)) return prev
       const next = new Set(current)
       next.delete(step)
       return { ...prev, [merchantId]: next }
-    })
+    }
+    setProgress(drop)
+    // BOTH, always. A reset that retired the completion but left the run on
+    // record would put the step back to "not finished" while still treating its
+    // findings as evidenced — a cleared stage that goes on reporting a halt.
+    setPlayed(drop)
   }, [])
 
   const progressFor = useCallback(
@@ -85,9 +126,14 @@ export function ProgressProvider({ children }: { children: React.ReactNode }) {
     [progress],
   )
 
+  const playedFor = useCallback(
+    (merchantId: string) => played[merchantId] ?? NO_SESSION_PROGRESS,
+    [played],
+  )
+
   const value = useMemo(
-    () => ({ progress, progressFor, markDone, clearStep }),
-    [progress, progressFor, markDone, clearStep],
+    () => ({ progress, progressFor, played, playedFor, markPlayed, markDone, clearStep }),
+    [progress, progressFor, played, playedFor, markPlayed, markDone, clearStep],
   )
 
   return <ProgressContext.Provider value={value}>{children}</ProgressContext.Provider>

@@ -1060,6 +1060,57 @@ function isLaneStepDone(
   return here < at
 }
 
+/**
+ * Has the agent actually run here — that is, do this step's artefacts exist?
+ *
+ * THE MISSING PRECONDITION ON EVERY FINDING. The brand rules are pure functions
+ * of a theme, so they returned a verdict for a step the agent had never
+ * touched: Nordwind sat at B2 reading "Ready · 0/4 tasks · Play agent run" with
+ * an Exception badge in the header and the artefact pane saying, in as many
+ * words, "this task has not run yet". A check that never ran cannot have found
+ * anything, and a status derived from one is an accusation with no evidence
+ * behind it.
+ *
+ * DELIBERATELY NOT `progressed`. Completion excludes failure — `stepFinished`
+ * is `!blocker && …`, so a halted run never records progress — which means
+ * gating findings on progress deadlocks: no finding until the step passes, and
+ * no pass because of the finding. `played` is the honest signal because it is
+ * written when the run STARTS.
+ *
+ * `halted` is deliberately absent from the signature. Whether a run happened is
+ * a question about the past; whether it found something is a question about the
+ * result. Taking `halted` here would be the cycle: findings would depend on
+ * evidence which depended on findings.
+ */
+export function stepEvidenced(
+  merchant: Pick<Merchant, "currentStep" | "riskLane">,
+  step: PipelineStep,
+  /** Steps whose run has been played this session. REQUIRED — a default of
+   *  "none played" reads as the confident claim that the agent has done
+   *  nothing, which on a settled file is false. Surfaces with no session pass
+   *  `NO_SESSION_PROGRESS`. */
+  played: ReadonlySet<StepId>,
+): boolean {
+  if (played.has(step.id)) return true
+
+  if (step.lane === "risk") {
+    const lane = merchant.riskLane
+    // A cleared lane ran every one of its steps to get there.
+    if (lane.verdict === "cleared") return true
+    // Steps AHEAD of the open one on the risk lane have run; the open one and
+    // everything behind it have not. Same lane-position comparison `laneState`
+    // uses, never an id comparison.
+    return riskIndex(step.id) < riskIndex(lane.at)
+  }
+
+  // Whole-journey order, from the PIPELINE array. A step the file has travelled
+  // past has necessarily run; the step it is standing on has not, unless the
+  // record says otherwise (see `blockingFinding`, where an authored exception
+  // is itself the record of a run).
+  const orderOf = (id: StepId) => PIPELINE.findIndex((s) => s.id === id)
+  return orderOf(step.id) < orderOf(merchant.currentStep)
+}
+
 /** The build and spine paths in running order — same reason as RISK_LANE:
  *  position comes from the PIPELINE array, never from `id`. */
 export const BUILD_LANE: PipelineStep[] = PIPELINE.filter((s) => s.lane === "build")

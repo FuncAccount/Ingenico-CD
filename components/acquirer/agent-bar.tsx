@@ -44,13 +44,18 @@ export function AgentBar({ onNavigate }: { onNavigate: (s: Screen) => void }) {
   const { merchants: book } = useBook()
   const { decisions } = useDecisions()
   const { themeFor } = useBrandTheme()
+  const { playedFor } = useProgress()
 
-  /* The same halt map the portfolio derives its badges from. Omitting it would
-     make `stuck` count only merchants a fixture happens to LABEL "Exception",
-     so the palette would report fewer exceptions than the table it is
-     summarising — the docblock's promise broken by the exact mechanism it
-     warns about. */
-  const halted = useMemo(() => haltedByMerchant(book, themeFor), [book, themeFor])
+  /* The same halt map the portfolio derives its badges from — and, now, the
+     same played set. Omitting either makes `stuck` count a different population
+     from the table it is summarising: without the halts it sees only merchants
+     a fixture happens to LABEL "Exception", and without the played set it
+     counts findings on steps the agent has never run. Either way the docblock's
+     promise breaks by the exact mechanism it warns about. */
+  const halted = useMemo(
+    () => haltedByMerchant(book, themeFor, (m) => playedFor(m.id)),
+    [book, themeFor, playedFor],
+  )
 
   const answers = useMemo<Answer[]>(() => {
     // The LIVE book, with decisions applied. The docblock above promises these

@@ -112,6 +112,15 @@ export function shipClearance(
    * the estate rollups, the portfolio table — pass `NO_SESSION_PROGRESS`.
    */
   progressed: ReadonlySet<StepId>,
+  /**
+   * Steps whose agent run has been played this session.
+   *
+   * Separate from `progressed` because a run that halts never completes, so the
+   * two sets diverge exactly on the files this gate exists to stop. REQUIRED,
+   * like `progressed`, so a forgotten call site is a compile error rather than
+   * a confident wrong answer.
+   */
+  played: ReadonlySet<StepId>,
 ): ShipClearance {
   const holds: ClearanceHold[] = []
 
@@ -125,7 +134,7 @@ export function shipClearance(
      same evidence rather than reaching the same answer twice by different
      routes — and, more importantly, propagates the halt to the step's
      SUCCESSORS, which this loop had no way to do. */
-  const halted = haltedSteps(merchant, ctx)
+  const halted = haltedSteps(merchant, ctx, played)
 
   for (const step of SHIP_PREREQUISITES) {
     const state = laneState(merchant, step, progressed, halted)
@@ -135,9 +144,16 @@ export function shipClearance(
        whether or not the agent has run it — so asking it about an upcoming
        step returns what that step WOULD find, and reporting that as a failure
        would convict a check that has not run. An unreached step is incomplete;
-       that is the whole of what is known about it. */
+       that is the whole of what is known about it.
+
+       `blockingFinding` now enforces the same principle itself, and more
+       strictly — it withholds derived findings from any step the agent has not
+       run, including the REACHED one the file is currently standing on, which
+       this guard never covered. Kept anyway: the two rules are about different
+       things (this one about arrival, that one about evidence) and the local
+       one is what makes the `holds` list below read correctly. */
     const reached = state === "done" || state === "active"
-    const finding = reached ? blockingFinding(step.id, merchant, ctx) : null
+    const finding = reached ? blockingFinding(step.id, merchant, ctx, played) : null
 
     if (finding) {
       holds.push({ kind: "failed", step, headline: finding.headline })

@@ -15,6 +15,8 @@ import {
   NO_HALTS,
   NO_SESSION_PROGRESS,
   PIPELINE,
+  stepById,
+  stepEvidenced,
   type Merchant,
   type StepId,
 } from "@/lib/acquirer-data"
@@ -1534,6 +1536,15 @@ export function blockingFinding(
   stepId: StepId,
   merchant: Merchant,
   ctx: ExceptionContext,
+  /**
+   * Steps whose agent run has been played this session.
+   *
+   * REQUIRED, and for the reason `laneState`'s arguments are: a default of
+   * "none" is not a neutral omission, it is the claim that nothing has run, and
+   * it would silently withhold findings on files that have plainly moved.
+   * Surfaces with no session pass `NO_SESSION_PROGRESS`, which says so.
+   */
+  played: ReadonlySet<StepId>,
 ): { headline: string; detail: string; taskIndex?: number } | null {
   /* A recorded exception outranks everything below it, and until now this
    * function could not see one at all. `MerchantException` is the most
@@ -1556,6 +1567,29 @@ export function blockingFinding(
       taskIndex: stopped.taskIndex,
     }
   }
+
+  /* NOTHING RAN, SO NOTHING WAS FOUND.
+  
+     Every rule below reads the step's own artefacts, and artefacts only exist
+     once the agent has produced them. Without this line the rules were pure
+     functions of the fixture, so they returned verdicts for steps the agent had
+     never touched — Nordwind carried an Exception in the header while its B2
+     panel read "Ready · 0/4 tasks", offered "Play agent run", and told you in
+     the artefact pane that the task had not run yet. Four statements about one
+     step, and the loudest of them was the only one that was wrong.
+  
+     It sits BELOW the authored exception on purpose. A `MerchantException`
+     names the attempt, the finding and the source: it IS the record of a run,
+     the most explicit one in the codebase, so gating it on a second signal
+     would suppress the very findings that are best evidenced. Above it, and
+     Tavo's unroutable address would vanish from a file that is stopped
+     precisely because the agent went looking and could not resolve it.
+  
+     What this does NOT do is let the step read clean. It reads NOT STARTED,
+     which is true, and the finding appears the moment the run is played — the
+     agent finding it in front of you, rather than the app having known all
+     along and said nothing about how. */
+  if (!stepEvidenced(merchant, stepById(stepId), played)) return null
 
   // Underwriting halts at "Score the risk" when a mandatory document is
   // missing. `taskIndex` is carried so the row that REFUSED shows the halt
@@ -1696,10 +1730,15 @@ function livenessOpen(merchant: Merchant): boolean {
  * loop; two surfaces answering "is this step blocked?" from separate code is
  * how they come to disagree about a single file. Both call this now.
  */
-export function haltedSteps(merchant: Merchant, ctx: ExceptionContext): ReadonlySet<StepId> {
+export function haltedSteps(
+  merchant: Merchant,
+  ctx: ExceptionContext,
+  /** Runs played this session. REQUIRED — see `blockingFinding`. */
+  played: ReadonlySet<StepId>,
+): ReadonlySet<StepId> {
   const out = new Set<StepId>()
   for (const s of PIPELINE) {
-    if (blockingFinding(s.id, merchant, ctx)) out.add(s.id)
+    if (blockingFinding(s.id, merchant, ctx, played)) out.add(s.id)
   }
   return out
 }
@@ -1721,10 +1760,15 @@ export function haltedSteps(merchant: Merchant, ctx: ExceptionContext): Readonly
 export function haltedByMerchant(
   merchants: readonly Merchant[],
   themeFor: (m: Merchant) => BrandTheme,
+  /** Runs played this session, per merchant. Passed in for the same reason
+   *  `themeFor` is: the played set lives in React state, and inventing one here
+   *  is how a book-level read comes to disagree with the screen. A book surface
+   *  that genuinely has no session returns `NO_SESSION_PROGRESS`. */
+  playedFor: (m: Merchant) => ReadonlySet<StepId>,
 ): ReadonlyMap<string, ReadonlySet<StepId>> {
   const out = new Map<string, ReadonlySet<StepId>>()
   for (const m of merchants) {
-    out.set(m.id, haltedSteps(m, { brandRules: checkBrand(themeFor(m)) }))
+    out.set(m.id, haltedSteps(m, { brandRules: checkBrand(themeFor(m)) }, playedFor(m)))
   }
   return out
 }

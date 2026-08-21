@@ -220,7 +220,7 @@ export function PortfolioOverview({
 }) {
   const { decisions } = useDecisions()
   const { merchants: book } = useBook()
-  const { progressFor } = useProgress()
+  const { progressFor, playedFor } = useProgress()
 
   // Every figure and badge on this screen now comes off one list whose statuses
   // reflect the decisions actually taken. Previously the KPI, the filter and
@@ -234,7 +234,10 @@ export function PortfolioOverview({
      Built once for the whole book and passed down, so the badge and the track
      are reading the same set rather than each deriving their own. */
   const { themeFor: themeForBook } = useBrandTheme()
-  const halted = useMemo(() => haltedByMerchant(book, themeForBook), [book, themeForBook])
+  const halted = useMemo(
+    () => haltedByMerchant(book, themeForBook, (m) => playedFor(m.id)),
+    [book, themeForBook, playedFor],
+  )
   const merchants = useMemo(
     () => portfolioOrder(applyDecisions(book, decisions, halted)),
     [book, decisions, halted],
