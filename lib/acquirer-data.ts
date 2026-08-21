@@ -895,6 +895,35 @@ export function laneState(
    *  that same confident claim, so surfaces that genuinely cannot evaluate
    *  findings pass `NO_HALTS` and say so. */
   halted: ReadonlySet<StepId>,
+  /** The subset of `halted` that also STOPS THE STEPS BEHIND IT.
+   *
+   *  `halted` answers "is this step finished". This answers "may the next one
+   *  start", and they are NOT the same question — which is the whole reason
+   *  this parameter exists.
+   *
+   *  A FINDING was judged and failed, so it must veto its successors: you
+   *  cannot underwrite on a KYC that came back bad. An UNRESOLVED CHECK is a
+   *  provider that never answered — it withholds the tick on its own step,
+   *  because nothing there is finished, but it must not push the file's
+   *  position backwards, because nothing was judged at all.
+   *
+   *  The app had this collapsed in BOTH directions, one bug either side.
+   *  Passing findings only drew a solid tick on a KYC whose liveness check
+   *  nobody had answered. Passing the UNION — the state the fix for that left
+   *  behind — meant Summit Sports could run R3 Underwriting to 4/4 with the
+   *  badge reading "Complete" and "Step clear", while the rail refused to tick
+   *  R2 or R3 for as long as that one unanswered check sat on R1, and the
+   *  progress count stayed at 4/11 however many stages were finished.
+   *
+   *  The two surfaces disagreed because they were reading DIFFERENT SETS for
+   *  the same question: `blockingPredecessor` got the findings and let the run
+   *  start, `laneState` got the union and would never record that it had. The
+   *  sets are now named for the two distinct jobs instead, so a caller has to
+   *  say which one it means.
+   *
+   *  Must be a SUBSET of `halted` — a step that stops its successors is
+   *  necessarily unfinished itself. */
+  blocking: ReadonlySet<StepId>,
   /** Stages the acquirer has explicitly reset to be shown fresh.
    *
    *  REQUIRED, like the two above and for the same reason: a defaulted empty
@@ -930,10 +959,17 @@ export function laneState(
      whether it stopped: "not reached yet" is the truer claim, and it keeps the
      alarm on the trunk step where the work actually is. Lane-relative, so it
      applies to the fork's two lanes and never to the trunk itself. */
-  if (step.lane !== "spine" && PRE_FORK.some((s) => !isLaneStepDone(merchant, s, progressed, halted))) {
+  if (step.lane !== "spine" && PRE_FORK.some((s) => !isLaneStepDone(merchant, s, progressed, blocking))) {
     return "upcoming"
   }
 
+  /* THE WITHHOLDING RULE, and the ONLY place `halted` is read.
+  
+     Everything else in this function is an ORDERING rule and reads `blocking`.
+     The split matters most right here: a step with an unanswered check is not
+     finished, so it must not draw a tick — but that is a statement about THIS
+     step alone, and letting it travel down the lane is what stopped a
+     completed Underwriting from ever being recorded. */
   if (halted.has(step.id)) return "active"
 
   /* A RESET STAGE IS NOT DONE EITHER — same reasoning, different claim.
@@ -979,7 +1015,11 @@ export function laneState(
        these have not legitimately been reached. And unlike a halt it draws no
        second alarm — the problem is at R1 and gets marked there once, rather
        than reporting one finding three times down the lane. */
-    const blockedAt = RISK_LANE.findIndex((s) => halted.has(s.id))
+    /* `blocking`, NOT `halted` — see the parameter. Summit Sports is the case:
+       R1 KYC is waiting on a registry that never replied, which is not a
+       finding and settles nothing against the merchant, yet the union made it
+       veto R2 and R3 for good. The lane verdict was already `cleared`. */
+    const blockedAt = RISK_LANE.findIndex((s) => blocking.has(s.id))
     if (blockedAt !== -1 && here > blockedAt) return "upcoming"
 
     if (lane.verdict === "cleared") return "done"
@@ -1036,7 +1076,10 @@ export function laneState(
   /* The first step on this lane that is not yet finished. A step is `active`
      only if it IS that step — so B4 stays `upcoming` while B1 is outstanding,
      which is what stops you starting at the end of the lane. */
-  const openIdx = lane.findIndex((s) => !isLaneStepDone(merchant, s, progressed, halted))
+  // `blocking`: an unanswered check on a predecessor withholds ITS tick (via
+  // the rule at the top of this function) without demoting everything behind
+  // it to "upcoming".
+  const openIdx = lane.findIndex((s) => !isLaneStepDone(merchant, s, progressed, blocking))
   if (openIdx === -1) return "done"
   if (here < openIdx) return "done"
   if (here === openIdx) return "active"
@@ -1082,7 +1125,11 @@ function isLaneStepDone(
   merchant: Pick<Merchant, "currentStep" | "riskLane">,
   step: PipelineStep,
   progressed: ReadonlySet<StepId>,
-  halted: ReadonlySet<StepId>,
+  /** The ORDERING set — `laneState`'s `blocking`, never the wider `halted`.
+   *  Named for the job, because this function is only ever consulted to find
+   *  the first unfinished step on a lane, and that is exactly the question an
+   *  unanswered check must not answer. */
+  blocking: ReadonlySet<StepId>,
 ): boolean {
   /* THE SAME VETO, AND THIS IS THE HALF THAT REACHES THE SUCCESSORS.
   
@@ -1097,7 +1144,7 @@ function isLaneStepDone(
      Before `progressed`, deliberately: a step approved earlier in the session
      and broken since is not done, and checking progress first would let the
      stale approval win. */
-  if (halted.has(step.id)) return false
+  if (blocking.has(step.id)) return false
 
   if (progressed.has(step.id)) return true
 
@@ -1278,16 +1325,23 @@ export function blockingPredecessor(
    *  scan would walk straight past it and report "nothing is blocking you" to a
    *  step that cannot in fact start. */
   halted: ReadonlySet<StepId>,
+  /** Both sets, for the reason the split exists: this function decides whether
+   *  a run may START, so it is pure ORDERING and must reach the same verdict as
+   *  the rail. It used to take one set and the journey handed it the findings
+   *  while handing `laneState` the union — so the gate opened R3 Underwriting
+   *  and the rail then declined to record it. Threading both means the two can
+   *  no longer be given different answers to the same question. */
+  blocking: ReadonlySet<StepId>,
   /** Threaded through for the same reason again: a reset step reads as
    *  "upcoming", so without this the scan would judge it against a stale
    *  doneness and could name the wrong blocker — or none. */
   wasReset: ReadonlySet<StepId>,
 ): PipelineStep | null {
-  if (laneState(merchant, step, progressed, halted, wasReset) !== "upcoming") return null
+  if (laneState(merchant, step, progressed, halted, blocking, wasReset) !== "upcoming") return null
   const path = pathOf(step)
   const here = path.findIndex((s) => s.id === step.id)
   for (let i = 0; i < here; i++) {
-    if (laneState(merchant, path[i], progressed, halted, wasReset) !== "done") return path[i]
+    if (laneState(merchant, path[i], progressed, halted, blocking, wasReset) !== "done") return path[i]
   }
   return null
 }

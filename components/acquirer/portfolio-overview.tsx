@@ -98,7 +98,12 @@ function MiniTrack({
      free to disagree with the track beside it. One set, two renderings. */
   halted: ReadonlySet<StepId>
 }) {
-  const stateOf = (s: PipelineStep) => laneState(merchant, s, progressed, halted, wasReset)
+  /* `halted` in BOTH positions, and deliberately so: this set is findings only
+     (see the prop above — the row's badge counts it as "held by a finding"), so
+     the two roles coincide here. The book-level read has no session to measure
+     unresolved checks against, and inventing a wider set for the ordering
+     argument would make this track disagree with the badge beside it. */
+  const stateOf = (s: PipelineStep) => laneState(merchant, s, progressed, halted, halted, wasReset)
   const doneIn = (steps: PipelineStep[]) =>
     steps.filter((s) => stateOf(s) === "done").length
 

@@ -268,12 +268,23 @@ export function MerchantJourney({
   // Delegates to the model so the risk lane is read from `riskLane` rather
   // than from a position on the build path it no longer shares.
   function stepState(step: PipelineStep): StepState {
-    /* `flaggedSteps`, not `findingSteps`: without a not-settled set this
-       returned "done" for every step the file had travelled past, whatever the
-       agent found there — and passing only the HALTS left the amber half of
-       that hole open, which is how KYC could sit unresolved with Pricing and
-       Underwriting ticked beneath it. */
-    return laneState(current, step, progressed, flaggedSteps, wasReset)
+    /* BOTH SETS, because they answer two different questions.
+    
+       `flaggedSteps` (findings + unresolved) decides whether a step may draw
+       its own tick: KYC waiting on a registry that never replied is not
+       finished, and it used to show a solid tick over that unanswered check.
+    
+       `findingSteps` decides what STOPS THE STEPS BEHIND IT. Fixing the tick
+       above by passing the union here as well overshot — it made an unanswered
+       check veto its whole lane, so Summit Sports ran R3 Underwriting to 4/4
+       with the badge reading "Complete" and "Step clear" while the rail kept
+       R2 and R3 as plain circles and the progress count sat at 4/11. Nothing
+       had been judged against that merchant; one provider had simply not
+       answered.
+    
+       The two are now named separately at the call site, so neither question
+       can quietly borrow the other's answer. */
+    return laneState(current, step, progressed, flaggedSteps, findingSteps, wasReset)
   }
 
   const focused = PIPELINE.find((s) => s.id === focusStep)!
@@ -481,7 +492,11 @@ export function MerchantJourney({
                 onStepCleared={clearStepDone}
                 resetTheme={() => resetTheme(current.id)}
                 themeEdited={hasOverride(current.id)}
-          awaiting={blockingPredecessor(current, focused, progressed, findingSteps, wasReset)}
+          /* The same two sets the rail is given, in the same order. This used
+             to receive `findingSteps` alone while the rail got the union, and
+             that single mismatch is what let the gate open a step the rail
+             would then never record as done. */
+          awaiting={blockingPredecessor(current, focused, progressed, flaggedSteps, findingSteps, wasReset)}
           progressed={progressed}
           played={played}
           onPlayed={markStepPlayed}
