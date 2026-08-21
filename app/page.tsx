@@ -116,6 +116,12 @@ function PlatformApp() {
                 setSignoffFocus(m.id)
                 setAcqScreen("signoff")
               }}
+              // No focus id — the tile counts the queue, it does not name a
+              // merchant, so opening it must not pick one on your behalf.
+              onOpenQueue={() => {
+                setSignoffFocus(undefined)
+                setAcqScreen("signoff")
+              }}
             />
           )}
           {acqScreen === "submit" && (

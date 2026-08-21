@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { useMemo } from "react"
 import {
   ArrowUpRight,
   Clock,
@@ -61,14 +61,30 @@ function Kpi({
   label,
   value,
   accent,
+  onClick,
+  action,
 }: {
   icon: typeof Users
   label: string
   value: string | number
   accent?: "warning" | "destructive"
+  /** Present only where the figure has somewhere to lead. A tile that counts
+   *  something you cannot open stays inert rather than looking clickable. */
+  onClick?: () => void
+  action?: string
 }) {
+  // A measurement and a control are different things, so the clickable tile has
+  // to SAY it is one — hence the named action line rather than a hover-only
+  // affordance discoverable by accident.
+  const Tag = onClick ? "button" : "div"
   return (
-    <div className="flex flex-col gap-3 rounded-2xl glass p-5">
+    <Tag
+      onClick={onClick}
+      className={cn(
+        "flex flex-col gap-3 rounded-2xl glass p-5",
+        onClick && "glass-hover cursor-pointer text-left transition-colors",
+      )}
+    >
       <div className="flex items-center justify-between">
         <span
           className={cn(
@@ -88,8 +104,14 @@ function Kpi({
           {value}
         </p>
         <p className="mt-0.5 text-sm text-muted-foreground">{label}</p>
+        {action && (
+          <span className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-warning">
+            {action}
+            <ArrowUpRight className="h-3 w-3" />
+          </span>
+        )}
       </div>
-    </div>
+    </Tag>
   )
 }
 
@@ -97,12 +119,14 @@ export function PortfolioOverview({
   onSubmit,
   onOpenMerchant,
   onOpenSignoff,
+  onOpenQueue,
 }: {
   onSubmit: () => void
   onOpenMerchant: (m: Merchant) => void
   onOpenSignoff: (m: Merchant) => void
+  /** Opens the sign-off queue itself, with no merchant focused. */
+  onOpenQueue: () => void
 }) {
-  const [onlySignoff, setOnlySignoff] = useState(false)
   const { decisions } = useDecisions()
 
   // Every figure and badge on this screen now comes off one list whose statuses
@@ -115,9 +139,15 @@ export function PortfolioOverview({
   )
   const kpis = portfolioKpis(merchants)
 
-  const rows = onlySignoff
-    ? merchants.filter((m) => m.status === "Needs sign-off")
-    : merchants
+  // The book lists the whole book. The "Needs your sign-off" filter that used
+  // to sit over this table was a SECOND sign-off queue: same label as the
+  // Sign-off screen, different membership (this one re-filters after each
+  // decision, so a merchant you had just confirmed vanished from under you,
+  // while the queue deliberately holds its list still). Two lists that disagree
+  // about who is waiting on you is worse than one list — and only one of them
+  // could ever approve or reject. The count is still here; it now LEADS to the
+  // one place the work happens instead of re-answering it in place.
+  const rows = merchants
 
   return (
     <div className="mx-auto max-w-7xl px-6 py-8">
@@ -148,6 +178,10 @@ export function PortfolioOverview({
           label="Awaiting your sign-off"
           value={kpis.awaitingSignOff}
           accent="warning"
+          // Withheld at zero: "Review the queue" pointing at an empty queue is
+          // an invitation to work that does not exist.
+          onClick={kpis.awaitingSignOff > 0 ? onOpenQueue : undefined}
+          action={kpis.awaitingSignOff > 0 ? "Review the queue" : undefined}
         />
         <Kpi
           icon={TriangleAlert}
@@ -162,31 +196,11 @@ export function PortfolioOverview({
           <h2 className="text-sm font-semibold text-foreground">
             {rows.length} {rows.length === 1 ? "merchant" : "merchants"}
           </h2>
-          <div className="flex items-center gap-1 rounded-lg bg-secondary p-1">
-            <button
-              onClick={() => setOnlySignoff(false)}
-              className={cn(
-                "rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
-                !onlySignoff
-                  ? "bg-card text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              All merchants
-            </button>
-            <button
-              onClick={() => setOnlySignoff(true)}
-              className={cn(
-                "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
-                onlySignoff
-                  ? "bg-card text-warning shadow-sm"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              <ShieldCheck className="h-3.5 w-3.5" />
-              Needs your sign-off
-            </button>
-          </div>
+          {/* No filter chips. The row's own action already opens whatever that
+              merchant needs, and the count above leads to the queue. */}
+          <p className="text-xs text-muted-foreground">
+            Every merchant in your book, in pipeline order.
+          </p>
         </div>
 
         <div className="overflow-x-auto">
