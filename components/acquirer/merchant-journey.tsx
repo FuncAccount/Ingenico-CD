@@ -222,6 +222,15 @@ export function MerchantJourney({
     return out
   }, [current, exceptionCtx, played])
 
+  /* What the RAIL marks: a finding or an unresolved check. Merged once here
+     rather than at each call site, because the trunk and the two lane columns
+     draw the same pipeline — KYC is a lane step, so a merge applied only to the
+     trunk would leave the very node this fix is about still ticked green. */
+  const flaggedSteps = useMemo(
+    () => new Set<StepId>([...findingSteps, ...unresolvedSteps]),
+    [findingSteps, unresolvedSteps],
+  )
+
   // How many checks each step is still waiting on, so the rail marker cannot
   // show a finished tick over one either.
   //
@@ -396,7 +405,7 @@ export function MerchantJourney({
               isFocus={step.id === focusStep}
               onFocus={setFocusStep}
               connector="none"
-              hasFinding={findingSteps.has(step.id) || unresolvedSteps.has(step.id)}
+              hasFinding={flaggedSteps.has(step.id)}
           awaiting={awaitingSteps.get(step.id) ?? 0}
             />
           ))}
@@ -425,7 +434,7 @@ export function MerchantJourney({
               stepState={stepState}
               focusStep={focusStep}
               onFocus={setFocusStep}
-              findingSteps={findingSteps}
+              findingSteps={flaggedSteps}
             awaitingSteps={awaitingSteps}
             />
             <LaneColumn
@@ -433,7 +442,7 @@ export function MerchantJourney({
               stepState={stepState}
               focusStep={focusStep}
               onFocus={setFocusStep}
-              findingSteps={findingSteps}
+              findingSteps={flaggedSteps}
             awaitingSteps={awaitingSteps}
             />
           </div>
@@ -449,7 +458,7 @@ export function MerchantJourney({
               isFocus={step.id === focusStep}
               onFocus={setFocusStep}
               connector={i === spine.after.length - 1 ? "none" : "down"}
-              hasFinding={findingSteps.has(step.id) || unresolvedSteps.has(step.id)}
+              hasFinding={flaggedSteps.has(step.id)}
           awaiting={awaitingSteps.get(step.id) ?? 0}
             />
           ))}
@@ -579,7 +588,7 @@ function LaneColumn({
           onFocus={onFocus}
           connector={i === steps.length - 1 ? "none" : "down"}
           dense
-          {/* Already merged by the caller — see `flaggedSteps`. */}
+          // Already merged by the caller — see `flaggedSteps`.
           hasFinding={findingSteps.has(step.id)}
           awaiting={awaitingSteps.get(step.id) ?? 0}
         />
