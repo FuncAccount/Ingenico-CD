@@ -125,7 +125,39 @@ export function liveDecisionAtStep(
   return d && !d.supersededIso ? d : null
 }
 
-export function effectiveStatus(merchant: Merchant, decisions: Decisions): MerchantStatus {
+/**
+ * Steps carrying an unresolved blocking finding, for `effectiveStatus`.
+ *
+ * Passed in rather than computed, for the same reason `laneState` takes it:
+ * `artifacts.ts` imports this module, so deriving it here would be a cycle. The
+ * caller already holds it — `applyDecisions` builds it once per merchant.
+ */
+export type HaltedByMerchant = ReadonlyMap<string, ReadonlySet<StepId>>
+
+/** No halt information available. NAMED, not a bare empty map, so a caller that
+ *  genuinely has none says so — an inline `new Map()` reads as "nothing is
+ *  blocked", which is the assertion this whole change exists to stop. */
+export const NO_HALT_INFO: HaltedByMerchant = new Map()
+
+export function effectiveStatus(
+  merchant: Merchant,
+  decisions: Decisions,
+  halted: HaltedByMerchant = NO_HALT_INFO,
+): MerchantStatus {
+  /* A BLOCKING FINDING OUTRANKS EVERY OTHER STATUS, including the authored one.
+  
+     `merchant.status` is a hand-written fixture string and was the final word
+     here, so a file could sit at "On track" directly above its own pipeline
+     drawing a halt — the portfolio's summary contradicting the detail one click
+     away. Status is a claim ABOUT the evidence, so it cannot be authored
+     independently of it.
+  
+     Checked before the decision lookup deliberately: an approval taken at an
+     earlier step is not evidence that a later step is clean, and reading the
+     decision first would let a signed gate paper over a live finding. */
+  const stopped = halted.get(merchant.id)
+  if (stopped && stopped.size > 0) return "Exception"
+
   // Only the decision taken at the gate the merchant is STANDING AT can speak
   // for their status now. Asking by key rather than fetching their one record
   // and comparing its step: with a history to read, "their decision" is no
@@ -149,9 +181,13 @@ export function effectiveStatus(merchant: Merchant, decisions: Decisions): Merch
 /** Merchants with their live status applied. Pass the result anywhere that used
  *  to read the raw fixture — `portfolioKpis` already takes a list, so the KPI
  *  cards start updating with no further change. */
-export function applyDecisions(merchants: Merchant[], decisions: Decisions): Merchant[] {
+export function applyDecisions(
+  merchants: Merchant[],
+  decisions: Decisions,
+  halted: HaltedByMerchant = NO_HALT_INFO,
+): Merchant[] {
   return merchants.map((m) => {
-    const status = effectiveStatus(m, decisions)
+    const status = effectiveStatus(m, decisions, halted)
     return status === m.status ? m : { ...m, status }
   })
 }

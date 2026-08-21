@@ -11,7 +11,8 @@ import { BookProvider, useBook } from "@/components/acquirer/book-provider"
 import { applyDecisions, awaitingSignOff } from "@/lib/decisions"
 import { DecisionsProvider, useDecisions } from "@/components/acquirer/decisions-provider"
 import { ProgressProvider } from "@/components/acquirer/progress-provider"
-import { BrandThemeProvider } from "@/components/acquirer/brand-theme-provider"
+import { BrandThemeProvider, useBrandTheme } from "@/components/acquirer/brand-theme-provider"
+import { haltedByMerchant } from "@/lib/artifacts"
 import { DemoProvider } from "@/components/acquirer/demo-provider"
 import { Dashboard } from "@/components/ingenico/dashboard"
 import { Deployments } from "@/components/ingenico/deployments"
@@ -84,7 +85,15 @@ function PlatformApp() {
     [],
   )
 
-  const live = useMemo(() => applyDecisions(merchants, decisions), [merchants, decisions])
+  /* Halts feed the status here too. This list is what gets handed to the
+     journey, so without it a file could arrive at its own cockpit labelled
+     "On track" while the rail beneath the label drew the halt. */
+  const { themeFor } = useBrandTheme()
+  const halted = useMemo(() => haltedByMerchant(merchants, themeFor), [merchants, themeFor])
+  const live = useMemo(
+    () => applyDecisions(merchants, decisions, halted),
+    [merchants, decisions, halted],
+  )
   const selectedLive = selected ? live.find((m) => m.id === selected.id) : undefined
 
   function navigate(s: AnyScreen) {

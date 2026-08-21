@@ -5,6 +5,8 @@ import { ArrowRight, CornerDownLeft, Search, Sparkles, X } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { PIPELINE, portfolioKpis } from "@/lib/acquirer-data"
 import { applyDecisions } from "@/lib/decisions"
+import { haltedByMerchant } from "@/lib/artifacts"
+import { useBrandTheme } from "@/components/acquirer/brand-theme-provider"
 import { useDecisions } from "@/components/acquirer/decisions-provider"
 import { useBook } from "@/components/acquirer/book-provider"
 import type { Screen } from "@/components/acquirer/top-nav"
@@ -41,13 +43,21 @@ export function AgentBar({ onNavigate }: { onNavigate: (s: Screen) => void }) {
 
   const { merchants: book } = useBook()
   const { decisions } = useDecisions()
+  const { themeFor } = useBrandTheme()
+
+  /* The same halt map the portfolio derives its badges from. Omitting it would
+     make `stuck` count only merchants a fixture happens to LABEL "Exception",
+     so the palette would report fewer exceptions than the table it is
+     summarising — the docblock's promise broken by the exact mechanism it
+     warns about. */
+  const halted = useMemo(() => haltedByMerchant(book, themeFor), [book, themeFor])
 
   const answers = useMemo<Answer[]>(() => {
     // The LIVE book, with decisions applied. The docblock above promises these
     // figures cannot disagree with the table they came from, but the source was
     // the frozen fixture — so the agent went on naming merchants you had
     // already signed off, and had never heard of one you had just submitted.
-    const merchants = applyDecisions(book, decisions)
+    const merchants = applyDecisions(book, decisions, halted)
     const k = portfolioKpis(merchants)
     const waiting = merchants.filter((m) => m.status === "Needs sign-off")
     const stuck = merchants.filter((m) => m.status === "Exception")

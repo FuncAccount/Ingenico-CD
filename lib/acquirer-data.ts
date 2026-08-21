@@ -1193,6 +1193,24 @@ export interface Merchant {
    *  of "cleared" would assert an approval nobody gave, on precisely the
    *  merchants whose file was never opened. */
   riskLane: RiskLane
+  /**
+   * The band colour this merchant's branding was signed off against — the one
+   * physically on their terminals.
+   *
+   * REQUIRED AND NULLABLE, no default, for the same reason as `riskLane`.
+   * `null` means branding has not been approved yet, which is a DIFFERENT claim
+   * from "approved against the current design". An optional field would let a
+   * fixture omit it and be silently read as matching whatever the studio happens
+   * to be showing.
+   *
+   * This exists because the brand rules are evaluated against the LIVE studio
+   * theme and nothing recorded what a merchant had actually been approved on. So
+   * one swatch change retroactively put merchants into breach on a step they had
+   * passed weeks earlier — three of them with terminals installed and taking
+   * payments. A check with no "as at" cannot tell "this design is not allowed"
+   * apart from "this design is not the one we shipped".
+   */
+  brandingApprovedAgainst: string | null
   status: MerchantStatus
   submitted: string
   // underwriting detail (used on the sign-off screen)
@@ -1235,6 +1253,7 @@ export const MERCHANTS: Merchant[] = [
     // Its timeline already records identity verified and a risk score, so the
     // lane is past KYC and Pricing and sitting on the credit decision.
     riskLane: { verdict: "in-flight", at: 2 },
+    brandingApprovedAgainst: null,
     currentStep: 2,
     status: "Needs sign-off",
     submitted: "2 days ago",
@@ -1261,6 +1280,7 @@ export const MERCHANTS: Merchant[] = [
     terminals: "8× Move 5000",
     terminalCount: 8,
     riskLane: { verdict: "in-flight", at: 2 },
+    brandingApprovedAgainst: null,
     currentStep: 2,
     status: "Needs sign-off",
     submitted: "1 day ago",
@@ -1287,6 +1307,7 @@ export const MERCHANTS: Merchant[] = [
     terminals: "2× Desk 5000",
     terminalCount: 2,
     riskLane: { verdict: "cleared" },
+    brandingApprovedAgainst: null,
     currentStep: 4,
     status: "Needs sign-off",
     submitted: "4 days ago",
@@ -1307,6 +1328,7 @@ export const MERCHANTS: Merchant[] = [
     terminals: "6× A920 + 2× softPOS",
     terminalCount: 8,
     riskLane: { verdict: "cleared" },
+    brandingApprovedAgainst: "#00736D",
     currentStep: 8,
     status: "On track",
     submitted: "9 days ago",
@@ -1327,6 +1349,7 @@ export const MERCHANTS: Merchant[] = [
     terminals: "12× Desk 5000",
     terminalCount: 12,
     riskLane: { verdict: "cleared" },
+    brandingApprovedAgainst: "#2B2F77",
     currentStep: 6,
     status: "On track",
     submitted: "6 days ago",
@@ -1345,6 +1368,7 @@ export const MERCHANTS: Merchant[] = [
     terminals: "2× A920",
     terminalCount: 2,
     riskLane: { verdict: "cleared" },
+    brandingApprovedAgainst: null,
     currentStep: 3,
     status: "Exception",
     submitted: "3 days ago",
@@ -1364,6 +1388,7 @@ export const MERCHANTS: Merchant[] = [
     terminals: "5× Move 5000",
     terminalCount: 5,
     riskLane: { verdict: "cleared" },
+    brandingApprovedAgainst: "#12456B",
     currentStep: 7,
     status: "On track",
     submitted: "8 days ago",
@@ -1381,6 +1406,7 @@ export const MERCHANTS: Merchant[] = [
     terminals: "4× softPOS",
     terminalCount: 4,
     riskLane: { verdict: "cleared" },
+    brandingApprovedAgainst: "#3C3C3C",
     currentStep: 9,
     status: "Live",
     submitted: "12 days ago",
@@ -1398,6 +1424,7 @@ export const MERCHANTS: Merchant[] = [
     terminals: "1× A920",
     terminalCount: 1,
     riskLane: { verdict: "cleared" },
+    brandingApprovedAgainst: "#7A1E2B",
     currentStep: 5,
     status: "On track",
     submitted: "5 days ago",
@@ -1415,6 +1442,7 @@ export const MERCHANTS: Merchant[] = [
     terminals: "3× Move 5000 + softPOS",
     terminalCount: 4,
     riskLane: { verdict: "cleared" },
+    brandingApprovedAgainst: "#1F6F4A",
     currentStep: 9,
     status: "Live",
     submitted: "14 days ago",
@@ -1432,6 +1460,7 @@ export const MERCHANTS: Merchant[] = [
     terminals: "6× Desk 5000",
     terminalCount: 6,
     riskLane: { verdict: "cleared" },
+    brandingApprovedAgainst: "#2B2F77",
     currentStep: 6,
     status: "On track",
     submitted: "7 days ago",
@@ -1449,6 +1478,7 @@ export const MERCHANTS: Merchant[] = [
     terminals: "4× A920",
     terminalCount: 4,
     riskLane: { verdict: "cleared" },
+    brandingApprovedAgainst: "#4A4A4A",
     currentStep: 8,
     status: "On track",
     submitted: "10 days ago",
@@ -1479,6 +1509,7 @@ export const MERCHANTS: Merchant[] = [
     terminalCount: 2,
     // Intake three hours ago — screening has only just opened.
     riskLane: { verdict: "in-flight", at: 10 },
+    brandingApprovedAgainst: null,
     currentStep: 1,
     status: "On track",
     submitted: "3 hours ago",
@@ -1502,6 +1533,7 @@ export const MERCHANTS: Merchant[] = [
     // This is the one fixture sitting at Pricing — without it the middle step
     // of the lane is never seen in an active state.
     riskLane: { verdict: "in-flight", at: 11 },
+    brandingApprovedAgainst: null,
     currentStep: 1,
     status: "Needs sign-off",
     submitted: "1 day ago",
@@ -1528,6 +1560,7 @@ export const MERCHANTS: Merchant[] = [
     // work carries deferred-payment exposure, which is a limit question, and
     // sending the reader to KYC would be the wrong screen and the wrong remedy.
     riskLane: { verdict: "referred", at: 2 },
+    brandingApprovedAgainst: null,
     currentStep: 2,
     status: "With merchant",
     submitted: "6 days ago",
@@ -1566,6 +1599,7 @@ export const MERCHANTS: Merchant[] = [
     terminals: "6× A920 + 4× Move 5000",
     terminalCount: 10,
     riskLane: { verdict: "cleared" },
+    brandingApprovedAgainst: null,
     currentStep: 3,
     status: "Needs sign-off",
     submitted: "5 days ago",
@@ -1588,6 +1622,7 @@ export const MERCHANTS: Merchant[] = [
     terminals: "6× A920",
     terminalCount: 6,
     riskLane: { verdict: "cleared" },
+    brandingApprovedAgainst: "#4A4A4A",
     currentStep: 6,
     status: "Exception",
     submitted: "12 days ago",
@@ -1609,6 +1644,7 @@ export const MERCHANTS: Merchant[] = [
     terminals: "10× A920 + 2× Desk 5000",
     terminalCount: 12,
     riskLane: { verdict: "cleared" },
+    brandingApprovedAgainst: "#4A4A4A",
     currentStep: 7,
     status: "Exception",
     submitted: "16 days ago",
@@ -1631,6 +1667,7 @@ export const MERCHANTS: Merchant[] = [
     terminals: "2× Move 5000",
     terminalCount: 2,
     riskLane: { verdict: "cleared" },
+    brandingApprovedAgainst: "#4A4A4A",
     currentStep: 8,
     status: "With merchant",
     submitted: "18 days ago",

@@ -100,12 +100,40 @@ export function colourDistance(a: string, b: string): number {
 /** Terminal hardware constraint, not a style choice. */
 export const DISPLAY_NAME_LIMIT = 24
 
+/**
+ * The band a merchant starts on when they have supplied nothing.
+ *
+ * THIS USED TO BE `#0A1E3C` — the acquirer's own navy, and one of the two
+ * colours `brand-collision` exists to forbid. Every merchant without a `SEEDS`
+ * entry was therefore born in breach: 8 of 19 files opened with a blocking
+ * brand rule they had done nothing to earn, and the studio's own default was a
+ * colour the studio's own gate refused. A default has to be legal, or the rule
+ * is reporting on the platform rather than on the merchant.
+ *
+ * Deliberately a neutral graphite rather than a "nice" colour: it reads as
+ * unset, which is what it is, and it clears both identity colours by a wide
+ * margin (79 and 203 against a 50 clearance).
+ */
+export const UNBRANDED_BAND = "#4A4A4A"
+
 /** Seed a theme from the merchant record so nothing starts blank. */
 export function defaultTheme(merchant: Merchant): BrandTheme {
-  const seed = SEEDS[merchant.id] ?? { primary: "#0A1E3C", logo: false }
+  const seed = SEEDS[merchant.id] ?? { primary: UNBRANDED_BAND, logo: false }
+  /* An approved band OUTRANKS the seed, because it is the one that physically
+     exists. For a merchant whose terminals have shipped, the seed describes a
+     design intention while `brandingApprovedAgainst` describes the hardware on
+     the counter — opening the studio on anything else would show the acquirer a
+     device that is not the one their merchant has.
+
+     Resolved into a local BEFORE `ink` reads it: the ink is auto-selected for
+     legibility against the band, so deriving it from `seed.primary` while the
+     band came from the approved colour would pair an approved ground with ink
+     chosen for a different one — the single case the contrast rule cannot catch,
+     because it measures the pair it is given. */
+  const primary = merchant.brandingApprovedAgainst ?? seed.primary
   return {
-    primary: seed.primary,
-    ink: readableOn(seed.primary),
+    primary,
+    ink: readableOn(primary),
     displayName: merchant.name.slice(0, DISPLAY_NAME_LIMIT),
     receiptHeader: merchant.name,
     logoSupplied: seed.logo,
@@ -120,10 +148,21 @@ const SEEDS: Record<string, { primary: string; logo: boolean }> = {
   "m-atlas": { primary: "#7A1E2B", logo: true },
   "m-verde": { primary: "#E8C547", logo: false },
   "m-nordwind": { primary: "#1F6F4A", logo: true },
+  /* SolMar's seed IS the acquirer's cyan, and that is DELIBERATE — it is the
+     fixture that demonstrates the collision rule biting on a real submission.
+     Note its `brandingApprovedAgainst` is a different, legal teal: the merchant
+     asked for our cyan, was refused, and shipped on the corrected band. Seed and
+     approved band are allowed to differ precisely because one is a request and
+     the other is what got built. */
   "m-solmar": { primary: "#00B9E4", logo: false },
   "m-brightline": { primary: "#2B2F77", logo: true },
   "m-tavo": { primary: "#B04A2F", logo: false },
-  "m-fjord": { primary: "#0A1E3C", logo: true },
+  /* Was `#0A1E3C` — the acquirer's own navy, character for character. Not a
+     near-miss the clearance rule was tuned to catch but the identity colour
+     itself, so this merchant's file opened permanently in breach of a rule it
+     could never satisfy. Moved to a deep slate-blue that is recognisably their
+     own: 74 clear of our navy, against a 50 minimum. */
+  "m-fjord": { primary: "#12456B", logo: true },
   "m-lumen": { primary: "#3C3C3C", logo: false },
   "m-cedar": { primary: "#7A1E2B", logo: true },
   "m-havenport": { primary: "#1F6F4A", logo: false },
@@ -296,6 +335,38 @@ export function checkBrand(theme: BrandTheme): BrandRule[] {
  *  stops you: it is information, not a verdict. */
 export function blockers(rules: BrandRule[]): BrandRule[] {
   return rules.filter((r) => r.blocking && r.state === "fail")
+}
+
+/**
+ * The current design no longer matches the hardware already in the field.
+ *
+ * A SEPARATE CLAIM FROM A BLOCKING RULE, and the distinction is the whole point.
+ * A brand rule asks "may we build this?"; drift asks "does what we already built
+ * still match?". Collapsing them is how a colour change in the studio came to
+ * halt six merchants on a Branding step they had passed weeks earlier — a
+ * terminal on a shop counter was branded under the standard in force at the
+ * time, and editing a swatch today does not un-approve it. What it creates is a
+ * refresh backlog, which needs a visit, not an approval.
+ *
+ * Returns null when there is nothing to say — either nothing has shipped, or the
+ * estate still matches. Never returns a "no drift" object: an advisory that
+ * renders even when it has no finding trains people to ignore it.
+ */
+export interface EstateDrift {
+  /** What the terminals in the field actually carry. */
+  approved: string
+  /** What the studio is currently showing. */
+  proposed: string
+  terminalCount: number
+}
+
+export function estateDrift(merchant: Merchant, theme: BrandTheme): EstateDrift | null {
+  const approved = merchant.brandingApprovedAgainst
+  // Nothing approved means nothing is out there to have drifted. This is not the
+  // same as "matches" — hence null rather than a cleared result.
+  if (!approved) return null
+  if (approved.toLowerCase() === theme.primary.toLowerCase()) return null
+  return { approved, proposed: theme.primary, terminalCount: merchant.terminalCount }
 }
 
 /* ----------------------------------------------------------------- receipt */

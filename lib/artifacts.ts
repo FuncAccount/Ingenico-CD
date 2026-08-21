@@ -1381,7 +1381,7 @@ export function taskDetail(stepId: StepId, taskIndex: number, merchant: Merchant
   return SOFTWARE_ONLY_DETAIL[`${stepId}.${taskIndex}`] ?? fallback
 }
 
-import { blockers, type BrandRule } from "./branding"
+import { blockers, checkBrand, type BrandRule, type BrandTheme } from "./branding"
 
 /**
  * A failure recorded inside a COMPLETED task's own artefact.
@@ -1418,6 +1418,29 @@ export interface TaskException {
  */
 export interface ExceptionContext {
   brandRules: BrandRule[]
+}
+
+/**
+ * Whether this merchant's branding is already settled on physical hardware.
+ *
+ * THE "AS AT" THE BRAND CHECK NEVER HAD. `checkBrand(theme)` takes a theme and
+ * nothing else — no merchant, no date — so it can only ever answer "does this
+ * design comply *now*". That is the right question while a design is being
+ * chosen and the wrong one afterwards: a terminal on a shop counter was branded
+ * under the standard in force when it was approved, and editing a swatch today
+ * does not reach into the field and un-approve it.
+ *
+ * Without this, one colour change put six merchants into breach on a Branding
+ * step they had passed weeks earlier, three of them already installed and taking
+ * payments — and the remedy on offer was "approve the branding", which is not
+ * something you can do to a terminal that has already shipped.
+ *
+ * What a mismatch actually creates is a REFRESH BACKLOG, reported as drift by
+ * `estateDrift` rather than as a halt. Two different claims, two different
+ * remedies: one needs an approval, the other needs a visit.
+ */
+export function brandingSettled(merchant: Merchant): boolean {
+  return merchant.brandingApprovedAgainst !== null
 }
 
 export function taskException(
@@ -1462,6 +1485,9 @@ export function taskException(
       // why the theme task carries the exception as well as the checks task:
       // the blocking rule is on screen under both of their ticks.
       if (a.focus === "assets") return null
+      // A design already on hardware in the field cannot be stopped by a rule
+      // applied afterwards — see `brandingSettled`.
+      if (brandingSettled(merchant)) return null
       const failed = blockers(ctx.brandRules)
       if (failed.length === 0) return null
       return {
@@ -1674,6 +1700,31 @@ export function haltedSteps(merchant: Merchant, ctx: ExceptionContext): Readonly
   const out = new Set<StepId>()
   for (const s of PIPELINE) {
     if (blockingFinding(s.id, merchant, ctx)) out.add(s.id)
+  }
+  return out
+}
+
+/**
+ * `haltedSteps` for a whole book, in the shape `effectiveStatus` consumes.
+ *
+ * ONE builder, deliberately. Four surfaces need a merchant's status — the
+ * portfolio table, the KPI cards, the nav badge and the agent bar — and if each
+ * assembled this map itself they would differ in exactly the way that produced
+ * the original bug: whichever one forgot would go on reporting "On track" over a
+ * halt the others could see.
+ *
+ * `themeFor` is passed in because the brand rules are measured against the LIVE
+ * studio theme, which lives in React state. A default would have to invent one,
+ * and inventing a theme here is how a book-level read comes to disagree with the
+ * screen the user is actually looking at.
+ */
+export function haltedByMerchant(
+  merchants: readonly Merchant[],
+  themeFor: (m: Merchant) => BrandTheme,
+): ReadonlyMap<string, ReadonlySet<StepId>> {
+  const out = new Map<string, ReadonlySet<StepId>>()
+  for (const m of merchants) {
+    out.set(m.id, haltedSteps(m, { brandRules: checkBrand(themeFor(m)) }))
   }
   return out
 }

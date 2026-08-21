@@ -12,12 +12,13 @@ import { useMemo, useState } from "react"
 import { AlertTriangle, Check, Info, Lock, Wand2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { Merchant } from "@/lib/acquirer-data"
-import type { BrandFocus } from "@/lib/artifacts"
+import { brandingSettled, type BrandFocus } from "@/lib/artifacts"
 import {
   ACQUIRER,
   DISPLAY_NAME_LIMIT,
   blockers,
   checkBrand,
+  estateDrift,
   contrast,
   markVariantFor,
   readableOn,
@@ -338,6 +339,13 @@ export function BrandStudio({
   const [screen, setScreen] = useState<ScreenId>("welcome")
   const rules = useMemo(() => checkBrand(theme), [theme])
   const blocked = blockers(rules)
+  /* Two different questions, deliberately two values. `settled` asks whether a
+     band has ever been approved onto hardware — which is what disarms the gate;
+     `drift` asks whether the current design has since moved away from it, and is
+     null when it has not. A merchant can be settled with no drift (the common
+     case), and that must render as neither an alarm nor a blocking count. */
+  const settled = brandingSettled(merchant)
+  const drift = useMemo(() => estateDrift(merchant, theme), [merchant, theme])
 
   const set = <K extends keyof BrandTheme>(k: K, v: BrandTheme[K]) => onTheme({ ...theme, [k]: v })
 
@@ -473,6 +481,30 @@ export function BrandStudio({
       </div>
       )}
 
+      {/* DRIFT, not a breach. Sits above the checks because it reframes them:
+          once terminals are in the field, a failing rule is no longer a thing
+          you can approve your way out of. */}
+      {drift && (
+        <div className="rounded-xl border border-warning/40 bg-warning/8 p-3">
+          <p className="text-xs font-semibold text-warning">
+            Estate does not match this design
+          </p>
+          <p className="mt-1.5 text-xs leading-relaxed text-foreground/80">
+            {drift.terminalCount}{" "}
+            {drift.terminalCount === 1 ? "terminal is" : "terminals are"} in the field
+            branded{" "}
+            <span className="font-mono font-semibold">{drift.approved}</span>, the band
+            this merchant was approved on. The studio is showing{" "}
+            <span className="font-mono font-semibold">{drift.proposed}</span>.
+          </p>
+          <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
+            Changing the design here does not change hardware already installed — it
+            schedules a refresh. The checks below describe the proposed design, not the
+            devices on the counter.
+          </p>
+        </div>
+      )}
+
       {/* Gate — the whole subject of the checks task, and a summary on the
           theme task so a failing edit is visible while it is being made. */}
       <div className="overflow-hidden rounded-xl border border-border/70 bg-white/60">
@@ -480,15 +512,27 @@ export function BrandStudio({
           <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             Brand checks
           </p>
+          {/* "N blocking" is a claim about what CANNOT PROCEED, so it is
+              withheld once branding is settled: the build passed this gate and
+              the terminals shipped, and a red count there sent people to
+              re-approve something no approval can reach. The rules still render
+              — they describe the proposed design honestly — but the headline
+              says what they now are. */}
           <span
             className={cn(
               "rounded px-1.5 py-0.5 text-[10px] font-bold",
-              blocked.length
-                ? "bg-destructive/12 text-destructive"
-                : "bg-success/12 text-success",
+              settled
+                ? "bg-secondary text-muted-foreground"
+                : blocked.length
+                  ? "bg-destructive/12 text-destructive"
+                  : "bg-success/12 text-success",
             )}
           >
-            {blocked.length ? `${blocked.length} blocking` : "All clear"}
+            {settled
+              ? "Reference only"
+              : blocked.length
+                ? `${blocked.length} blocking`
+                : "All clear"}
           </span>
         </div>
         <div className="divide-y divide-border/50">

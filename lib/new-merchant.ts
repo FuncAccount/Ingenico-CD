@@ -100,6 +100,12 @@ export function createMerchant(draft: MerchantDraft, existingIds: ReadonlySet<st
     // Capture is where it starts, and capture has not run yet.
     currentStep: 1,
 
+    // Nothing has been approved and nothing has shipped, so there is no band on
+    // any hardware to compare against. `null` says exactly that. Seeding it with
+    // the studio's starting colour would record an approval that never happened,
+    // on the one file guaranteed not to have had one.
+    brandingApprovedAgainst: null,
+
     // IN FLIGHT AT THE FIRST RISK STEP, never "cleared". `riskLane` is required
     // without a default precisely so this decision is made explicitly, and the
     // honest answer for a file submitted seconds ago is that KYC has not begun.

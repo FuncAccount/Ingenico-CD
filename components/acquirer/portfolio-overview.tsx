@@ -20,8 +20,12 @@ import {
   type PipelineStep,
   type StepId,
 } from "@/lib/acquirer-data"
-import { haltedSteps, pendingCheckSteps as pendingChecks } from "@/lib/artifacts"
-import { checkBrand } from "@/lib/branding"
+import { haltedByMerchant, pendingCheckSteps as pendingChecks } from "@/lib/artifacts"
+
+/** A merchant the book-level map has no entry for. Named rather than an inline
+ *  `new Set()`, which reads as a measured "nothing is blocked" — the map is
+ *  built from the same list, so a miss is a bug, not a clean result. */
+const EMPTY_HALTS: ReadonlySet<StepId> = new Set()
 import { useBrandTheme } from "@/components/acquirer/brand-theme-provider"
 import { PulseDot } from "@/components/acquirer/in-progress-tag"
 import { applyDecisions } from "@/lib/decisions"
@@ -77,19 +81,16 @@ function segTone(state: "done" | "active" | "upcoming") {
 function MiniTrack({
   merchant,
   progressed,
+  halted,
 }: {
   merchant: Merchant
   progressed: ReadonlySet<StepId>
+  /* Passed in rather than derived here. This used to call `haltedSteps` itself,
+     which was correct but was a SECOND computation of the same judgement — and
+     the row's status badge, now derived from the same findings, would have been
+     free to disagree with the track beside it. One set, two renderings. */
+  halted: ReadonlySet<StepId>
 }) {
-  /* Passes the REAL halt set, not `NO_HALTS`. `themeFor` is available on every
-     screen, so this surface genuinely can evaluate findings — and this is the
-     same false tick as the journey's, multiplied by the size of the book: every
-     row drew Configure and Test complete behind a halted Branding. */
-  const { themeFor } = useBrandTheme()
-  const halted = useMemo(
-    () => haltedSteps(merchant, { brandRules: checkBrand(themeFor(merchant)) }),
-    [merchant, themeFor],
-  )
   const stateOf = (s: PipelineStep) => laneState(merchant, s, progressed, halted)
   const doneIn = (steps: PipelineStep[]) =>
     steps.filter((s) => stateOf(s) === "done").length
@@ -226,9 +227,17 @@ export function PortfolioOverview({
   // the row badges each read the frozen fixture, so a merchant you had just
   // signed off went on being counted and labelled as awaiting you — and a
   // merchant you had just submitted never appeared at all.
+  /* Status is DERIVED from the findings, not read off the fixture. Without this
+     a row rendered "On track" while the progress cell immediately to its left
+     drew a halt — one row making two contradictory claims about one file, which
+     is the summary-versus-detail failure this app exists to prevent.
+     Built once for the whole book and passed down, so the badge and the track
+     are reading the same set rather than each deriving their own. */
+  const { themeFor: themeForBook } = useBrandTheme()
+  const halted = useMemo(() => haltedByMerchant(book, themeForBook), [book, themeForBook])
   const merchants = useMemo(
-    () => portfolioOrder(applyDecisions(book, decisions)),
-    [book, decisions],
+    () => portfolioOrder(applyDecisions(book, decisions, halted)),
+    [book, decisions, halted],
   )
   const kpis = portfolioKpis(merchants)
 
@@ -356,7 +365,11 @@ export function PortfolioOverview({
                       {/* The session's own progress, so a row agrees with the
                           journey rather than judging the file against the bare
                           fixture. */}
-                      <MiniTrack merchant={m} progressed={progressFor(m.id)} />
+                      <MiniTrack
+                        merchant={m}
+                        progressed={progressFor(m.id)}
+                        halted={halted.get(m.id) ?? EMPTY_HALTS}
+                      />
                     </td>
                     <td className="px-5 py-4">
                       <span
