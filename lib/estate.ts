@@ -527,7 +527,7 @@ export function automationCensus(rows: EstateRow[]): AutomationCensus {
       // `NO_HALTS` twice: this rollup can evaluate neither findings nor
       // unresolved checks, so it has nothing to say about either question.
       if (
-        laneState(r.merchant, step, NO_SESSION_PROGRESS, NO_HALTS, NO_HALTS, NO_SESSION_PROGRESS) !==
+        laneState(r.merchant, step, NO_SESSION_PROGRESS, NO_HALTS, NO_SESSION_PROGRESS) !==
         "done"
       )
         continue

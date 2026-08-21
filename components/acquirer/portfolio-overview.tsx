@@ -103,7 +103,7 @@ function MiniTrack({
      the two roles coincide here. The book-level read has no session to measure
      unresolved checks against, and inventing a wider set for the ordering
      argument would make this track disagree with the badge beside it. */
-  const stateOf = (s: PipelineStep) => laneState(merchant, s, progressed, halted, halted, wasReset)
+  const stateOf = (s: PipelineStep) => laneState(merchant, s, progressed, halted, wasReset)
   const doneIn = (steps: PipelineStep[]) =>
     steps.filter((s) => stateOf(s) === "done").length
 

@@ -27,7 +27,7 @@
 import type { Merchant, PipelineStep, StepId } from "@/lib/acquirer-data"
 import { PIPELINE, REJOIN_STEP, laneState } from "@/lib/acquirer-data"
 import type { ExceptionContext } from "@/lib/artifacts"
-import { blockingFinding, haltedSteps, openSteps } from "@/lib/artifacts"
+import { blockingFinding, openSteps } from "@/lib/artifacts"
 
 /**
  * Every step that must be finished before hardware may leave: both lanes plus
@@ -161,25 +161,23 @@ export function shipClearance(
      is not done. */
   const halted = openSteps(merchant, ctx, played)
 
-  /* The ORDERING half of the same judgement — findings only, and the narrower
-     set on purpose.
+  /* A SECOND, NARROWER SET (findings only) was derived here and handed to
+     `laneState` as the ordering half of the judgement, on the argument that an
+     unanswered check should not report the steps behind it as unreached. It is
+     gone: `laneState` now asks one question of one set, and this gate reads
+     `halted` above for both roles.
   
-     `halted` above is the right answer to "is this step finished", and this
-     gate must keep it: an unanswered check is a real reason not to release
-     parcels, which is the Nordwind case described above. It is the wrong
-     answer to "has the file got this far". Passing the union for both roles
-     made one unanswered check on R1 report every step behind it as unreached,
-     so a completed Underwriting could never be recorded — the rail refused the
-     tick and this gate would then list a finished stage among its holds.
-  
-     Each step still lands its own hold on its own evidence, so nothing is
-     released that should not be; what changes is that a step is no longer
-     accused of being unreached because a DIFFERENT step is waiting on a
-     provider. */
-  const blocking = haltedSteps(merchant, ctx, played)
+     Keep the hazard it was written against in view, because it is real — an
+     unanswered check on R1 does hold the whole lane, and this gate must not
+     then describe a stage as unreached in wording that implies nobody worked
+     on it. That is a job for the HOLD'S SENTENCE, which names the step and the
+     reason, and not for a second set quietly disagreeing with the rail about
+     what "done" means. The disagreement was the expensive part: a gate reading
+     one set beside a rail reading another produced a release decision no
+     reader could reconstruct from the screen. */
 
   for (const step of SHIP_PREREQUISITES) {
-    const state = laneState(merchant, step, progressed, halted, blocking, wasReset)
+    const state = laneState(merchant, step, progressed, halted, wasReset)
 
     /* A finding is only counted on a step the file has actually REACHED.
        `blockingFinding` derives from artefacts, which exist for every step
@@ -245,7 +243,7 @@ export function shipClearance(
     // parcels just as surely as one the fixture placed at Install, and reading
     // only the fixture would keep offering to withhold a dispatch that has
     // already gone.
-    released: laneState(merchant, shipStep, progressed, halted, blocking, wasReset) === "done",
+    released: laneState(merchant, shipStep, progressed, halted, wasReset) === "done",
   }
 }
 

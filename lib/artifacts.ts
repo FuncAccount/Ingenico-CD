@@ -2009,7 +2009,7 @@ export function pendingCheckSteps(merchant: Merchant): { step: StepId; count: nu
     // REACHED-ness only, and a halted step is "active" — still reached — so the
     // count returned for it is the same either way.
     if (
-      laneState(merchant, s, NO_SESSION_PROGRESS, NO_HALTS, NO_HALTS, NO_SESSION_PROGRESS) ===
+      laneState(merchant, s, NO_SESSION_PROGRESS, NO_HALTS, NO_SESSION_PROGRESS) ===
       "upcoming"
     )
       continue
@@ -2398,7 +2398,38 @@ export function artifactFor(
         title: "Entity verification",
         note: "Each check names what it compared, so a pass can be re-run rather than taken on trust.",
         rows: [
-          { label: "Registry match", state: uw?.identity ? "pass" : "warn", evidence: uw?.identity ?? "No registry response on file" },
+          /* AN ABSENT RECORD IS NOT A FAILED CHECK — and the row two lines
+             below already knew it. `edgeCase` is a PROBLEM field, so its
+             absence means "nothing to report" and renders a pass. `identity`
+             is an EVIDENCE field, and reading its absence through the same
+             truthiness test inverted the polarity: the 20 merchants carrying
+             no authored underwriting detail every one showed a permanent
+             amber "No registry response on file" — a failed check
+             manufactured out of a missing fixture, sitting on files whose own
+             `riskLane.verdict` said `cleared`.
+
+             Not one merchant in the app is authored WITH a registry gap: all
+             three that carry an `underwriting` record set `identity`. So
+             every instance of this warn was the bug, never a scenario.
+
+             And it could not be cleared. `withResolvedChecks` returns early
+             on `!uw`, so for exactly the merchants showing the warn the
+             "Simulate: outstanding check answered" lever recorded itself as
+             used — its Undo twin appeared — and changed nothing. That is the
+             worst shape a control can take: not disabled, not failing, just
+             silently inert, which is why the step could not be completed no
+             matter which button was pressed.
+
+             The three cases are now named instead of collapsed: no record =
+             nothing authored against this file, a record WITH evidence = pass
+             and quote it, a record WITHOUT it = the authored gap. */
+          {
+            label: "Registry match",
+            state: !uw || uw.identity ? "pass" : "warn",
+            evidence: uw
+              ? (uw.identity ?? "No registry response on file")
+              : "Company number matched to the active filing",
+          },
           { label: "Directors", state: "pass", evidence: "All listed directors matched to the filing" },
           { label: "Beneficial ownership", state: uw?.edgeCase ? "warn" : "pass", evidence: uw?.edgeCase ?? "All owners above 25% identified" },
         ],

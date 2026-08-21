@@ -352,7 +352,7 @@ export function MerchantJourney({
     
        The two are now named separately at the call site, so neither question
        can quietly borrow the other's answer. */
-    return laneState(current, step, progressed, flaggedSteps, findingSteps, wasReset)
+    return laneState(current, step, progressed, flaggedSteps, wasReset)
   }
 
   const focused = PIPELINE.find((s) => s.id === focusStep)!
@@ -624,7 +624,7 @@ export function MerchantJourney({
              to receive `findingSteps` alone while the rail got the union, and
              that single mismatch is what let the gate open a step the rail
              would then never record as done. */
-          awaiting={blockingPredecessor(current, focused, progressed, flaggedSteps, findingSteps, wasReset)}
+          awaiting={blockingPredecessor(current, focused, progressed, flaggedSteps, wasReset)}
           progressed={progressed}
           played={played}
           onPlayed={markStepPlayed}
