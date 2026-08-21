@@ -18,6 +18,7 @@ import {
   type Merchant,
 } from "@/lib/acquirer-data"
 import { liveDecisionAtStep, signOffQueue } from "@/lib/decisions"
+import { riskAssessment } from "@/lib/underwriting"
 import { decisionBasis } from "@/lib/decision-basis"
 import { useDecisions } from "@/components/acquirer/decisions-provider"
 import { useBrandTheme } from "@/components/acquirer/brand-theme-provider"
@@ -300,10 +301,24 @@ function UnderwritingBody({ merchant }: { merchant: Merchant }) {
   // could be missing for other reasons, and "not scored yet" and "cannot be
   // scored" are different sentences.
   const scoreWithheld = (uw.documentsOutstanding?.length ?? 0) > 0
+  /* THE SCORE IS DERIVED HERE, NOT READ OFF THE RECORD.
+  
+     `uw.riskScore` was a stored duplicate of something `riskAssessment` already
+     computes from the factor breakdown, and the two disagreed: the demo lever
+     wrote a flat 34 while the assessment derived 26 from the same file, so this
+     screen and the risk desk printed different numbers for one fact. Reading
+     the assessment means the figure here is always the one the breakdown adds
+     up to.
+  
+     It also removes the reason the lever had to invent a score at all. With the
+     field gone, the arrival of documents no longer has to pretend it scored
+     anything — the assessment simply becomes computable once the bundle is
+     complete, and refuses while it is not. */
+  const assessment = riskAssessment(merchant)
   const riskTone =
-    uw.riskBand === "Low"
+    assessment.band === "Low"
       ? "text-success"
-      : uw.riskBand === "Medium"
+      : assessment.band === "Medium"
         ? "text-warning"
         : "text-destructive"
   return (
@@ -346,9 +361,9 @@ function UnderwritingBody({ merchant }: { merchant: Merchant }) {
             ) : (
               <p className="mt-0.5 flex items-baseline gap-2">
                 <span className="font-mono text-lg font-semibold text-foreground tabular-nums">
-                  {uw.riskScore}
+                  {assessment.score}
                 </span>
-                <span className={cn("text-sm font-semibold", riskTone)}>{uw.riskBand}</span>
+                <span className={cn("text-sm font-semibold", riskTone)}>{assessment.band}</span>
               </p>
             )}
           </div>
