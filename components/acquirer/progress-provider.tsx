@@ -53,6 +53,9 @@ interface ProgressContextValue {
   played: Record<string, ReadonlySet<StepId>>
   /** The played set for one merchant, never undefined. */
   playedFor: (merchantId: string) => ReadonlySet<StepId>
+  /** Stages explicitly reset by the acquirer, so the rail can stop drawing a
+   *  completion tick over a panel that says nothing has run. */
+  resetFor: (merchantId: string) => ReadonlySet<StepId>
   /** Record that a run was started here. Idempotent. Called when the run is
    *  PLAYED, not when it succeeds — that is the entire point. */
   markPlayed: (merchantId: string, step: StepId) => void
@@ -80,6 +83,9 @@ const ProgressContext = createContext<ProgressContextValue | null>(null)
 export function ProgressProvider({ children }: { children: React.ReactNode }) {
   const [progress, setProgress] = useState<Record<string, ReadonlySet<StepId>>>({})
   const [played, setPlayed] = useState<Record<string, ReadonlySet<StepId>>>({})
+  /** Stages the acquirer has explicitly reset, which is a claim the fixture's
+   *  own position cannot express and the two sets above cannot retract. */
+  const [reset, setReset] = useState<Record<string, ReadonlySet<StepId>>>({})
 
   const markPlayed = useCallback((merchantId: string, step: StepId) => {
     setPlayed((prev) => {
@@ -87,6 +93,18 @@ export function ProgressProvider({ children }: { children: React.ReactNode }) {
       if (current?.has(step)) return prev
       const next = new Set(current ?? [])
       next.add(step)
+      return { ...prev, [merchantId]: next }
+    })
+    /* A run RETIRES the reset. Without this the flag would be permanent: the
+       stage was shown fresh once and could never report itself finished again,
+       however many times the agent ran — the mirror image of the bug the reset
+       was added to fix. Playing the agent is exactly the event that makes
+       "never run here" false. */
+    setReset((prev) => {
+      const current = prev[merchantId]
+      if (!current?.has(step)) return prev
+      const next = new Set(current)
+      next.delete(step)
       return { ...prev, [merchantId]: next }
     })
   }, [])
@@ -119,6 +137,25 @@ export function ProgressProvider({ children }: { children: React.ReactNode }) {
     // record would put the step back to "not finished" while still treating its
     // findings as evidenced — a cleared stage that goes on reporting a halt.
     setPlayed(drop)
+
+    /* AND A POSITIVE RECORD THAT THIS STAGE IS BEING SHOWN FRESH.
+    
+       Subtracting from two sets can only retire progress made THIS SESSION. A
+       step the fixture already places behind the merchant's position was never
+       in either set, so both `drop`s were no-ops and the rail — which reads
+       position — went on drawing a solid completion tick over a panel reading
+       "Ready · 0/4 tasks · Play agent run". The cockpit knew (it holds a
+       `resetSteps` ref) but nothing outside it could.
+    
+       So the reset is recorded rather than merely subtracted, and `laneState`
+       reads this set alongside the others. */
+    setReset((prev) => {
+      const current = prev[merchantId]
+      if (current?.has(step)) return prev
+      const next = new Set(current ?? [])
+      next.add(step)
+      return { ...prev, [merchantId]: next }
+    })
   }, [])
 
   const progressFor = useCallback(
@@ -131,9 +168,14 @@ export function ProgressProvider({ children }: { children: React.ReactNode }) {
     [played],
   )
 
+  const resetFor = useCallback(
+    (merchantId: string) => reset[merchantId] ?? NO_SESSION_PROGRESS,
+    [reset],
+  )
+
   const value = useMemo(
-    () => ({ progress, progressFor, played, playedFor, markPlayed, markDone, clearStep }),
-    [progress, progressFor, played, playedFor, markPlayed, markDone, clearStep],
+    () => ({ progress, progressFor, played, playedFor, resetFor, markPlayed, markDone, clearStep }),
+    [progress, progressFor, played, playedFor, resetFor, markPlayed, markDone, clearStep],
   )
 
   return <ProgressContext.Provider value={value}>{children}</ProgressContext.Provider>

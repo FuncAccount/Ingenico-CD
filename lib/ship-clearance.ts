@@ -137,7 +137,7 @@ export function shipClearance(
   const halted = haltedSteps(merchant, ctx, played)
 
   for (const step of SHIP_PREREQUISITES) {
-    const state = laneState(merchant, step, progressed, halted)
+    const state = laneState(merchant, step, progressed, halted, wasReset)
 
     /* A finding is only counted on a step the file has actually REACHED.
        `blockingFinding` derives from artefacts, which exist for every step
@@ -203,7 +203,7 @@ export function shipClearance(
     // parcels just as surely as one the fixture placed at Install, and reading
     // only the fixture would keep offering to withhold a dispatch that has
     // already gone.
-    released: laneState(merchant, shipStep, progressed, halted) === "done",
+    released: laneState(merchant, shipStep, progressed, halted, wasReset) === "done",
   }
 }
 

@@ -1878,7 +1878,7 @@ export function pendingCheckSteps(merchant: Merchant): { step: StepId; count: nu
     // the brand rule against. Safe here specifically because this gates
     // REACHED-ness only, and a halted step is "active" — still reached — so the
     // count returned for it is the same either way.
-    if (laneState(merchant, s, NO_SESSION_PROGRESS, NO_HALTS) === "upcoming") continue
+    if (laneState(merchant, s, NO_SESSION_PROGRESS, NO_HALTS, NO_SESSION_PROGRESS) === "upcoming") continue
     /* NO_SESSION_PROGRESS is the honest argument for a book-level read: this
        surface has no session, so the only runs it can vouch for are the ones
        the file's own position implies. It will therefore under-report a wait

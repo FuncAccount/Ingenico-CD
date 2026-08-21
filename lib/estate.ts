@@ -524,7 +524,7 @@ export function automationCensus(rows: EstateRow[]): AutomationCensus {
       // measured against a theme held in session, and a census of every book
       // has no session to measure. The alternative is not a better number here
       // but a fabricated one.
-      if (laneState(r.merchant, step, NO_SESSION_PROGRESS, NO_HALTS) !== "done") continue
+      if (laneState(r.merchant, step, NO_SESSION_PROGRESS, NO_HALTS, NO_SESSION_PROGRESS) !== "done") continue
       stepsCleared += 1
       if (step.band === "Automate") unattended += 1
     }

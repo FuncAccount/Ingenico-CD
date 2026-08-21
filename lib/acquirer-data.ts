@@ -895,6 +895,13 @@ export function laneState(
    *  that same confident claim, so surfaces that genuinely cannot evaluate
    *  findings pass `NO_HALTS` and say so. */
   halted: ReadonlySet<StepId>,
+  /** Stages the acquirer has explicitly reset to be shown fresh.
+   *
+   *  REQUIRED, like the two above and for the same reason: a defaulted empty
+   *  set is a confident "nothing was reset", which is exactly the claim that
+   *  let the rail tick a stage the cockpit was showing as never run. Callers
+   *  with no session pass `NO_SESSION_PROGRESS`, which says so. */
+  wasReset: ReadonlySet<StepId>,
 ): "done" | "active" | "upcoming" {
   /* A BLOCKING FINDING VETOES COMPLETION — on every lane, at any position.
   
@@ -912,6 +919,20 @@ export function laneState(
      working. "upcoming" would be worse than the tick it replaces: it would file
      a step that ran and failed as one that never started. */
   if (halted.has(step.id)) return "active"
+
+  /* A RESET STAGE IS NOT DONE EITHER — same reasoning, different claim.
+  
+     "Reset stage" asserts that this step is being shown for the first time, and
+     the cockpit honours it: badge "Ready", "0/4 tasks", "Play agent run". But
+     the assertion lived in a ref inside the cockpit, so the rail — reading lane
+     position — went on drawing a solid completion tick directly beside it. One
+     surface said the step had never run while the other said it was finished.
+  
+     "upcoming", NOT "active", and this is the one place that differs from the
+     halt above. A halted step ran and stopped, so filing it as never-started
+     would lose that. A reset step is being shown as though it had not run at
+     all, so "upcoming" is precisely the claim being made. */
+  if (wasReset.has(step.id)) return "upcoming"
 
   if (step.lane === "risk") {
     const lane = merchant.riskLane
@@ -1180,12 +1201,16 @@ export function blockingPredecessor(
    *  scan would walk straight past it and report "nothing is blocking you" to a
    *  step that cannot in fact start. */
   halted: ReadonlySet<StepId>,
+  /** Threaded through for the same reason again: a reset step reads as
+   *  "upcoming", so without this the scan would judge it against a stale
+   *  doneness and could name the wrong blocker — or none. */
+  wasReset: ReadonlySet<StepId>,
 ): PipelineStep | null {
-  if (laneState(merchant, step, progressed, halted) !== "upcoming") return null
+  if (laneState(merchant, step, progressed, halted, wasReset) !== "upcoming") return null
   const path = pathOf(step)
   const here = path.findIndex((s) => s.id === step.id)
   for (let i = 0; i < here; i++) {
-    if (laneState(merchant, path[i], progressed, halted) !== "done") return path[i]
+    if (laneState(merchant, path[i], progressed, halted, wasReset) !== "done") return path[i]
   }
   return null
 }

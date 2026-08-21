@@ -91,7 +91,7 @@ function MiniTrack({
      free to disagree with the track beside it. One set, two renderings. */
   halted: ReadonlySet<StepId>
 }) {
-  const stateOf = (s: PipelineStep) => laneState(merchant, s, progressed, halted)
+  const stateOf = (s: PipelineStep) => laneState(merchant, s, progressed, halted, NO_SESSION_PROGRESS)
   const doneIn = (steps: PipelineStep[]) =>
     steps.filter((s) => stateOf(s) === "done").length
 
