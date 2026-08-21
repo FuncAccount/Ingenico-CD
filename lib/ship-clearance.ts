@@ -27,7 +27,7 @@
 import type { Merchant, PipelineStep, StepId } from "@/lib/acquirer-data"
 import { PIPELINE, REJOIN_STEP, laneState } from "@/lib/acquirer-data"
 import type { ExceptionContext } from "@/lib/artifacts"
-import { blockingFinding, haltedSteps } from "@/lib/artifacts"
+import { blockingFinding, openSteps } from "@/lib/artifacts"
 
 /**
  * Every step that must be finished before hardware may leave: both lanes plus
@@ -144,7 +144,22 @@ export function shipClearance(
      same evidence rather than reaching the same answer twice by different
      routes — and, more importantly, propagates the halt to the step's
      SUCCESSORS, which this loop had no way to do. */
-  const halted = haltedSteps(merchant, ctx, played)
+  /* `openSteps`, NOT `haltedSteps` — the set the rail beside this panel uses.
+  
+     Nordwind Apotheke had KYC waiting on an unanswered check, so the rail drew
+     Pricing and Underwriting as unreached, while this gate two inches to the
+     right read "all 8 prior steps across both lanes have passed, there was
+     nothing left to decide" and cleared the parcels. Ten of twenty-nine files
+     released that way.
+  
+     Neither surface was computing anything wrong. They were answering ONE
+     QUESTION FROM DIFFERENT EVIDENCE: a halt is a finding, but an unanswered
+     check is equally a reason the step is not finished, and the narrower set
+     let this gate treat "we never heard back" as a pass. An unresolved check
+     lands as an `incomplete` hold rather than a `failed` one, which is the
+     honest reading — nothing was found against the merchant, the work simply
+     is not done. */
+  const halted = openSteps(merchant, ctx, played)
 
   for (const step of SHIP_PREREQUISITES) {
     const state = laneState(merchant, step, progressed, halted, wasReset)
