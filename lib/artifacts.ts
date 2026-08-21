@@ -28,7 +28,7 @@ import { MODELS, configProfile, orderLines, type ModelId } from "@/lib/devices"
 // initialised by the time either call runs. Keep it that way: a top-level
 // constant derived from these would evaluate mid-cycle and read `undefined`.
 import { defaultAcceptance, liveSchemeLabel } from "@/lib/scheme-acceptance"
-import { exceptionOnStep } from "@/lib/exceptions"
+import { exceptionOnStep, locatedException } from "@/lib/exceptions"
 import { streetFor } from "@/lib/addresses"
 import { countryOf, distanceKm } from "@/lib/geo"
 // No cycle: `underwriting` only reaches back to `acquirer-data`.
@@ -1568,6 +1568,35 @@ export function blockingFinding(
     }
   }
 
+  /* THE SIXTH REGISTER: an exception the fixture asserts, with no authored
+     entry, whose only account of itself is a line in the timeline.
+  
+     Sits here — beside the authored exception, ABOVE the evidence gate — for
+     the same reason that one does. An "Agent" line reading "Second shipment
+     held in transit — commercial invoice rejected at the border" IS the record
+     of a run: the agent could not have written it without having gone. Gating
+     it on a second signal would suppress the only detail the file holds, which
+     is precisely the failure being fixed: Glasswing showed "flagged as an
+     exception, but no detail was recorded" while that sentence sat in its own
+     timeline, unread by anything that renders an exception.
+  
+     Deliberately thinner than the authored branch. There is no `taskIndex`,
+     because the timeline says which STEP stopped and not which task, and
+     guessing one would put a red mark on a task chosen at random. */
+  const located = locatedException(merchant)
+  if (located && located.step === stepId) {
+    return {
+      headline: located.summary,
+      /* Names the source instead of inventing a consequence. The authored
+         exceptions carry a real `consequence`; this one has a sentence and an
+         author, and padding the rest out to match would be fabricating the
+         investigation rather than reporting it. Saying the record is
+         incomplete is the honest version, and it is still far more than the
+         "no detail was recorded" it replaces. */
+      detail: `Recorded by ${located.actor} ${located.time}. This is the only detail on file for this step — the full exception record was never completed.`,
+    }
+  }
+
   /* NOTHING RAN, SO NOTHING WAS FOUND.
   
      Every rule below reads the step's own artefacts, and artefacts only exist
@@ -1589,7 +1618,7 @@ export function blockingFinding(
      which is true, and the finding appears the moment the run is played — the
      agent finding it in front of you, rather than the app having known all
      along and said nothing about how. */
-  if (!stepEvidenced(merchant, stepById(stepId), played)) return null
+  if (!stepHasRun(merchant, stepId, played)) return null
 
   // Underwriting halts at "Score the risk" when a mandatory document is
   // missing. `taskIndex` is carried so the row that REFUSED shows the halt
@@ -1661,7 +1690,56 @@ export function blockingFinding(
  * does: `artifactFor` returns null past the end of a step, so no task count has
  * to be passed in and two callers cannot disagree about how many there are.
  */
-export function outstandingChecks(stepId: StepId, merchant: Merchant): number {
+/**
+ * `stepEvidenced`, plus the one thing the positional rule cannot see.
+ *
+ * An authored `MerchantException` names the attempt, the finding, the task that
+ * produced it and its source. It IS a record of a run — the most explicit one
+ * in the codebase — so a step carrying one has unambiguously been executed,
+ * even though the file is still standing on it and the positional rule
+ * therefore reports "not reached yet".
+ *
+ * Without this the app contradicted itself out loud: Tavo's B1 raised an
+ * unroutable-address exception while the same panel offered "Play agent run"
+ * over 0/4 tasks. Either the agent found the bad address or it never ran; both
+ * could not be true.
+ *
+ * THE ONE definition of "has this step run", used by every rule below and by
+ * the cockpit that renders the tasks, so the badge, the finding and the task
+ * count cannot disagree about it.
+ */
+export function stepHasRun(
+  merchant: Merchant,
+  stepId: StepId,
+  played: ReadonlySet<StepId>,
+): boolean {
+  if (exceptionOnStep(merchant, stepId)) return true
+  return stepEvidenced(merchant, stepById(stepId), played)
+}
+
+export function outstandingChecks(
+  stepId: StepId,
+  merchant: Merchant,
+  /** Runs played this session. REQUIRED, for the same reason as everywhere
+   *  else: defaulting it would make the count answer confidently on files it
+   *  knows nothing about. */
+  played: ReadonlySet<StepId>,
+): number {
+  /* A CHECK CANNOT BE IN FLIGHT BEFORE ANYTHING DISPATCHED IT.
+  
+     These rows are read straight out of the fixture, so KYC reported a selfie
+     check "in progress" on a step whose agent had never run — you opened R1,
+     nothing had happened, and the rail was already showing a spinner for a
+     provider nobody had called. That is the same defect as an exception with no
+     run behind it: a state asserted from static data rather than derived from
+     what actually took place.
+  
+     Before the run there is no wait, because there was no request. The step is
+     NOT STARTED, which is both true and actionable — it tells you to press
+     Play, where "in progress" told you to wait for something that was never
+     going to arrive. */
+  if (!stepHasRun(merchant, stepId, played)) return 0
+
   let n = 0
   for (let i = 0; i < 8; i++) {
     // A task that cannot run here dispatched nothing, so it can have nothing
@@ -1785,7 +1863,12 @@ export function pendingCheckSteps(merchant: Merchant): { step: StepId; count: nu
     // REACHED-ness only, and a halted step is "active" — still reached — so the
     // count returned for it is the same either way.
     if (laneState(merchant, s, NO_SESSION_PROGRESS, NO_HALTS) === "upcoming") continue
-    const n = outstandingChecks(s.id, merchant)
+    /* NO_SESSION_PROGRESS is the honest argument for a book-level read: this
+       surface has no session, so the only runs it can vouch for are the ones
+       the file's own position implies. It will therefore under-report a wait
+       the presenter has just started in another tab, which is the safe
+       direction — silence about a new wait, never a claim about an old one. */
+    const n = outstandingChecks(s.id, merchant, NO_SESSION_PROGRESS)
     if (n > 0) out.push({ step: s.id, count: n })
   }
   return out

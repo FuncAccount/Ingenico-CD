@@ -11,6 +11,71 @@ import { streetFor } from "@/lib/addresses"
  * a screen that never said what was wrong. A flag is not an explanation.
  */
 
+/**
+ * Where an exception is, and what the record says about it, when no authored
+ * `MerchantException` exists.
+ *
+ * DELIBERATELY THINNER THAN `MerchantException`. That type wants `attempted`,
+ * `found`, `source`, `agentMoves` and `needsHuman` — an anatomy no single
+ * timeline line can supply. Synthesising those fields would be fabricating
+ * evidence, and dressing one sentence up as a full investigation is worse than
+ * admitting the investigation is thin. This carries only what is genuinely on
+ * file: a step, a sentence, and who wrote it.
+ */
+export interface LocatedException {
+  step: StepId
+  /** The agent's or acquirer's own words, verbatim from the timeline. */
+  summary: string
+  /** Who recorded it — an Agent line is itself proof a run happened here. */
+  actor: string
+  /** When, as the record states it. */
+  time: string
+}
+
+/**
+ * Locate an exception the fixture asserts but never explains.
+ *
+ * THE SIXTH REGISTER. `status`, `EXCEPTIONS`, the derived brand rules and the
+ * artefacts were all reconciled, and Glasswing STILL showed "flagged as an
+ * exception, but no detail was recorded" while sitting directly above a
+ * timeline entry reading "Second shipment held in transit — commercial invoice
+ * rejected at the border. 10 of 12 delivered." The detail was on file the whole
+ * time; nothing that rendered the exception had ever read `events`.
+ *
+ * SCOPED TO MERCHANTS ALREADY FLAGGED, and that scope is the whole safety
+ * argument. An unresolved event is NOT a finding — 26 of 29 merchants carry
+ * one, including 13 that are perfectly On track, because `done: false` is
+ * ordinary work in progress. Treating every open event as an exception would
+ * flag almost the entire book. The status says an exception exists; this only
+ * answers WHERE, using the record rather than a new hand-written copy of it.
+ *
+ * Returns null when the file is not flagged, or when it is flagged and the
+ * timeline genuinely says nothing — in which case the honest caption really is
+ * that the record has a gap.
+ */
+export function locatedException(merchant: Merchant): LocatedException | null {
+  if (merchant.status !== "Exception") return null
+  if (EXCEPTIONS[merchant.id]) return null // an authored entry always wins
+
+  const open = (merchant.events ?? []).filter((e) => e.done === false)
+  if (!open.length) return null
+
+  /* The one AT the current step, preferentially: a file can carry older open
+     lines from steps it has since moved past, and the exception is about where
+     it is stopped now, not where it once paused. Falling back to the last open
+     line keeps this from returning nothing on a file whose stopping point and
+     current step disagree — better to name a real recorded line than to claim
+     the record is empty. */
+  const here = open.find((e) => e.step === merchant.currentStep)
+  const chosen = here ?? open[open.length - 1]
+  return {
+    step: chosen.step,
+    summary: chosen.text,
+    actor: chosen.actor,
+    time: chosen.time,
+  }
+}
+
 /** What the agent can do by itself, without waiting for anyone. */
 export interface AgentMove {
   label: string
@@ -172,7 +237,7 @@ const EXCEPTIONS: Record<string, MerchantException> = {
       limit: "The agent will not add the refund permission to the profile itself.",
       owner: "acquirer",
       why:
-        "Refund acceptance is a commercial permission you grant, not a configuration defect to be patched �� it decides whether this merchant can move money back to a cardholder. The agent can see that the profile omits it, but not whether the omission was an error or your deliberate decision for this merchant category.",
+        "Refund acceptance is a commercial permission you grant, not a configuration defect to be patched ��� it decides whether this merchant can move money back to a cardholder. The agent can see that the profile omits it, but not whether the omission was an error or your deliberate decision for this merchant category.",
     },
   },
 }
@@ -213,5 +278,11 @@ export function exceptionDetailMissing(
   hasDerivedFinding = false,
 ): boolean {
   if (merchant.status !== "Exception") return false
-  return !EXCEPTIONS[merchant.id] && !hasDerivedFinding
+  /* `locatedException` is the third source this has to consult, and it is the
+     one that made the caption wrong for Glasswing and Tallinn Kohvik: both
+     carry the reason in their timeline, and both were told the record was
+     empty. A caption that asserts an absence has to check every register the
+     app can now read from, or it reports a gap in itself as a gap in the
+     file. */
+  return !EXCEPTIONS[merchant.id] && !hasDerivedFinding && !locatedException(merchant)
 }

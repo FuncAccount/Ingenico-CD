@@ -69,7 +69,8 @@ import { useBook } from "@/components/acquirer/book-provider"
 import { defaultAcceptance, type AcceptanceState } from "@/lib/scheme-acceptance"
 import { pendingReleases, type Releases } from "@/lib/releases"
 import { edgeResolved, outstandingDocuments, type EdgeResolution } from "@/lib/underwriting"
-import { useLiveMerchant } from "@/components/acquirer/demo-provider"
+import { useDemo, useLiveMerchant, responseKey } from "@/components/acquirer/demo-provider"
+import { DemoInbound } from "@/components/acquirer/demo-control"
 import { exceptionDetailMissing, exceptionOnStep } from "@/lib/exceptions"
 import { ExceptionPanel } from "@/components/acquirer/exception-panel"
 
@@ -165,6 +166,29 @@ export function MerchantJourney({
     )
   }, [current, theme, reconcile])
 
+  /* WHAT THIS SESSION HAS FINISHED, AND WHAT IT HAS RUN, per merchant.
+
+     `merchant.currentStep` is a fixture and is never written — completing a
+     step used to change nothing at all, so an approved B1 kept reporting itself
+     as unfinished and the file never advanced. This is the missing write.
+
+     Keyed by merchant id because progress belongs to a file, not to the screen:
+     without the key, finishing B1 for one merchant would mark B1 done for
+     whoever you looked at next.
+
+     Held in a provider ABOVE the screen switch, not in this component. It was
+     `useState` here, and because `app/page.tsx` renders one screen at a time,
+     opening the full sign-off screen unmounted this journey and took the record
+     with it — so approving a step destroyed the evidence of every step already
+     done, and Ship kept withholding a shipment whose prerequisites had all
+     passed. See ProgressProvider.
+
+     Read FIRST, above every derivation below, because findings, check counts
+     and the rail all now depend on what has actually run. */
+  const { progressFor, markDone, clearStep, playedFor, markPlayed } = useProgress()
+  const progressed = progressFor(current.id)
+  const played = playedFor(current.id)
+
   // Which steps are carrying an unresolved finding, so the marker cannot show
   // a tick over one. Positional state alone could never know this: it only
   // tracks how far the agent has travelled, not what it found on the way.
@@ -173,8 +197,8 @@ export function MerchantJourney({
   // the marker alone, which is why Branding could draw a halt while Configure
   // and Test — which consume its output — drew ticks beneath it.
   const findingSteps = useMemo(
-    () => haltedSteps(current, exceptionCtx),
-    [current, exceptionCtx],
+    () => haltedSteps(current, exceptionCtx, played),
+    [current, exceptionCtx, played],
   )
 
   // How many checks each step is still waiting on, so the rail marker cannot
@@ -189,34 +213,20 @@ export function MerchantJourney({
   const awaitingSteps = useMemo(() => {
     const m = new Map<StepId, number>()
     for (const st of PIPELINE) {
-      const n = countOutstandingChecks(st.id, current)
+      const n = countOutstandingChecks(st.id, current, played)
       if (n > 0) m.set(st.id, n)
     }
     return m
-  }, [current])
+  }, [current, played])
 
-  /* WHAT THIS SESSION HAS FINISHED, per merchant.
-  
-     `merchant.currentStep` is a fixture and is never written — completing a
-     step used to change nothing at all, so an approved B1 kept reporting
-     itself as unfinished and the file never advanced. This is the missing
-     write.
-  
-     Keyed by merchant id because progress belongs to a file, not to the
-     screen: without the key, finishing B1 for one merchant would mark B1 done
-     for whoever you looked at next.
-  
-     Lives here rather than in the cockpit because the rail draws from it too,
-     and a second copy is how the rail and the cockpit come to disagree about
-     the same step. */
-  /* Held in a provider ABOVE the screen switch, not in this component. It was
-     `useState` here, and because `app/page.tsx` renders one screen at a time,
-     opening the full sign-off screen unmounted this journey and took the
-     record with it — so approving a step destroyed the evidence of every step
-     already done, and Ship kept withholding a shipment whose prerequisites had
-     all passed. See ProgressProvider. */
-  const { progressFor, markDone, clearStep } = useProgress()
-  const progressed = progressFor(current.id)
+  /* Recorded when a run STARTS, which is what makes it usable as evidence that
+     a check happened at all. Reported up here beside `markStepDone` because the
+     rail reads it too: without it the rail would keep drawing "not started"
+     under a cockpit that had just run. */
+  const markStepPlayed = useCallback(
+    (id: StepId) => markPlayed(current.id, id),
+    [markPlayed, current.id],
+  )
 
   const markStepDone = useCallback((id: StepId) => markDone(current.id, id), [markDone, current.id])
   // The counterpart, for a stage reset. Reported UP for the same reason
@@ -439,6 +449,8 @@ export function MerchantJourney({
                 themeEdited={hasOverride(current.id)}
           awaiting={blockingPredecessor(current, focused, progressed, findingSteps)}
           progressed={progressed}
+          played={played}
+          onPlayed={markStepPlayed}
         />
       </div>
     </div>
@@ -817,6 +829,8 @@ function StepCockpit({
   themeEdited,
   awaiting,
   progressed,
+  played,
+  onPlayed,
 }: {
   step: PipelineStep
   state: StepState
@@ -845,6 +859,11 @@ function StepCockpit({
   /** The session's completed steps, for the Ship clearance gate. Same set the
    *  rail draws from, so the gate and the ticks cannot disagree. */
   progressed: ReadonlySet<StepId>
+  /** Steps whose agent run has been played. Separate from `progressed` because
+   *  a halted run never completes, so the two diverge exactly on the files that
+   *  matter here. */
+  played: ReadonlySet<StepId>
+  onPlayed: (id: StepId) => void
 }) {
   // Null unless the risk lane is genuinely outstanding — see the banner below.
   /* Computed for every step, not just Ship, because the Play gate below reads
@@ -852,13 +871,27 @@ function StepCockpit({
      disagree today, but a panel saying "cleared" above a button saying
      "withheld" is the defect this app keeps producing, so there is one. */
   const clearance = useMemo(
-    () => shipClearance(merchant, exceptionCtx, progressed),
-    [merchant, exceptionCtx, progressed],
+    () => shipClearance(merchant, exceptionCtx, progressed, played),
+    [merchant, exceptionCtx, progressed, played],
   )
 
-  // How many tasks have completed. Upcoming steps start at 0 (preview),
-  // done steps start fully complete, the active step invites you to play.
-  const initialProgress = state === "done" ? step.tasks.length : 0
+  /* How many tasks have completed. Upcoming steps start at 0 (preview), done
+     steps start fully complete, the active step invites you to play.
+  
+     THE EXCEPTION CASE. A step carrying an authored exception has already run —
+     that is what produced the finding — so starting it at 0 put "Play agent
+     run · 0/4 tasks" directly above a finding the run supposedly turned up.
+     It resumes at the task that raised it, `taskIndex + 1`, because that task
+     executed and the ones after it did not: the run stopped there. Anything
+     higher would tick tasks the halt prevented; anything lower would hide the
+     one that found the problem. */
+  const authored = exceptionOnStep(merchant, step.id)
+  const initialProgress =
+    state === "done"
+      ? step.tasks.length
+      : authored
+        ? Math.min(authored.taskIndex + 1, step.tasks.length)
+        : 0
   const [completed, setCompleted] = useState(initialProgress)
   const [status, setStatus] = useState<RunStatus>(
     state === "done" ? "done" : "idle",
@@ -890,7 +923,9 @@ function StepCockpit({
   // otherwise report a clean state reads from this one value, so the badge,
   // the failing task and the panel cannot disagree about whether the step
   // is blocked.
-  const blocker = exceptionOnStep(merchant, step.id)
+  // Same lookup as `authored` above — one call, so the task count and the
+  // banner can never be reasoning about different exceptions.
+  const blocker = authored
   /* The "no detail recorded" caption must know about DERIVED findings too, not
      just the hand-authored `EXCEPTIONS` map. Once status became derived, a
      merchant halted by a live brand rule was flagged Exception, found no
@@ -899,8 +934,8 @@ function StepCockpit({
      measured against, so the caption and the finding cannot disagree. */
   const { themeFor: liveThemeFor } = useBrandTheme()
   const hasDerivedFinding = useMemo(
-    () => haltedSteps(merchant, { brandRules: checkBrand(liveThemeFor(merchant)) }).size > 0,
-    [merchant, liveThemeFor],
+    () => haltedSteps(merchant, { brandRules: checkBrand(liveThemeFor(merchant)) }, played).size > 0,
+    [merchant, liveThemeFor, played],
   )
   const detailMissing = exceptionDetailMissing(merchant, hasDerivedFinding)
 
@@ -1071,7 +1106,14 @@ function StepCockpit({
     setSelected(Math.min(completed, step.tasks.length - 1))
   }, [status, completed, step.tasks.length])
 
+  /* THE WRITE THAT MAKES A FINDING ADMISSIBLE.
+  
+     Recorded when the run STARTS, not when it finishes, because a run that
+     halts never finishes — gating findings on completion would mean the step
+     can only report a problem once it has no problem. This is the one signal
+     that separates "the agent looked" from "the agent approved". */
   function play() {
+    onPlayed(step.id)
     if (completed >= step.tasks.length) {
       setCompleted(0)
       setStatus("running")
@@ -1086,6 +1128,11 @@ function StepCockpit({
    *  sent, a palette already chosen and a basket already edited all stand,
    *  because watching the agent work again is not the same as undoing it. */
   function replay() {
+    // Same record as `play`. A replay is still a run, and on a step whose first
+    // run was cleared by a stage reset this is the only thing that puts the
+    // evidence back — without it, replaying would show the tasks executing
+    // while the step went on insisting nothing had run.
+    onPlayed(step.id)
     if (timer.current) clearTimeout(timer.current)
     setCompleted(0)
     setStatus("running")
@@ -1176,8 +1223,8 @@ function StepCockpit({
   // Read out of this step's own artefacts. A step can finish every task and
   // still not have passed — the run is what turns the finding up.
   const finding = useMemo(
-    () => blockingFinding(step.id, merchant, exceptionCtx),
-    [step.id, merchant, exceptionCtx],
+    () => blockingFinding(step.id, merchant, exceptionCtx, played),
+    [step.id, merchant, exceptionCtx, played],
   )
 
   // Per-task census of failures the artefacts themselves record. Same call the
@@ -1256,9 +1303,15 @@ function StepCockpit({
   // are reading one source and cannot drift apart — and now counted by the
   // SAME function the rail uses, for the same reason one register up.
   const outstandingChecks = useMemo(
-    () => countOutstandingChecks(step.id, merchant),
-    [step.id, merchant],
+    () => countOutstandingChecks(step.id, merchant, played),
+    [step.id, merchant, played],
   )
+
+  /* Whether the presenter has already answered THIS step's wait. Keyed by step
+     because the two lanes can each be waiting, and one reply must not silently
+     stand in for the other. */
+  const { responsesIn, deliverResponse, resetResponse } = useDemo()
+  const responseSimulated = Boolean(responsesIn[responseKey(merchant.id, step.id)])
 
   // Commits this step has PREPARED that the acquirer has not released yet.
   //
@@ -1916,6 +1969,30 @@ function StepCockpit({
               <RotateCcw className="h-3.5 w-3.5" />
               Reset stage
             </button>
+          )}
+
+          {/* THE LEVER THAT STOPS THE WALKTHROUGH DEAD-ENDING.
+              A step showing "N in progress" is waiting on a provider this app
+              does not control, so without a way to make the reply arrive the
+              demo simply stops here: the run has happened, nothing is wrong,
+              and no button on the screen advances it. Off-theme on purpose —
+              it fabricates an answer, so it must not look like the product
+              receiving one. */}
+          {status !== "running" && outstandingChecks > 0 && (
+            <DemoInbound
+              label={
+                outstandingChecks === 1
+                  ? "Simulate: provider replies"
+                  : `Simulate: provider replies (${outstandingChecks})`
+              }
+              onTrigger={() => deliverResponse(merchant.id, step.id)}
+            />
+          )}
+          {status !== "running" && responseSimulated && (
+            <DemoInbound
+              label="Undo simulated reply"
+              onTrigger={() => resetResponse(merchant.id, step.id)}
+            />
           )}
         </div>
         {/* The denominator counts tasks that CAN run here. On a software-only

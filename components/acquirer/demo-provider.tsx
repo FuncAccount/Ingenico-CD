@@ -1,7 +1,7 @@
 "use client"
 
 import { createContext, useCallback, useContext, useMemo, useState } from "react"
-import type { Merchant } from "@/lib/acquirer-data"
+import { RISK_LANE, type Merchant } from "@/lib/acquirer-data"
 
 /**
  * Demo-only state: things that would happen in the real world, outside this
@@ -20,7 +20,33 @@ interface DemoContextValue {
   supplyDocuments: (merchantId: string) => void
   /** Put the file back to incomplete, so the stop can be shown again. */
   resetDocuments: (merchantId: string) => void
+
+  /**
+   * Waits that an outside provider has been simulated as answering, keyed
+   * `merchantId:stepId`.
+   *
+   * EVERY WAIT ON AN OUTSIDE SYSTEM NEEDS ONE OF THESE OR THE DEMO DEAD-ENDS.
+   * A step showing "1 in progress" is, by construction, waiting on something
+   * this app does not control — a liveness provider, a scheme, a carrier. With
+   * no way to make the reply arrive, the walkthrough reaches that step and
+   * simply stops: the run has happened, nothing is wrong, and there is no
+   * button anywhere that advances it. The presenter is left explaining a
+   * spinner.
+   *
+   * Keyed by step, not merchant, because a file can be waiting on two
+   * providers at once (the lanes run in parallel) and answering one must not
+   * silently answer the other.
+   */
+  responsesIn: Record<string, string>
+  /** Simulate the outside system replying to one step's outstanding checks. */
+  deliverResponse: (merchantId: string, stepId: number) => void
+  /** Put the wait back, so the same moment can be shown again. */
+  resetResponse: (merchantId: string, stepId: number) => void
 }
+
+/** One key shape, defined once, so a writer and a reader cannot disagree
+ *  about how a wait is addressed. */
+export const responseKey = (merchantId: string, stepId: number) => `${merchantId}:${stepId}`
 
 const DemoContext = createContext<DemoContextValue | null>(null)
 
@@ -39,9 +65,40 @@ export function DemoProvider({ children }: { children: React.ReactNode }) {
     })
   }, [])
 
+  const [responsesIn, setResponsesIn] = useState<Record<string, string>>({})
+
+  const deliverResponse = useCallback((merchantId: string, stepId: number) => {
+    setResponsesIn((prev) => ({
+      ...prev,
+      [responseKey(merchantId, stepId)]: new Date().toISOString(),
+    }))
+  }, [])
+
+  const resetResponse = useCallback((merchantId: string, stepId: number) => {
+    setResponsesIn((prev) => {
+      const next = { ...prev }
+      delete next[responseKey(merchantId, stepId)]
+      return next
+    })
+  }, [])
+
   const value = useMemo(
-    () => ({ documentsArrived, supplyDocuments, resetDocuments }),
-    [documentsArrived, supplyDocuments, resetDocuments],
+    () => ({
+      documentsArrived,
+      supplyDocuments,
+      resetDocuments,
+      responsesIn,
+      deliverResponse,
+      resetResponse,
+    }),
+    [
+      documentsArrived,
+      supplyDocuments,
+      resetDocuments,
+      responsesIn,
+      deliverResponse,
+      resetResponse,
+    ],
   )
 
   return <DemoContext.Provider value={value}>{children}</DemoContext.Provider>
@@ -63,10 +120,8 @@ export function useDemo(): DemoContextValue {
  * still said Halted. Returning a corrected merchant means every reader gets
  * the same answer without knowing the simulation exists.
  */
-export function useLiveMerchant(merchant: Merchant): Merchant {
-  const { documentsArrived } = useDemo()
-  return useMemo(() => {
-    if (!documentsArrived[merchant.id]) return merchant
+function withSuppliedDocuments(merchant: Merchant, arrived: boolean): Merchant {
+    if (!arrived) return merchant
     const uw = merchant.underwriting
     if (!uw?.documentsOutstanding?.length) return merchant
     const supplied = uw.documentsOutstanding.length
@@ -111,5 +166,59 @@ export function useLiveMerchant(merchant: Merchant): Merchant {
         },
       ],
     }
-  }, [merchant, documentsArrived])
+}
+
+/**
+ * Apply any outside replies the presenter has simulated.
+ *
+ * The wait this app actually models is expressed through `riskLane`:
+ * `livenessOpen` is precisely "the lane is in flight and sitting on KYC", so
+ * the selfie coming back is not a cosmetic flag but the lane moving on. Writing
+ * it as a separate "check returned" boolean would leave two sources for one
+ * fact, and the lane — which the rail, the badge and the gate all read — would
+ * go on reporting the wait.
+ *
+ * The lane advances to the NEXT risk step, taken from `RISK_LANE` order rather
+ * than by adding one to an id, because these ids run 10 → 11 → 2 and arithmetic
+ * on them lands on the wrong step. If the answered step was the last on the
+ * lane, the lane is cleared.
+ *
+ * Only `in-flight` lanes move. A `referred` lane is a human decision that no
+ * provider reply can overturn, and a `cleared` one has nothing left to answer.
+ */
+function withDeliveredResponses(merchant: Merchant, responsesIn: Record<string, string>): Merchant {
+  const lane = merchant.riskLane
+  if (lane.verdict !== "in-flight") return merchant
+  if (!responsesIn[responseKey(merchant.id, lane.at)]) return merchant
+
+  const i = RISK_LANE.findIndex((s) => s.id === lane.at)
+  const next = i >= 0 ? RISK_LANE[i + 1] : undefined
+  const answered = RISK_LANE[i]?.name ?? "the provider"
+
+  return {
+    ...merchant,
+    riskLane: next ? { verdict: "in-flight", at: next.id } : { verdict: "cleared" },
+    events: [
+      ...merchant.events,
+      {
+        step: lane.at,
+        actor: "Agent",
+        text: `${answered} check returned from the provider. The lane moves on.`,
+        time: "just now",
+        done: true,
+      },
+    ],
+  }
+}
+
+export function useLiveMerchant(merchant: Merchant): Merchant {
+  const { documentsArrived, responsesIn } = useDemo()
+  return useMemo(
+    () =>
+      withDeliveredResponses(
+        withSuppliedDocuments(merchant, Boolean(documentsArrived[merchant.id])),
+        responsesIn,
+      ),
+    [merchant, documentsArrived, responsesIn],
+  )
 }

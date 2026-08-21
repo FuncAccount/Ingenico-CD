@@ -9,6 +9,7 @@ import { haltedByMerchant } from "@/lib/artifacts"
 import { useBrandTheme } from "@/components/acquirer/brand-theme-provider"
 import { useDecisions } from "@/components/acquirer/decisions-provider"
 import { useBook } from "@/components/acquirer/book-provider"
+import { useProgress } from "@/components/acquirer/progress-provider"
 import type { Screen } from "@/components/acquirer/top-nav"
 
 interface Answer {
@@ -110,7 +111,13 @@ export function AgentBar({ onNavigate }: { onNavigate: (s: Screen) => void }) {
     // An empty dep array here would have re-frozen everything one layer down:
     // the answers would be computed once at mount and go on quoting the book as
     // it was when the page loaded, which is the same defect in a new place.
-  }, [book, decisions])
+    //
+    // `halted` belongs here for the same reason. It is an input to
+    // `applyDecisions` above, so leaving it out means "Where is my book stuck?"
+    // keeps answering from the halt map as it stood at mount — and now that
+    // halts depend on which runs have been PLAYED, that set changes while the
+    // palette is open. The answer would go stale the moment you ran an agent.
+  }, [book, decisions, halted])
 
   // ⌘K / Ctrl+K to summon, Esc to dismiss.
   useEffect(() => {
