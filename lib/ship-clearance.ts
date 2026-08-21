@@ -121,6 +121,16 @@ export function shipClearance(
    * a confident wrong answer.
    */
   played: ReadonlySet<StepId>,
+  /**
+   * Stages the acquirer has explicitly reset to be shown fresh.
+   *
+   * The safety-critical case for this gate: a reset stage is being presented as
+   * never run, so treating it as done would clear a shipment against a build
+   * step the screen itself says has not happened. REQUIRED, like the two above,
+   * for the reason this file has now learned three times — a defaulted empty
+   * set is a confident claim that nothing was reset.
+   */
+  wasReset: ReadonlySet<StepId>,
 ): ShipClearance {
   const holds: ClearanceHold[] = []
 

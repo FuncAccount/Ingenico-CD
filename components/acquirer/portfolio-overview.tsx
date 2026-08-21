@@ -82,16 +82,23 @@ function MiniTrack({
   merchant,
   progressed,
   halted,
+  wasReset,
 }: {
   merchant: Merchant
   progressed: ReadonlySet<StepId>
+  /* The real set, not the session-less sentinel. This row already reads the
+     session's progress so that it "agrees with the journey rather than judging
+     the file against the bare fixture" — and a reset stage is exactly a case
+     where the fixture and the journey disagree. Passing an empty set here would
+     leave the table ticking a stage the journey is showing as never run. */
+  wasReset: ReadonlySet<StepId>
   /* Passed in rather than derived here. This used to call `haltedSteps` itself,
      which was correct but was a SECOND computation of the same judgement — and
      the row's status badge, now derived from the same findings, would have been
      free to disagree with the track beside it. One set, two renderings. */
   halted: ReadonlySet<StepId>
 }) {
-  const stateOf = (s: PipelineStep) => laneState(merchant, s, progressed, halted, NO_SESSION_PROGRESS)
+  const stateOf = (s: PipelineStep) => laneState(merchant, s, progressed, halted, wasReset)
   const doneIn = (steps: PipelineStep[]) =>
     steps.filter((s) => stateOf(s) === "done").length
 
@@ -220,7 +227,7 @@ export function PortfolioOverview({
 }) {
   const { decisions } = useDecisions()
   const { merchants: book } = useBook()
-  const { progressFor, playedFor } = useProgress()
+  const { progressFor, playedFor, resetFor } = useProgress()
 
   // Every figure and badge on this screen now comes off one list whose statuses
   // reflect the decisions actually taken. Previously the KPI, the filter and
@@ -372,6 +379,7 @@ export function PortfolioOverview({
                         merchant={m}
                         progressed={progressFor(m.id)}
                         halted={halted.get(m.id) ?? EMPTY_HALTS}
+                        wasReset={resetFor(m.id)}
                       />
                     </td>
                     <td className="px-5 py-4">

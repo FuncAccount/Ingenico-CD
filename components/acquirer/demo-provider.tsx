@@ -198,6 +198,16 @@ function withDeliveredResponses(merchant: Merchant, responsesIn: Record<string, 
   return {
     ...merchant,
     riskLane: next ? { verdict: "in-flight", at: next.id } : { verdict: "cleared" },
+    /* Written for the same reason `withSuppliedDocuments` writes its two: the
+       record of the file should say what happened to it. NOTE the journey
+       screen builds its trace from artefacts and renders `events` nowhere, so
+       this is currently only visible to `lib/exceptions` and the Ingenico-side
+       journey — it is a record, not the user-facing confirmation. What the
+       acquirer actually sees is the wait clearing and the lever flipping to
+       "Undo simulated reply", which is why that flip has to be unmistakable.
+  
+       `done: true` matters: `locatedException` scans for OPEN events, so an
+       unfinished line here would register this reply as a new finding. */
     events: [
       ...merchant.events,
       {

@@ -186,9 +186,15 @@ export function MerchantJourney({
 
      Read FIRST, above every derivation below, because findings, check counts
      and the rail all now depend on what has actually run. */
-  const { progressFor, markDone, clearStep, playedFor, markPlayed } = useProgress()
+  const { progressFor, markDone, clearStep, playedFor, markPlayed, resetFor } = useProgress()
   const progressed = progressFor(current.id)
   const played = playedFor(current.id)
+  /* Stages explicitly reset. A third set rather than a subtraction from the two
+     above, because those can only retire progress made THIS session — a step
+     the fixture already places behind the merchant's position was never in
+     either, so clearing it was a no-op and the rail went on drawing a solid
+     completion tick beside a cockpit reading "Ready · 0/4 tasks". */
+  const wasReset = resetFor(current.id)
 
   // Which steps are carrying an unresolved finding, so the marker cannot show
   // a tick over one. Positional state alone could never know this: it only
@@ -240,7 +246,7 @@ export function MerchantJourney({
   function stepState(step: PipelineStep): StepState {
     // `findingSteps` is the fix: without it this returned "done" for every step
     // the file had travelled past, whatever the agent found there.
-    return laneState(current, step, progressed, findingSteps)
+    return laneState(current, step, progressed, findingSteps, wasReset)
   }
 
   const focused = PIPELINE.find((s) => s.id === focusStep)!
@@ -448,10 +454,11 @@ export function MerchantJourney({
                 onStepCleared={clearStepDone}
                 resetTheme={() => resetTheme(current.id)}
                 themeEdited={hasOverride(current.id)}
-          awaiting={blockingPredecessor(current, focused, progressed, findingSteps)}
+          awaiting={blockingPredecessor(current, focused, progressed, findingSteps, wasReset)}
           progressed={progressed}
           played={played}
           onPlayed={markStepPlayed}
+          wasReset={wasReset}
         />
       </div>
     </div>
@@ -832,6 +839,7 @@ function StepCockpit({
   progressed,
   played,
   onPlayed,
+  wasReset,
 }: {
   step: PipelineStep
   state: StepState
@@ -865,6 +873,9 @@ function StepCockpit({
    *  matter here. */
   played: ReadonlySet<StepId>
   onPlayed: (id: StepId) => void
+  /** Stages explicitly reset, so the ship gate cannot clear a dispatch against
+   *  a build step this very screen is showing as never run. */
+  wasReset: ReadonlySet<StepId>
 }) {
   // Null unless the risk lane is genuinely outstanding — see the banner below.
   /* Computed for every step, not just Ship, because the Play gate below reads
@@ -872,8 +883,8 @@ function StepCockpit({
      disagree today, but a panel saying "cleared" above a button saying
      "withheld" is the defect this app keeps producing, so there is one. */
   const clearance = useMemo(
-    () => shipClearance(merchant, exceptionCtx, progressed, played),
-    [merchant, exceptionCtx, progressed, played],
+    () => shipClearance(merchant, exceptionCtx, progressed, played, wasReset),
+    [merchant, exceptionCtx, progressed, played, wasReset],
   )
 
   /* How many tasks have completed. Upcoming steps start at 0 (preview), done
