@@ -938,8 +938,21 @@ export function laneState(
      from B1 and the cockpit let you start the last one first. And it consulted
      only the fixture, so completing a step changed nothing at all: `currentStep`
      is never written in this app, which is why an approved B1 kept reporting
-     itself as unfinished. */
-  if (progressed.has(step.id)) return "done"
+     itself as unfinished.
+
+     `progressed` IS NOT CONSULTED DIRECTLY HERE, and that omission is the fix
+     for the second half of the halt bug. This used to open with
+     `if (progressed.has(step.id)) return "done"`, which returned before the
+     lane order below was ever computed — so a step approved earlier in the
+     session kept its tick no matter what had since failed UPSTREAM of it. The
+     veto at the top of this function only protects the halted step itself, so
+     Branding drew its halt while Configure and Test, approved moments earlier
+     by the same agent run, sat beneath it still ticked.
+
+     Session progress is still honoured — `isLaneStepDone` consults it — but it
+     now goes through the lane-order gate like every other claim, so a halted
+     predecessor demotes its successors to `upcoming`. Removing the shortcut
+     also removes the duplicate rule: doneness is decided in ONE place. */
 
   /* The spine picks up the build lane in front of it. Ship is the rejoin, so
      the steps the file must pass to REACH it include all four build steps —
