@@ -936,11 +936,35 @@ export function laneState(
 
   if (step.lane === "risk") {
     const lane = merchant.riskLane
+    const here = riskIndex(step.id)
+
+    /* AN OPEN STEP HOLDS EVERYTHING BEHIND IT ON THIS LANE.
+    
+       The same rule the build/spine branch below already enforces, which the
+       risk lane skipped entirely — and the comment this replaced actually
+       STATED the rule ("you cannot price a merchant whose KYC has not run")
+       while the code checked only lane POSITION. So a file whose `riskLane.at`
+       had moved past an unresolved KYC drew a green tick on Pricing and
+       Underwriting underneath an amber KYC: R1 open, R2 and R3 finished. Read
+       down the rail it says the acquirer priced and underwrote a merchant
+       whose entity was never confirmed.
+    
+       Position is what the fixture ASSERTS; a finding is what is TRUE. The
+       second wins, exactly as it does at the top of this function — the
+       difference is that this vetoes the SUCCESSORS rather than the step
+       itself.
+    
+       `upcoming`, not `active`: unlike the halted step, which ran and stopped,
+       these have not legitimately been reached. And unlike a halt it draws no
+       second alarm — the problem is at R1 and gets marked there once, rather
+       than reporting one finding three times down the lane. */
+    const blockedAt = RISK_LANE.findIndex((s) => halted.has(s.id))
+    if (blockedAt !== -1 && here > blockedAt) return "upcoming"
+
     if (lane.verdict === "cleared") return "done"
     // Compared by LANE POSITION, not by id — see RISK_LANE. The steps ahead of
-    // the open one are genuinely finished (you cannot price a merchant whose
-    // KYC has not run), and the ones behind it have not started.
-    const here = riskIndex(step.id)
+    // the open one are genuinely finished, and the ones behind it have not
+    // started.
     const open = riskIndex(lane.at)
     if (here < open) return "done"
     if (progressed.has(step.id)) return "done"

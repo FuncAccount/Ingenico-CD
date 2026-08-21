@@ -267,9 +267,12 @@ export function MerchantJourney({
   // Delegates to the model so the risk lane is read from `riskLane` rather
   // than from a position on the build path it no longer shares.
   function stepState(step: PipelineStep): StepState {
-    // `findingSteps` is the fix: without it this returned "done" for every step
-    // the file had travelled past, whatever the agent found there.
-    return laneState(current, step, progressed, findingSteps, wasReset)
+    /* `flaggedSteps`, not `findingSteps`: without a not-settled set this
+       returned "done" for every step the file had travelled past, whatever the
+       agent found there — and passing only the HALTS left the amber half of
+       that hole open, which is how KYC could sit unresolved with Pricing and
+       Underwriting ticked beneath it. */
+    return laneState(current, step, progressed, flaggedSteps, wasReset)
   }
 
   const focused = PIPELINE.find((s) => s.id === focusStep)!
@@ -1358,8 +1361,18 @@ function StepCockpit({
   /* Whether the presenter has already answered THIS step's wait. Keyed by step
      because the two lanes can each be waiting, and one reply must not silently
      stand in for the other. */
-  const { responsesIn, deliverResponse, resetResponse } = useDemo()
+  const {
+    responsesIn,
+    deliverResponse,
+    resetResponse,
+    checksResolved,
+    resolveChecks,
+    unresolveChecks,
+  } = useDemo()
   const responseSimulated = Boolean(responsesIn[responseKey(merchant.id, step.id)])
+  /* Same key shape, separate map: a step can have been waiting AND come back
+     without an answer, so one flag could not describe both. */
+  const checksSimulated = Boolean(checksResolved[responseKey(merchant.id, step.id)])
 
   // Commits this step has PREPARED that the acquirer has not released yet.
   //
@@ -2054,6 +2067,31 @@ function StepCockpit({
             <DemoInbound
               label="Undo simulated reply"
               onTrigger={() => resetResponse(merchant.id, step.id)}
+            />
+          )}
+
+          {/* THE SECOND DEAD-END, AND THE MORE COMMON ONE.
+              The lever above answers a check still IN FLIGHT. This answers one
+              that came back with NO verdict — a registry that never responded,
+              an ownership question left open. Both leave a step that cannot be
+              settled, but only the first had a way out, so a file showing
+              "2 unresolved" simply stopped: nothing was in progress, so no
+              button on the page applied to it. Off-theme like its sibling,
+              because it fabricates the answer rather than receiving one. */}
+          {status !== "running" && unresolvedCount > 0 && (
+            <DemoInbound
+              label={
+                unresolvedCount === 1
+                  ? "Simulate: outstanding check answered"
+                  : `Simulate: outstanding checks answered (${unresolvedCount})`
+              }
+              onTrigger={() => resolveChecks(merchant.id, step.id)}
+            />
+          )}
+          {status !== "running" && checksSimulated && (
+            <DemoInbound
+              label="Undo simulated answer"
+              onTrigger={() => unresolveChecks(merchant.id, step.id)}
             />
           )}
         </div>

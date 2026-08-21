@@ -42,6 +42,45 @@ interface DemoContextValue {
   deliverResponse: (merchantId: string, stepId: number) => void
   /** Put the wait back, so the same moment can be shown again. */
   resetResponse: (merchantId: string, stepId: number) => void
+
+  /**
+   * Checks that came back UNRESOLVED and have since been answered, keyed
+   * `merchantId:stepId`.
+   *
+   * Separate from `responsesIn` because the two clear different states, and
+   * merging them would let one lever claim the other's work. `responsesIn`
+   * answers a check still IN FLIGHT and moves the lane on; this answers one
+   * that already returned WITHOUT a verdict and leaves the lane where it is.
+   * A file can be in both states at once.
+   */
+  checksResolved: Record<string, string>
+  /** Simulate the outstanding questions on a step being answered. */
+  resolveChecks: (merchantId: string, stepId: number) => void
+  /** Put the gap back, so the same stop can be shown again. */
+  unresolveChecks: (merchantId: string, stepId: number) => void
+
+  /**
+   * Findings the presenter has declared FIXED IN THE REAL WORLD, keyed
+   * `merchantId:stepId`.
+   *
+   * The third and last dead-end, and the widest. The two levers above answer
+   * CHECKS; this one covers the failures no check can answer — an address the
+   * carrier will not run to, a commercial invoice rejected at the border, a MID
+   * range out of allocation, a brand rule in breach, a refund the terminals
+   * cannot send. Every one is real work outside this app, so nothing in the app
+   * can ever clear them, and a walkthrough that reaches one simply stops.
+   *
+   * Deliberately a SEPARATE map from `checksResolved`, and worded as the outside
+   * work being done rather than as an override: the distinction between "the
+   * problem was fixed" and "somebody waved it through" is the entire difference
+   * between a demo and a misrepresentation. Nothing here bypasses a control —
+   * it restates the world, and the app re-derives its own verdict.
+   */
+  findingsCleared: Record<string, string>
+  /** Simulate the outside fix landing, so the step can be re-run clean. */
+  clearFinding: (merchantId: string, stepId: number) => void
+  /** Put the failure back, so the same stop can be shown again. */
+  restoreFinding: (merchantId: string, stepId: number) => void
 }
 
 /** One key shape, defined once, so a writer and a reader cannot disagree
@@ -82,6 +121,40 @@ export function DemoProvider({ children }: { children: React.ReactNode }) {
     })
   }, [])
 
+  const [checksResolved, setChecksResolved] = useState<Record<string, string>>({})
+
+  const resolveChecks = useCallback((merchantId: string, stepId: number) => {
+    setChecksResolved((prev) => ({
+      ...prev,
+      [responseKey(merchantId, stepId)]: new Date().toISOString(),
+    }))
+  }, [])
+
+  const unresolveChecks = useCallback((merchantId: string, stepId: number) => {
+    setChecksResolved((prev) => {
+      const next = { ...prev }
+      delete next[responseKey(merchantId, stepId)]
+      return next
+    })
+  }, [])
+
+  const [findingsCleared, setFindingsCleared] = useState<Record<string, string>>({})
+
+  const clearFinding = useCallback((merchantId: string, stepId: number) => {
+    setFindingsCleared((prev) => ({
+      ...prev,
+      [responseKey(merchantId, stepId)]: new Date().toISOString(),
+    }))
+  }, [])
+
+  const restoreFinding = useCallback((merchantId: string, stepId: number) => {
+    setFindingsCleared((prev) => {
+      const next = { ...prev }
+      delete next[responseKey(merchantId, stepId)]
+      return next
+    })
+  }, [])
+
   const value = useMemo(
     () => ({
       documentsArrived,
@@ -90,6 +163,12 @@ export function DemoProvider({ children }: { children: React.ReactNode }) {
       responsesIn,
       deliverResponse,
       resetResponse,
+      checksResolved,
+      resolveChecks,
+      unresolveChecks,
+      findingsCleared,
+      clearFinding,
+      restoreFinding,
     }),
     [
       documentsArrived,
@@ -98,6 +177,12 @@ export function DemoProvider({ children }: { children: React.ReactNode }) {
       responsesIn,
       deliverResponse,
       resetResponse,
+      checksResolved,
+      resolveChecks,
+      unresolveChecks,
+      findingsCleared,
+      clearFinding,
+      restoreFinding,
     ],
   )
 
@@ -221,14 +306,77 @@ function withDeliveredResponses(merchant: Merchant, responsesIn: Record<string, 
   }
 }
 
+/**
+ * Answer the UNRESOLVED CHECKS on the risk lane.
+ *
+ * The second half of the same dead-end `withDeliveredResponses` fixes. That one
+ * clears a check still IN FLIGHT; this clears one that came back WITHOUT an
+ * answer — a registry that never responded, an ownership question the agent
+ * could not close. Both leave the acquirer with a step they cannot settle and,
+ * until now, only the first had a lever. The screenshot that prompted this had
+ * KYC reading "2 unresolved" with no control anywhere on the page.
+ *
+ * It writes the two UNDERLYING FACTS rather than a "resolved" flag, exactly as
+ * `withSuppliedDocuments` does, because `10.0` and `10.3` derive their rows
+ * from `underwriting.identity` and `underwriting.edgeCase`. A separate flag
+ * would leave two sources for one fact and the panels would go on reporting the
+ * gap.
+ *
+ * Keyed by step so answering KYC does not silently answer Underwriting — the
+ * same reason `responsesIn` is keyed that way.
+ */
+function withResolvedChecks(merchant: Merchant, resolved: Record<string, string>): Merchant {
+  // RISK_LANE, not "the KYC id": these are the steps whose artefacts read the
+  // two fields below, and naming the lane keeps this true if a step is added.
+  const answered = RISK_LANE.filter((s) => resolved[responseKey(merchant.id, s.id)])
+  if (answered.length === 0) return merchant
+
+  const uw = merchant.underwriting
+  if (!uw) return merchant
+  // Nothing outstanding on this file, so there is nothing to answer. Guarded so
+  // the lever cannot manufacture a resolution for a merchant that never had a
+  // gap — which would show a "now confirmed" line under checks that always
+  // passed.
+  if (uw.identity && !uw.edgeCase) return merchant
+
+  return {
+    ...merchant,
+    underwriting: {
+      ...uw,
+      // Names the source, like every other value on this panel, so the answer
+      // can be re-read rather than taken on trust.
+      identity: uw.identity ?? "Verified — company number and directors confirmed against the filing",
+      // The ownership question is CLOSED, not restated more softly: leaving the
+      // sentence in place would keep both the media scan and the ownership row
+      // amber while claiming the check had been answered.
+      edgeCase: undefined,
+    },
+    events: [
+      ...merchant.events,
+      {
+        step: answered[0].id,
+        actor: "Agent",
+        text: "Outstanding checks answered: the registry responded and the ownership question closed.",
+        time: "just now",
+        // `locatedException` scans for OPEN events, so an unfinished line here
+        // would register this answer as a fresh finding.
+        done: true,
+      },
+    ],
+  }
+}
+
 export function useLiveMerchant(merchant: Merchant): Merchant {
-  const { documentsArrived, responsesIn } = useDemo()
+  const { documentsArrived, responsesIn, checksResolved } = useDemo()
   return useMemo(
     () =>
-      withDeliveredResponses(
-        withSuppliedDocuments(merchant, Boolean(documentsArrived[merchant.id])),
-        responsesIn,
+      withResolvedChecks(
+        withDeliveredResponses(
+          withSuppliedDocuments(merchant, Boolean(documentsArrived[merchant.id])),
+          responsesIn,
+        ),
+        checksResolved,
       ),
-    [merchant, documentsArrived, responsesIn],
+    [merchant, documentsArrived, responsesIn, checksResolved],
   )
 }

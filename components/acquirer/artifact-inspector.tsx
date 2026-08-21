@@ -1343,6 +1343,10 @@ function ChecksView({ artifact }: { artifact: Extract<Artifact, { kind: "checks"
     // else in this portal — precisely the wrong instruction for a check that
     // is out with a provider and needs nothing from the acquirer at all.
     running: "text-warning",
+    // Muted, deliberately colourless. This check did not apply, so it is
+    // neither a result nor a gap — amber would put it in the queue of things
+    // owed an answer, and green would claim a comparison nobody made.
+    "n/a": "text-muted-foreground",
   } as const
   const open = artifact.rows.filter((r) => r.state === "running").length
   return (
@@ -1366,6 +1370,11 @@ function ChecksView({ artifact }: { artifact: Extract<Artifact, { kind: "checks"
                 // with a provider has NO verdict, and borrowing either icon
                 // would report one it has not returned.
                 <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" />
+              ) : r.state === "n/a" ? (
+                // A dash: nothing was measured, so there is no verdict to
+                // draw. A warning triangle here would report a problem where
+                // the honest answer is "this did not apply".
+                <Minus className="h-4 w-4" />
               ) : (
                 <AlertTriangle className="h-4 w-4" />
               )}

@@ -656,9 +656,26 @@ export interface CheckRow {
    *  a provider has no result, and rendering it as a tick would report a
    *  verdict nobody has returned — the whole point of the KYC panel is that the
    *  file progresses while individual checks are still open. */
-  state: "pass" | "warn" | "fail" | "running"
+  /**
+   * `running` is a FOURTH state, not a styling of pass — see above.
+   *
+   * `n/a` is a FIFTH, and it exists because two rows were wearing `warn` while
+   * describing something that is permanently true rather than pending: a
+   * battery check on an order of mains-powered terminals, and registry
+   * corroboration in a country with no register wired up. Once a warning
+   * correctly holds the lane, that misfiling stops being cosmetic — it holds
+   * the file behind a question nobody can ever answer, and offers a
+   * "simulate the answer" lever for a reply that will never come.
+   *
+   * The distinction is whether WAITING WOULD HELP. `warn` = unresolved, an
+   * answer is owed. `n/a` = out of scope, no answer is owed and none is
+   * missing. It is emphatically not `pass`: nothing was checked, and a tick
+   * would claim a comparison that never happened.
+   */
+  state: "pass" | "warn" | "fail" | "running" | "n/a"
   /** What was actually compared — a green tick with no comparison is
-   *  decoration. For a `running` row, what is outstanding and with whom. */
+   *  decoration. For a `running` row, what is outstanding and with whom; for
+   *  `n/a`, why the check does not apply. */
   evidence: string
 }
 
@@ -1923,6 +1940,34 @@ export function haltedSteps(
 }
 
 /**
+ * Every step that is NOT SETTLED — halted or unresolved.
+ *
+ * THIS is the set `laneState` wants, and the split from `haltedSteps` is the
+ * point. A halt and an unanswered check are different findings, reported
+ * differently (red vs amber, "Exception" vs "Unresolved"), but they hold the
+ * lane IDENTICALLY: neither lets the step behind it start. Pricing a merchant
+ * whose registry never replied is the same mistake as pricing one whose
+ * registry contradicted the filing — in both cases the entity was never
+ * confirmed, and only the reason differs.
+ *
+ * Kept separate rather than widening `haltedSteps` because that set also drives
+ * the red halt marker and `effectiveStatus`; folding warnings in would promote
+ * every silent provider into a full halt and lose the amber register entirely.
+ */
+export function openSteps(
+  merchant: Merchant,
+  ctx: ExceptionContext,
+  /** Runs played this session. REQUIRED — see `blockingFinding`. */
+  played: ReadonlySet<StepId>,
+): ReadonlySet<StepId> {
+  const out = new Set<StepId>(haltedSteps(merchant, ctx, played))
+  for (const s of PIPELINE) {
+    if (stepUnresolved(s.id, merchant, ctx, played)) out.add(s.id)
+  }
+  return out
+}
+
+/**
  * `haltedSteps` for a whole book, in the shape `effectiveStatus` consumes.
  *
  * ONE builder, deliberately. Four surfaces need a merchant's status — the
@@ -2139,7 +2184,13 @@ export function artifactFor(
           rows: [
             {
               label: "Independent corroboration",
-              state: "warn",
+              /* `n/a`, not `warn`: no register exists for this country, so no
+                 answer is outstanding and none can be chased. As a warning it
+                 held capture open on every Estonian file for a reply that was
+                 never coming. The note above already says the documents stand
+                 on their own — this is a limit of the check, not a gap in the
+                 file. */
+              state: "n/a",
               evidence: "Not attempted — no register on file for this country",
             },
           ],
@@ -2899,9 +2950,13 @@ export function artifactFor(
           { label: "PIN pad", state: "pass", evidence: "Tamper seal intact, all keys registering" },
           {
             label: "Battery",
-            // Mains-powered units have no battery to test. Reporting a pass
-            // would attest to a check that could not have run.
-            state: battery.length > 0 ? "pass" : "warn",
+            /* Mains-powered units have no battery to test. Reporting a pass
+               would attest to a check that could not have run — but `warn` was
+               wrong in the other direction: it filed a permanent fact as an
+               open question, and once warnings hold the lane that stalled Test
+               on every mains-only order, waiting for a battery reading that
+               can never arrive. */
+            state: battery.length > 0 ? "pass" : "n/a",
             evidence:
               battery.length > 0
                 ? `Charged above 80% on ${battery.length} portable unit${battery.length === 1 ? "" : "s"}`
