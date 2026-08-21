@@ -24,6 +24,7 @@ import {
   type MerchantChaseState,
   addWorkingDays,
   blockingIndex,
+  SETTLED_BEFORE_RECORD,
   settledState,
   draftEmail,
   handoffsForMerchant,
@@ -270,6 +271,28 @@ export function StepGate({
     if (list[i].party === "acquirer" && decision?.kind === "signed" && !hasFinding) {
       return { approvedIso: decision.atIso }
     }
+    /* AND THE FIFTH ROUTE: THE STEP THE FILE IS STILL SITTING ON.
+    
+       `isPast` is `laneDone && …`, and laneDone means THIS STEP'S WORK IS
+       FINISHED — not that the file has moved beyond it. For the current step
+       those are different facts, and the acquirer's approval is precisely what
+       separates them: it is the thing that lets the file move on. So finishing
+       the agent run flipped `isPast` true and synthesised the very decision the
+       run exists to ask for. Ravenswood Deli, whose fixture says in as many
+       words "here the agent has not finished, so there is nothing yet to
+       decide", rendered a green "Approved by you · date not recorded" the
+       moment its run completed. The user had approved nothing.
+    
+       The other two parties are unaffected on purpose. A merchant reply or an
+       Ingenico return happens OUTSIDE this app, so the journey having moved on
+       is real evidence they acted, which is what `settledState` documents. The
+       acquirer's decisions are taken IN this app and written to `decisions` —
+       so for them, absence of a record is not missing history, it is the
+       absence of the act. Their branch above already returns the real recorded
+       approval, with a real timestamp. */
+    if (list[i].party === "acquirer" && step === merchant.currentStep) {
+      return states[handoffKey(merchant.id, step, i)] ?? initialState(list[i])
+    }
     return (
       states[handoffKey(merchant.id, step, i)] ??
       (isPast ? settledState(list[i]) : initialState(list[i]))
@@ -285,7 +308,25 @@ export function StepGate({
   // put the order desk after it, placing the order reported "Step clear" over
   // an Ingenico confirmation nobody had asked for yet. So advance to the next
   // unsettled row instead, and only call the step clear when none remains.
-  const rawBlocking = isPast ? null : blockingIndex(step, merchant.id, states)
+  /* `isPast` USED TO COLLAPSE STRAIGHT TO NULL, and that is the other half of
+     the synthesised-approval bug. Withholding the fake "Approved by you" only
+     removed the green line; the header still read "Step clear" over an acquirer
+     row that was now, correctly, unapproved — so the panel stopped claiming the
+     decision had been taken and went on claiming there was nothing to take.
+     Worse, with no row marked active, the Approve control never rendered: the
+     one thing the reader needed was the one thing removed.
+  
+     So a past step no longer asserts clear by fiat — it ASKS the rows, through
+     the same `read()` every other surface here uses. For a genuinely past step
+     each row synthesises settled and the answer is still null, so history is
+     untouched. For the current step the acquirer's outstanding decision surfaces
+     as the blocking row, which is what puts the button back. */
+  const firstUnresolved = list.findIndex((h, i) => !isResolved(h, read(i)))
+  const rawBlocking = isPast
+    ? firstUnresolved === -1
+      ? null
+      : firstUnresolved
+    : blockingIndex(step, merchant.id, states)
   const signedAcquirerRow =
     rawBlocking !== null &&
     list[rawBlocking].party === "acquirer" &&
@@ -532,6 +573,25 @@ function HandoffRow({
 function Settled({ handoff, state }: { handoff: Handoff; state: HandoffState }) {
   if (handoff.party === "acquirer") {
     const s = state as AcquirerDecisionState
+    /* "APPROVED BY YOU" IS AN ATTRIBUTION, AND IT NEEDS A RECORD TO STAND ON.
+    
+       `fmtDateTime` renders the `SETTLED_BEFORE_RECORD` sentinel as "date not
+       recorded", which read as a footnote about a missing timestamp. It was
+       not: no date exists because no decision was ever taken here, so the
+       sentence named a person, an act and a consent that never happened, and
+       the weakest claim on the panel wore the same green tick as the strongest.
+    
+       For a step the file has genuinely moved beyond, something did satisfy
+       this gate — the journey is the evidence — but this app cannot say it was
+       the reader. So the settlement stands and the ATTRIBUTION is withheld,
+       which is the honest half of what was being asserted. */
+    if (s.approvedIso === SETTLED_BEFORE_RECORD) {
+      return (
+        <p className="mt-1 text-xs text-muted-foreground">
+          Cleared before this file reached your queue · no approver on record
+        </p>
+      )
+    }
     return (
       <p className="mt-1 text-xs text-muted-foreground">
         {`Approved by you · ${fmtDateTime(s.approvedIso!)}`}
