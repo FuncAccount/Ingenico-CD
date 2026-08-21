@@ -13,8 +13,8 @@ import {
   FileText,
   Info,
   Loader2,
+  Lock,
   Mail,
-  Pencil,
   Wrench,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
@@ -690,7 +690,7 @@ function RecordsView({
   // change lands. A bare "Edit" on a panel that cannot write would be a
   // control that does nothing — worse than no control, because the reader
   // would believe acceptance had been changed here.
-  const [showEdit, setShowEdit] = useState(false)
+
   // Held OUTSIDE the artefact, keyed by label: the artefact is the record of
   // what the AGENT drafted, and writing over it would destroy the evidence of
   // what was proposed the instant somebody disagreed with a line.
@@ -731,22 +731,25 @@ function RecordsView({
           </div>
         </div>
       )}
-      {artifact.editable && (
-        <div className="mb-2.5">
-          <button
-            type="button"
-            onClick={() => setShowEdit((v) => !v)}
-            aria-expanded={showEdit}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-white/70 px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:border-primary/40 hover:text-primary"
-          >
-            <Pencil className="h-3.5 w-3.5" />
-            {artifact.editable.label}
-          </button>
-          {showEdit && (
-            <p className="mt-2 rounded-lg border border-primary/25 bg-primary/[0.06] px-3 py-2 text-[11px] leading-relaxed text-foreground">
-              {artifact.editable.where}
+      {/* Deliberately flat: no button, no disclosure, nothing to press — not
+          even a disabled control, which would imply the edit is possible and
+          merely blocked. These figures are the acquirer's own engine's ruling,
+          and the portal applies them. Neutral tone, not destructive: nothing
+          here is wrong, it simply is not ours to move. */}
+      {artifact.governed && (
+        <div className="mb-2.5 flex gap-2.5 rounded-xl border border-border bg-secondary/60 px-3 py-2.5">
+          <Lock className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          <div className="space-y-1">
+            <p className="text-xs font-semibold text-foreground">
+              Set by {artifact.governed.system} — not editable here
             </p>
-          )}
+            <p className="text-[11px] leading-relaxed text-muted-foreground">
+              {artifact.governed.why}
+            </p>
+            <p className="text-[11px] leading-relaxed text-muted-foreground">
+              {artifact.governed.change}
+            </p>
+          </div>
         </div>
       )}
       <div className="overflow-hidden rounded-xl border border-border/70 bg-white/60">

@@ -811,13 +811,33 @@ export type Artifact =
       note: string
       rows: RecordRow[]
       /**
-       * A record set the acquirer may still change, and the system that owns
-       * the change. Scheme acceptance is a COMMERCIAL PERMISSION the acquirer
-       * grants — rendering it as a flat read-only list made a decision that is
-       * theirs look like something already settled elsewhere. The label names
-       * where the edit lands rather than implying this screen writes it.
+       * WHOSE SYSTEM RULED THIS, AND WHY IT IS NOT OURS TO MOVE.
+       *
+       * `records` used to carry an `editable` slot — a button naming where an
+       * edit would land — and underwriting was its last user, as "Integrate
+       * your own model / this recommendation is replaced by yours". That was
+       * incoherent twice over: the figures ALREADY come from the acquirer's own
+       * risk engine, so it offered to integrate something already integrated;
+       * and calling them a "recommendation" implied Ingenico had formed a view
+       * the acquirer could accept or decline. The portal cannot decline. It
+       * reads the engine's output and applies it. `editable` is now gone from
+       * this kind rather than left unused, because a dead edit-slot on a
+       * read-out is an invitation to put the same affordance back.
+       *
+       * Note the direction of travel: `tariff` keeps real typed inputs because
+       * pricing has NO external authority — the rate is the acquirer's own to
+       * set. Underwriting is the mirror image, and the two must never be given
+       * the same treatment just because both are "the acquirer's".
+       *
+       * So this is deliberately NOT a control, NOT a disabled control, and not
+       * mere absence. A flat read-only list leaves the reader unable to tell
+       * whether the numbers are Ingenico's or theirs — the one question that
+       * matters here — while a disabled button implies the edit is possible and
+       * merely blocked. It renders as a named, non-interactive provenance
+       * statement. `change` is required so the statement is not a dead end: the
+       * limit is entirely changeable, just not from this screen.
        */
-      editable?: { label: string; where: string }
+      governed?: { system: string; why: string; change: string }
       /**
        * Present only on a record that leaves for another system. Absent means
        * this panel is a read-out and nothing here is dispatched — which is the
@@ -2231,20 +2251,19 @@ export function artifactFor(
       }
     case "2.2": {
       // The exposure the acquirer would actually carry. Rendered as a record
-      // rather than a new kind, because that is what it is: a small set of
-      // stated values, each with a source, plus a named place the decision can
-      // be taken instead. The `editable` slot carries the externalise
-      // affordance — this step plugs into an acquirer's own underwriting tool
-      // where they run one, and saying so is the difference between an offer
-      // and a replacement.
+      // because that is what it is: a small set of stated values, each with a
+      // source. Every figure is RETURNED BY THE ACQUIRER'S OWN RISK ENGINE —
+      // the step delegates to it (`delegate.system: "Your risk model"`), so
+      // nothing here is Ingenico's view to offer, revise or replace.
       const scored = recordedScore(merchant) !== null
       return {
         kind: "records",
         title: "Exposure and acceptance limit",
         note: "What the acquirer would be left carrying if this merchant took payment and disappeared.",
-        editable: {
-          label: "Integrate your own model",
-          where: "Your underwriting service, over API — this recommendation is replaced by yours",
+        governed: {
+          system: "your risk engine and credit policy",
+          why: "Ingenico reads these values over API and applies them as returned. The agent does not weight the factors, set the limit, or proceed against it.",
+          change: "To move a limit, change the rule in your credit policy and re-run this step — the new figure flows through here.",
         },
         rows: [
           {
@@ -2253,11 +2272,15 @@ export function artifactFor(
             source: scored ? "your credit policy — category rules" : "cannot be assigned on an unscored file",
           },
           {
-            label: "Recommended daily limit",
+            // Not "Recommended" — a recommendation is something the reader may
+            // decline, and this is their own engine's ruling coming back.
+            label: "Daily limit",
             // Withheld, not zeroed. A limit of £0 reads as a decision to accept
             // nothing, which is a rejection nobody made.
             value: scored ? "£14,000 / day" : null,
-            source: scored ? "modelled on expected volume ÷ settlement cycle" : "no limit can be set until the file is scored",
+            source: scored
+              ? "your credit policy — standard retail rule, on projected volume"
+              : "your policy returns no limit until the file is scored",
           },
           {
             label: "Settlement exposure window",

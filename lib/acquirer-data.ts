@@ -427,15 +427,22 @@ export const PIPELINE: PipelineStep[] = [
     lane: "risk",
     band: "Augment",
     acquirerRole: "signs-off",
-    blurb: "Agent models the financial exposure and recommends a limit. Acquirer signs the regulated decision.",
-    agentMission: "Size the exposure this merchant creates and put a defensible limit behind it.",
+    blurb: "Agent assembles the evidence and runs it through your risk engine. Acquirer signs the regulated decision.",
+    agentMission:
+      "Put a complete, reconciled file in front of your risk engine, then show exactly what it returned and what stands behind it.",
     tools: [
       ingenicoTool("Document AI"),
       acquirerTool("Risk model"),
       acquirerTool("Credit policy"),
     ],
+    /* The offer of "an in-context model for acquirers who do not run one" is
+       DELETED, not softened. It contradicted this step's own `tools` row, where
+       both the risk model and the credit policy are the acquirer's, and it is
+       what made an "Integrate your own model" button look sensible: if Ingenico
+       ships a fallback, swapping it in is a real act. It does not. The engine is
+       theirs, the agent calls it, and its answer is not ours to revise. */
     integration:
-      "Your risk model remains the system of record and your thresholds decide the outcome. If you already underwrite in your own tool, this step plugs into it over API — the in-context model is there for acquirers who do not run one.",
+      "Your risk model and credit policy are the system of record and your thresholds decide the outcome. The agent calls them over your existing integration and applies what they return — it cannot re-weight a factor, move a limit, or proceed against a decline.",
     tasks: [
       /* Two of these four carry no `delegate`, and that is the point of the
          field. Reading the documents and spotting what sits outside policy are
@@ -448,9 +455,15 @@ export const PIPELINE: PipelineStep[] = [
         output: "docai.parse → 6 docs, 18 fields, 0 inconsistencies ok",
       },
       {
-        label: "Score the risk",
-        detail: "Combines all signals into a single risk score and band.",
-        output: "risk.score → 18 / 100  band=LOW",
+        /* "Score the risk" / "Combines all signals into a single risk score"
+           said the AGENT weights the factors — which this task's own
+           `delegate.reads` directly denies one line below. On the KYC lane
+           "Verify" and "Screen" are fine: they name an operation the agent
+           genuinely initiates. "Score" and "Set" are DECISION verbs, and the
+           decision is the engine's. */
+        label: "Read your risk score",
+        detail: "Sends the parsed signals to your risk model and reads back the score and band.",
+        output: "risk.score → 18 / 100  band=LOW  (returned by your risk model)",
         delegate: {
           runsOn: "acquirer",
           capability: "Risk scoring",
@@ -460,9 +473,12 @@ export const PIPELINE: PipelineStep[] = [
         },
       },
       {
-        label: "Set the acceptance limit",
-        detail: "Recommends the daily exposure the acquirer would carry, and why.",
-        output: "limit.recommend → £14,000/day  (category: standard retail)",
+        label: "Read your acceptance limit",
+        // Not "Recommends": a recommendation is Ingenico's view, offered for
+        // the acquirer to take or leave. The limit is their credit policy's
+        // ruling coming back, and the agent applies it as returned.
+        detail: "Reads the daily exposure your credit policy allows, and the rule that produced it.",
+        output: "limit.fetch → £14,000/day  (rule: standard retail)",
         delegate: {
           runsOn: "acquirer",
           capability: "Credit policy",
