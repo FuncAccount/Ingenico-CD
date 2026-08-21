@@ -51,6 +51,7 @@ import {
   blockingFinding,
   haltedSteps,
   outstandingChecks as countOutstandingChecks,
+  stepHasRun,
   taskExceptions,
   type ExceptionContext,
   taskDetail,
@@ -71,7 +72,7 @@ import { pendingReleases, type Releases } from "@/lib/releases"
 import { edgeResolved, outstandingDocuments, type EdgeResolution } from "@/lib/underwriting"
 import { useDemo, useLiveMerchant, responseKey } from "@/components/acquirer/demo-provider"
 import { DemoInbound } from "@/components/acquirer/demo-control"
-import { exceptionDetailMissing, exceptionOnStep } from "@/lib/exceptions"
+import { exceptionDetailMissing, exceptionOnStep, locatedException } from "@/lib/exceptions"
 import { ExceptionPanel } from "@/components/acquirer/exception-panel"
 
 type StepState = "done" | "active" | "upcoming"
@@ -205,7 +206,7 @@ export function MerchantJourney({
   // show a finished tick over one either.
   //
   // The rail was the worst of the three surfaces: KYC dispatches a liveness
-  // check, the file moves on, and R1 drew a solid tick — the strongest claim
+  // check, the file moves on, and R1 drew a solid tick �� the strongest claim
   // the marker can make — over a check nobody had answered. The merchant is
   // legitimate and simply waiting on a provider, and nothing on the rail said
   // so, so the wait was invisible until someone opened the one task holding
@@ -886,12 +887,18 @@ function StepCockpit({
      higher would tick tasks the halt prevented; anything lower would hide the
      one that found the problem. */
   const authored = exceptionOnStep(merchant, step.id)
+  /* The timeline-only register. It records THAT the step ran but not WHICH task
+     stopped, so its tasks resume fully run rather than at a guessed index —
+     picking one would put a red mark on a task chosen at random. */
+  const locatedHere = locatedException(merchant)?.step === step.id
   const initialProgress =
     state === "done"
       ? step.tasks.length
       : authored
         ? Math.min(authored.taskIndex + 1, step.tasks.length)
-        : 0
+        : locatedHere
+          ? step.tasks.length
+          : 0
   const [completed, setCompleted] = useState(initialProgress)
   const [status, setStatus] = useState<RunStatus>(
     state === "done" ? "done" : "idle",
@@ -2289,6 +2296,13 @@ function StepCockpit({
               // the handoff cannot report an approval over a step the panel
               // directly above it is calling blocked.
               hasFinding={finding !== null}
+              /* Whether the agent has actually been here. Without it the panel
+                 synthesised a settled handoff from position alone, so a step
+                 nobody had run reported "Approved by you · date not recorded" —
+                 a party recorded as having answered a request that was never
+                 sent. Same `stepHasRun` the finding above and the check count
+                 beside it read. */
+              hasRun={stepHasRun(merchant, step.id, played)}
               // What an approval taken here would be ABOUT, so the record can
               // later tell whether the design has moved underneath it.
               basis={decisionBasis(step.id, merchant, theme)}

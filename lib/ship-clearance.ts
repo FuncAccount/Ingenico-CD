@@ -169,6 +169,31 @@ export function shipClearance(
 
   const shipStep = PIPELINE.find((s) => s.id === REJOIN_STEP)!
 
+  /* THE STEP THE GATE GOVERNS IS ALSO A STEP THAT CAN FAIL.
+  
+     `SHIP_PREREQUISITES` is every step BEFORE the rejoin, so the loop above
+     asks about the eight steps behind Ship and never about Ship itself. That
+     left the one question this gate exists to answer unasked: Glasswing sat
+     flagged as an exception with its own timeline recording "Second shipment
+     held in transit — commercial invoice rejected at the border", and the panel
+     directly above it read "Cleared to release — all 8 prior steps have passed,
+     there was nothing left to decide." Both statements were true of what they
+     measured. Neither was true of the shipment.
+  
+     A hold here is materially different from the ones above: those say the file
+     has not EARNED release yet, this says the release itself has run into
+     trouble. It is still a `failed` hold, because the consequence is identical
+     — parcels do not move — and inventing a third `kind` would fragment the
+     rendering for a distinction the reader does not have to act on.
+  
+     NOT added to `checked`. That array is the denominator behind "all N prior
+     steps passed", and Ship is not one of its own prior steps; counting it
+     would make a true sentence report 9 where 8 is the honest figure. */
+  const shipFinding = blockingFinding(shipStep.id, merchant, ctx, played)
+  if (shipFinding) {
+    holds.push({ kind: "failed", step: shipStep, headline: shipFinding.headline })
+  }
+
   return {
     granted: holds.length === 0,
     holds,
@@ -192,8 +217,19 @@ export function clearanceLine(c: ShipClearance): string {
   if (c.granted) {
     return `Cleared automatically — all ${c.checked.length} prior steps passed.`
   }
-  const failed = c.holds.filter((h) => h.kind === "failed").length
-  const pending = c.holds.length - failed
+  /* THE SHIPMENT'S OWN TROUBLE IS NOT ONE OF THE PRIOR STEPS.
+  
+     `checked` is the eight steps behind the rejoin, so every count quoted
+     against it has to exclude the hold Ship raises on itself — otherwise the
+     line reads "1 failed of 8 prior steps" while all eight of those steps
+     passed, which is the same defect as the panel it replaces: a true-sounding
+     sentence measured against the wrong population. Glasswing produced exactly
+     that on the first pass of this fix. */
+  const own = c.holds.filter((h) => h.step.id === REJOIN_STEP)
+  const prior = c.holds.filter((h) => h.step.id !== REJOIN_STEP)
+
+  const failed = prior.filter((h) => h.kind === "failed").length
+  const pending = prior.length - failed
   // Both figures print when both exist. Reporting only the failures would
   // imply that fixing them releases the shipment, when unfinished work would
   // still be holding it.
@@ -201,7 +237,14 @@ export function clearanceLine(c: ShipClearance): string {
     failed > 0 ? `${failed} failed` : null,
     pending > 0 ? `${pending} not finished` : null,
   ].filter(Boolean)
-  const detail = `${parts.join(", ")} of ${c.checked.length} prior steps`
+
+  const clauses = [
+    parts.length ? `${parts.join(", ")} of ${c.checked.length} prior steps` : null,
+    // Stated in words, not counted. There is only ever one shipment step, so a
+    // figure here would be a denominator of one pretending to be a measurement.
+    own.length ? `the shipment itself is stopped` : null,
+  ].filter(Boolean)
+  const detail = clauses.join(", and ")
   // Past tense once the parcels have gone. "Withheld" would describe a hold
   // that is not in force on hardware already delivered.
   return c.released

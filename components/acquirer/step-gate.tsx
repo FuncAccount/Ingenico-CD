@@ -132,6 +132,10 @@ interface Props {
    *  `haltedSteps` set the rail and the ship gate read, so the three cannot
    *  disagree about one step. */
   hasFinding: boolean
+  /** Whether this step's agent has actually run. REQUIRED, not defaulted: a
+   *  defaulted `true` restores the bug this exists to prevent, and a defaulted
+   *  `false` would blank out settled history. */
+  hasRun: boolean
   /** A fingerprint of what an approval taken here would be about, stored on the
    *  decision so a later edit to the same artefact can supersede it. */
   basis: string | null
@@ -146,6 +150,7 @@ export function StepGate({
   precondition = null,
   wasReset = false,
   hasFinding,
+  hasRun,
   basis,
 }: Props) {
   // Keyed by step AND by what was ordered: steps 7 and 8 otherwise promise a
@@ -182,11 +187,24 @@ export function StepGate({
      reading "agent run stopped". `hasFinding` is passed in from the same
      `haltedSteps` set the rail and the ship gate read, so all three surfaces
      answer this from one source. */
-  const isPast = stepById(step).lane !== "risk"
-    ? step < merchant.currentStep && !wasReset && !hasFinding
+  /* AND THE THIRD ROUTE TO A FALSE GREEN: NO RUN AT ALL.
+  
+     `isPast` synthesises a settled handoff — "Approved by you", "Returned by
+     Ingenico" — out of position alone. That is sound for work the agent really
+     did, but the same line also greened steps whose agent had never been played,
+     which is the case the user caught: a handoff cannot be settled by a party
+     who was never asked, and the request is only made when the run goes.
+  
+     `hasRun` therefore joins `wasReset` and `hasFinding` as a precondition on
+     every branch. It reads the SAME `stepHasRun` the findings and the check
+     counts use, so the badge, the panel and the gate cannot disagree about
+     whether this step has executed. */
+  const settledByPosition = stepById(step).lane !== "risk"
+    ? step < merchant.currentStep
     : // Risk steps carry no meaningful id order, so position cannot be read off
       // `currentStep` at all. The lane's own verdict is the only honest source.
-      merchant.riskLane.verdict === "cleared" && !wasReset && !hasFinding
+      merchant.riskLane.verdict === "cleared"
+  const isPast = settledByPosition && hasRun && !wasReset && !hasFinding
 
   // The acquirer's own decision is held in the shared record, not in this
   // component's handoff state — otherwise signing off here and signing off on
@@ -287,7 +305,25 @@ export function StepGate({
         <h4 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
           Handoffs
         </h4>
-        {blocking === null ? (
+        {blocking === null && !runComplete ? (
+          /* NO GREEN BEFORE THE RUN.
+          
+             `blocking === null` only says no handoff is waiting on a named
+             party — which is trivially true before the agent has run, because
+             nothing has been requested of anyone yet. Read as "Step clear" it
+             became a green all-clear on a step that had done nothing, sitting
+             one line above a rail that correctly said "waiting on the agent
+             run". The two halves of this same header disagreed.
+          
+             An absence of blockers is not a pass. Until the run has produced
+             something, the honest reading is that the question has not been
+             asked, so this states that in neutral grey and keeps green for
+             steps that have actually earned it. */
+          <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+            <Clock className="h-3 w-3" />
+            Not yet run
+          </span>
+        ) : blocking === null ? (
           <span className="inline-flex items-center gap-1 rounded-full bg-success/12 px-2 py-0.5 text-[10px] font-medium text-success">
             <CheckCircle2 className="h-3 w-3" />
             Step clear

@@ -1714,6 +1714,22 @@ export function stepHasRun(
   played: ReadonlySet<StepId>,
 ): boolean {
   if (exceptionOnStep(merchant, stepId)) return true
+
+  /* The SECOND self-evidencing register, listed here for exactly the reason it
+     sits above the gate in `blockingFinding`: an "Agent" timeline line reading
+     "Second shipment held in transit — commercial invoice rejected at the
+     border" could not have been written without the agent having gone. It is a
+     weaker record than an authored exception — no task index, no consequence —
+     but it is still a record OF A RUN, which is the only question asked here.
+  
+     Omitting it put the two functions into disagreement about one step:
+     `blockingFinding` reported Glasswing's held shipment while this said the
+     step had never run, so the cockpit would draw "Play agent run · 0/4 tasks"
+     above the finding. That is the original contradiction moved one function to
+     the left. THESE TWO LISTS MUST MATCH. */
+  const located = locatedException(merchant)
+  if (located?.step === stepId) return true
+
   return stepEvidenced(merchant, stepById(stepId), played)
 }
 
