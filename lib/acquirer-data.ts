@@ -1357,6 +1357,48 @@ export function blockingPredecessor(
   return null
 }
 
+/**
+ * WHICH STEP TO OPEN A FILE ON.
+ *
+ * `merchant.currentStep` records where the file's ATTENTION sits, and that is
+ * frequently not a step anyone can act on. Orchard Lane records R3
+ * Underwriting because underwriting is what the missing documents are holding
+ * up — but nothing on that file has run, and R3 cannot start until 01 Merchant
+ * capture has the documents. Opening there put the reader in front of a step
+ * badged "Not started", a disabled run control, and an empty artefact pane
+ * reading "This task has not run yet", with the actual outstanding work three
+ * steps behind them and no indication they were in the wrong place.
+ *
+ * WHERE A CONSEQUENCE IS REPORTED IS NOT WHERE THE WORK IS. The exception is
+ * legitimately recorded against underwriting; the thing to do about it lives at
+ * capture. A landing rule has to resolve to the second.
+ *
+ * The app already knew this and did not act on it — the same
+ * `blockingPredecessor` call that renders "Waiting on 01" on the disabled run
+ * button was sitting one screen away from the decision about where to put the
+ * reader. That is the recurring shape here: a value computed, rendered, and
+ * then not consumed at the one point where it would have changed what someone
+ * saw.
+ *
+ * Returns `currentStep` untouched whenever it is reachable, so this only ever
+ * moves a reader OFF a step they could not have used.
+ */
+export function openingStep(
+  merchant: Pick<Merchant, "currentStep" | "riskLane">,
+  halted: ReadonlySet<StepId>,
+): StepId {
+  const recorded = PIPELINE.find((s) => s.id === merchant.currentStep)
+  if (!recorded) return merchant.currentStep
+  const blocker = blockingPredecessor(
+    merchant,
+    recorded,
+    NO_SESSION_PROGRESS,
+    halted,
+    NO_SESSION_PROGRESS,
+  )
+  return blocker ? blocker.id : merchant.currentStep
+}
+
 /* `shipRisk` lived here. It warned and allowed the run anyway, and it read
  * ONLY `riskLane` — so a rejected order or a failed terminal configuration on
  * the build lane could not hold a shipment back at all.

@@ -33,6 +33,7 @@ import {
   type PipelineStep,
   laneState,
   blockingPredecessor,
+  openingStep,
   NO_SESSION_PROGRESS,
   REJOIN_STEP,
   type StepId,
@@ -189,12 +190,10 @@ export function MerchantJourney({
   // matters when the journey is opened with nothing selected.
   const current = useLiveMerchant(merchant ?? book[3] ?? book[0])
   const [pickerOpen, setPickerOpen] = useState(false)
-  const [focusStep, setFocusStep] = useState<StepId>(current.currentStep)
-
-  // When the merchant changes, refocus on their current step.
-  useEffect(() => {
-    setFocusStep(current.currentStep)
-  }, [current.id, current.currentStep])
+  /* The focus state used to be declared here and opened the file on
+     `current.currentStep`. It now lives below `flaggedSteps`, because deciding
+     where to open a file requires knowing which steps are actually reachable,
+     and that set is not computed until then. */
 
   const tone = statusTone(current.status)
 
@@ -299,6 +298,33 @@ export function MerchantJourney({
     () => new Set<StepId>([...findingSteps, ...unresolvedSteps]),
     [findingSteps, unresolvedSteps],
   )
+
+  /* WHERE TO OPEN THE FILE. See `openingStep`: a file records the step its
+     attention sits on, which is regularly a step nobody can act on yet, so
+     opening there lands the reader on a disabled run control and an empty
+     artefact pane while the real work sits behind them. */
+  const [focusStep, setFocusStep] = useState<StepId>(() => openingStep(current, flaggedSteps))
+
+  /* THE HALTS ARE READ THROUGH A REF ON PURPOSE — do not "fix" this by adding
+     `flaggedSteps` to the dependency array.
+  
+     The trigger for re-landing is the FILE CHANGING, not the halts changing.
+     The halts move constantly during normal use: every run, every resolved
+     check, every brand edit produces a new set. In the deps that would re-fire
+     the landing mid-session and yank the panel out from under someone who had
+     deliberately opened a different step — the reader would lose their place
+     for pressing a button that worked. The ref keeps the trigger narrow while
+     still reading a current set when it does fire. */
+  const haltsRef = useRef(flaggedSteps)
+  haltsRef.current = flaggedSteps
+
+  /* Deps are the FILE'S IDENTITY AND RECORDED POSITION, exactly as before —
+     not `current` itself, which `useLiveMerchant` hands back as a fresh object
+     on every update and which would therefore re-land the reader continuously. */
+  useEffect(() => {
+    setFocusStep(openingStep(current, haltsRef.current))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current.id, current.currentStep])
 
   // How many checks each step is still waiting on, so the rail marker cannot
   // show a finished tick over one either.
