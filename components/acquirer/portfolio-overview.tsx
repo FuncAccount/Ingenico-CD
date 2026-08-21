@@ -11,17 +11,21 @@ import {
 } from "lucide-react"
 import {
   PIPELINE,
+  laneState,
   portfolioKpis,
   portfolioOrder,
   statusTone,
   stepById,
   type Merchant,
+  type PipelineStep,
+  type StepId,
 } from "@/lib/acquirer-data"
 import { pendingCheckSteps as pendingChecks } from "@/lib/artifacts"
 import { PulseDot } from "@/components/acquirer/in-progress-tag"
 import { applyDecisions } from "@/lib/decisions"
 import { useDecisions } from "@/components/acquirer/decisions-provider"
 import { useBook } from "@/components/acquirer/book-provider"
+import { useProgress } from "@/components/acquirer/progress-provider"
 import { cn } from "@/lib/utils"
 
 function StepPill({ step }: { step: number }) {
@@ -36,22 +40,88 @@ function StepPill({ step }: { step: number }) {
   )
 }
 
-function MiniTrack({ current }: { current: number }) {
-  return (
-    <div className="flex items-center gap-1" aria-hidden>
-      {PIPELINE.map((s) => (
+/* The lanes, derived from PIPELINE by ARRAY POSITION so adding a step to either
+   one needs no edit here — and never by id, which is the whole trouble below. */
+const FORK_AT = PIPELINE.findIndex((s) => s.lane !== "spine")
+const LEAD_STEPS = PIPELINE.slice(0, FORK_AT)
+const RISK_STEPS = PIPELINE.filter((s) => s.lane === "risk")
+const BUILD_STEPS = PIPELINE.filter((s) => s.lane === "build")
+const TAIL_STEPS = PIPELINE.slice(FORK_AT).filter((s) => s.lane === "spine")
+
+function segTone(state: "done" | "active" | "upcoming") {
+  return state === "done"
+    ? "bg-primary"
+    : state === "active"
+      ? "bg-primary/60"
+      : "bg-border"
+}
+
+/**
+ * The pipeline forks, so one flat row of pills was the wrong shape — and it was
+ * also wrong on the facts, which is the more serious half.
+ *
+ * It ranked steps with `s.id < current`, but the risk lane runs 10 → 11 → 2.
+ * So a merchant sitting at B1 Order rendered KYC and Pricing as never-started
+ * while Underwriting came out DONE: an approval nobody had given, sitting after
+ * two checks it cannot legally precede. `laneState` has resolved this correctly
+ * for every other surface — and its own comment warns against exactly this
+ * comparison — so this was the last place still asking the question the old way.
+ *
+ * CONCURRENCY IS DRAWN AS SHARED HORIZONTAL EXTENT: the two lanes stack over one
+ * span rather than running end to end, because occupying the same width is what
+ * says "at the same time". Laid side by side they would read as six more
+ * sequential steps, which is the diagram we are trying to stop drawing.
+ */
+function MiniTrack({
+  merchant,
+  progressed,
+}: {
+  merchant: Merchant
+  progressed: ReadonlySet<StepId>
+}) {
+  const stateOf = (s: PipelineStep) => laneState(merchant, s, progressed)
+  const doneIn = (steps: PipelineStep[]) =>
+    steps.filter((s) => stateOf(s) === "done").length
+
+  const Trunk = ({ steps }: { steps: PipelineStep[] }) => (
+    <>
+      {steps.map((s) => (
         <span
           key={s.id}
-          className={cn(
-            "h-1.5 w-3.5 rounded-full",
-            s.id < current
-              ? "bg-primary"
-              : s.id === current
-                ? "bg-primary/60"
-                : "bg-border",
-          )}
+          className={cn("h-2 w-3.5 rounded-full", segTone(stateOf(s)))}
         />
       ))}
+    </>
+  )
+
+  return (
+    <div
+      className="flex items-center gap-1"
+      role="img"
+      // The picture asserts something the Stage column cannot: that these run
+      // together. Left aria-hidden, that claim would reach nobody.
+      aria-label={`Risk ${doneIn(RISK_STEPS)} of ${RISK_STEPS.length}, build ${doneIn(
+        BUILD_STEPS,
+      )} of ${BUILD_STEPS.length}, running in parallel`}
+    >
+      <Trunk steps={LEAD_STEPS} />
+      {/* Split and merge ticks. The full diagram draws arches; at 8px the
+          honest miniature is a hairline. */}
+      <span className="h-2.5 w-px bg-border" />
+      <div className="flex w-14 flex-col gap-[2px]">
+        {[RISK_STEPS, BUILD_STEPS].map((lane, i) => (
+          <div key={i} className="flex gap-[3px]">
+            {lane.map((s) => (
+              <span
+                key={s.id}
+                className={cn("h-[3px] flex-1 rounded-full", segTone(stateOf(s)))}
+              />
+            ))}
+          </div>
+        ))}
+      </div>
+      <span className="h-2.5 w-px bg-border" />
+      <Trunk steps={TAIL_STEPS} />
     </div>
   )
 }
@@ -129,6 +199,7 @@ export function PortfolioOverview({
 }) {
   const { decisions } = useDecisions()
   const { merchants: book } = useBook()
+  const { progressFor } = useProgress()
 
   // Every figure and badge on this screen now comes off one list whose statuses
   // reflect the decisions actually taken. Previously the KPI, the filter and
@@ -262,7 +333,10 @@ export function PortfolioOverview({
                       ))}
                     </td>
                     <td className="px-5 py-4">
-                      <MiniTrack current={m.currentStep} />
+                      {/* The session's own progress, so a row agrees with the
+                          journey rather than judging the file against the bare
+                          fixture. */}
+                      <MiniTrack merchant={m} progressed={progressFor(m.id)} />
                     </td>
                     <td className="px-5 py-4">
                       <span

@@ -238,10 +238,16 @@ export function MerchantJourney({
   // silently land it in the wrong branch of the fork.
   const riskLane = PIPELINE.filter((s) => s.lane === "risk")
   const buildLane = PIPELINE.filter((s) => s.lane === "build")
-  const firstForkId = Math.min(...riskLane.concat(buildLane).map((s) => s.id))
+  /* Split by ARRAY POSITION, like REJOIN_STEP. This was `s.id < firstForkId`
+     with `firstForkId = min(lane ids)`, which only ever worked by coincidence:
+     the risk lane runs 10 → 11 → 2, so that minimum is Underwriting's 2, which
+     happens to fall between capture (1) and Ship (7). Renumber any step, or add
+     a lane step with a lower id, and every spine step lands in `before` — the
+     rejoin trunk would silently vanish. */
+  const forkAt = PIPELINE.findIndex((s) => s.lane !== "spine")
   const spine = {
-    before: PIPELINE.filter((s) => s.lane === "spine" && s.id < firstForkId),
-    after: PIPELINE.filter((s) => s.lane === "spine" && s.id > firstForkId),
+    before: PIPELINE.slice(0, forkAt),
+    after: PIPELINE.slice(forkAt).filter((s) => s.lane === "spine"),
   }
 
   return (
