@@ -707,13 +707,15 @@ export const PIPELINE: PipelineStep[] = [
        `releases` is the honest role — Ingenico runs every parcel movement and
        the acquirer contributes exactly one thing, permission to go.
     
-       Note the release here is GRANTED BY THE CHECKS, not by a click (see
-       lib/ship-clearance.ts). The role still belongs to the acquirer because
-       it is the acquirer's clearance being given; automation decides when, not
-       whose it is. */
+       The role used to be aspirational. The release was granted by the checks
+       and no acquirer ever performed it, so this field named an act nobody
+       did — while the screen credited that absent decision as the reason ten
+       parcels were in transit. Clearance is still computed; the release is now
+       a real commit behind a real control, and the parcels do not move until
+       it is given (see lib/ship-clearance.ts). */
     acquirerRole: "releases",
-    blurb: "Ingenico ships the kit. You observe — and your clearance is what lets the parcels leave.",
-    agentMission: "Get every parcel to the merchant's door, once the file is clear to release.",
+    blurb: "Ingenico ships the kit. You observe — and your release is what lets the parcels leave.",
+    agentMission: "Get every parcel to the merchant's door, once you release the shipment.",
     tools: [
       externalTool("Carrier API"),
       ingenicoTool("Label printing"),
@@ -749,7 +751,7 @@ export const PIPELINE: PipelineStep[] = [
        passed. The sentence now separates the two — Ingenico's work is
        automatic, the clearance in front of it is a condition. */
     handback:
-      "Ingenico handles the logistics end to end and tracking flows straight back into the journey. Release is automatic once every prior step has passed — until then the parcels stay put.",
+      "Ingenico handles the logistics end to end and tracking flows straight back into the journey. Clearance comes automatically once every prior step has passed, but the release is yours to give — until you do, the parcels stay put.",
   },
   {
     id: 8,

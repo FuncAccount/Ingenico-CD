@@ -2,7 +2,8 @@
 
 import { createContext, useCallback, useContext, useMemo, useState } from "react"
 import type { StepId } from "@/lib/acquirer-data"
-import { NO_SESSION_PROGRESS } from "@/lib/acquirer-data"
+import { NO_SESSION_PROGRESS, REJOIN_STEP } from "@/lib/acquirer-data"
+import type { ShipRelease } from "@/lib/ship-clearance"
 
 /**
  * Which steps have been completed during this session, per merchant.
@@ -71,6 +72,20 @@ interface ProgressContextValue {
    * is two surfaces disagreeing about the same step.
    */
   clearStep: (merchantId: string, step: StepId) => void
+  /**
+   * The acquirer's release of the shipment, per merchant, if given.
+   *
+   * Here rather than in the journey for the reason this file exists: the
+   * journey unmounts whenever sign-off opens, and a release that evaporated on
+   * the way to another screen would leave parcels already in transit reading as
+   * never authorised. It is also the same KIND of fact as the two sets above —
+   * something that happened in this session against one file.
+   */
+  shipReleaseFor: (merchantId: string) => ShipRelease | undefined
+  /** Commit the release. Stamped once, here, so the time is the moment of the
+   *  decision and not of the next render. Idempotent: pressing twice must not
+   *  rewrite the hour on a commit already made. */
+  releaseShipment: (merchantId: string) => void
 }
 
 /**
@@ -86,6 +101,19 @@ export function ProgressProvider({ children }: { children: React.ReactNode }) {
   /** Stages the acquirer has explicitly reset, which is a claim the fixture's
    *  own position cannot express and the two sets above cannot retract. */
   const [reset, setReset] = useState<Record<string, ReadonlySet<StepId>>>({})
+  /** The acquirer's shipment releases, by merchant id. */
+  const [shipReleases, setShipReleases] = useState<Record<string, ShipRelease>>({})
+
+  const releaseShipment = useCallback((merchantId: string) => {
+    setShipReleases((prev) => {
+      // Idempotent, and the guard is load-bearing rather than a micro-
+      // optimisation: without it a second press would restamp `atIso`, and the
+      // record would report the time of the last click instead of the time the
+      // shipment was authorised.
+      if (prev[merchantId]) return prev
+      return { ...prev, [merchantId]: { atIso: new Date().toISOString() } }
+    })
+  }, [])
 
   const markPlayed = useCallback((merchantId: string, step: StepId) => {
     setPlayed((prev) => {
@@ -156,7 +184,32 @@ export function ProgressProvider({ children }: { children: React.ReactNode }) {
       next.add(step)
       return { ...prev, [merchantId]: next }
     })
+
+    /* AND THE RELEASE, when it is Ship being reset.
+    
+       Resetting a stage presents it as never run. Leaving the release standing
+       would show a freshly-reset Ship that is ALREADY authorised — the gate
+       bypassed on the one path built to demonstrate it, with the run playable
+       and no button ever pressed. Exactly the half-reset the `played` drop
+       above exists to prevent, one field along.
+    
+       Scoped to the rejoin: resetting B2 Branding says nothing about whether
+       the shipment was authorised, and clearing it there would silently revoke
+       a decision the acquirer did take. */
+    if (step === REJOIN_STEP) {
+      setShipReleases((prev) => {
+        if (!prev[merchantId]) return prev
+        const next = { ...prev }
+        delete next[merchantId]
+        return next
+      })
+    }
   }, [])
+
+  const shipReleaseFor = useCallback(
+    (merchantId: string) => shipReleases[merchantId],
+    [shipReleases],
+  )
 
   const progressFor = useCallback(
     (merchantId: string) => progress[merchantId] ?? NO_SESSION_PROGRESS,
@@ -174,8 +227,30 @@ export function ProgressProvider({ children }: { children: React.ReactNode }) {
   )
 
   const value = useMemo(
-    () => ({ progress, progressFor, played, playedFor, resetFor, markPlayed, markDone, clearStep }),
-    [progress, progressFor, played, playedFor, resetFor, markPlayed, markDone, clearStep],
+    () => ({
+      progress,
+      progressFor,
+      played,
+      playedFor,
+      resetFor,
+      markPlayed,
+      markDone,
+      clearStep,
+      shipReleaseFor,
+      releaseShipment,
+    }),
+    [
+      progress,
+      progressFor,
+      played,
+      playedFor,
+      resetFor,
+      markPlayed,
+      markDone,
+      clearStep,
+      shipReleaseFor,
+      releaseShipment,
+    ],
   )
 
   return <ProgressContext.Provider value={value}>{children}</ProgressContext.Provider>

@@ -44,7 +44,7 @@ import { useDecisions } from "@/components/acquirer/decisions-provider"
 import { useBrandTheme } from "@/components/acquirer/brand-theme-provider"
 import { InProgressTag, PulseDot } from "@/components/acquirer/in-progress-tag"
 import { DelegationChip, DelegationTrace, type Beat } from "@/components/acquirer/delegation-trace"
-import { clearanceLine, shipClearance } from "@/lib/ship-clearance"
+import { clearanceLine, shipClearance, type ShipRelease } from "@/lib/ship-clearance"
 import { cn } from "@/lib/utils"
 import {
   artifactFor,
@@ -65,7 +65,7 @@ import {
   type OrderDraft,
 } from "@/components/acquirer/artifact-inspector"
 import { StepGate } from "@/components/acquirer/step-gate"
-import { ownerOf, waitingOn, type HandoffState } from "@/lib/handoffs"
+import { fmtDateTime, ownerOf, waitingOn, type HandoffState } from "@/lib/handoffs"
 import { blockers, checkBrand, defaultTheme, type BrandTheme } from "@/lib/branding"
 import { useProgress } from "@/components/acquirer/progress-provider"
 import { useBook } from "@/components/acquirer/book-provider"
@@ -255,7 +255,8 @@ export function MerchantJourney({
 
      Read FIRST, above every derivation below, because findings, check counts
      and the rail all now depend on what has actually run. */
-  const { progressFor, markDone, clearStep, playedFor, markPlayed, resetFor } = useProgress()
+  const { progressFor, markDone, clearStep, playedFor, markPlayed, resetFor, shipReleaseFor, releaseShipment } =
+    useProgress()
   const progressed = progressFor(current.id)
   const played = playedFor(current.id)
   /* Stages explicitly reset. A third set rather than a subtraction from the two
@@ -264,6 +265,15 @@ export function MerchantJourney({
      either, so clearing it was a no-op and the rail went on drawing a solid
      completion tick beside a cockpit reading "Ready · 0/4 tasks". */
   const wasReset = resetFor(current.id)
+  /* The acquirer's shipment release for THIS file. Read here beside the other
+     session facts so the cockpit, the gate and the banner all consult one
+     record — a second copy is how "cleared" and "withheld" came to appear on
+     one screen before. */
+  const shipRelease = shipReleaseFor(current.id)
+  const releaseCurrentShipment = useCallback(
+    () => releaseShipment(current.id),
+    [releaseShipment, current.id],
+  )
 
   // Which steps are carrying an unresolved finding, so the marker cannot show
   // a tick over one. Positional state alone could never know this: it only
@@ -655,6 +665,8 @@ export function MerchantJourney({
           played={played}
           onPlayed={markStepPlayed}
           wasReset={wasReset}
+          shipRelease={shipRelease}
+          onReleaseShipment={releaseCurrentShipment}
         />
       </div>
     </div>
@@ -1037,6 +1049,8 @@ function StepCockpit({
   played,
   onPlayed,
   wasReset,
+  shipRelease,
+  onReleaseShipment,
 }: {
   step: PipelineStep
   state: StepState
@@ -1073,6 +1087,11 @@ function StepCockpit({
   /** Stages explicitly reset, so the ship gate cannot clear a dispatch against
    *  a build step this very screen is showing as never run. */
   wasReset: ReadonlySet<StepId>
+  /** The acquirer's release of this shipment, if given. Passed in rather than
+   *  read here so the rail, the gate and this panel share one record. */
+  shipRelease: ShipRelease | undefined
+  /** Commit the release. Ingenico does not book a carrier until this runs. */
+  onReleaseShipment: () => void
 }) {
   // Null unless the risk lane is genuinely outstanding — see the banner below.
   /* Computed for every step, not just Ship, because the Play gate below reads
@@ -1080,8 +1099,8 @@ function StepCockpit({
      disagree today, but a panel saying "cleared" above a button saying
      "withheld" is the defect this app keeps producing, so there is one. */
   const clearance = useMemo(
-    () => shipClearance(merchant, exceptionCtx, progressed, played, wasReset),
-    [merchant, exceptionCtx, progressed, played, wasReset],
+    () => shipClearance(merchant, exceptionCtx, progressed, played, wasReset, shipRelease),
+    [merchant, exceptionCtx, progressed, played, wasReset, shipRelease],
   )
 
   /* How many tasks have completed. Upcoming steps start at 0 (preview), done
@@ -1719,12 +1738,35 @@ function StepCockpit({
         tone: "neutral",
       }
     }
-    if (step.id !== REJOIN_STEP || clearance.granted) return null
+    if (step.id !== REJOIN_STEP) return null
     /* Nothing left to gate once the parcels have gone. Disabling Replay on a
        delivered shipment would offer to withhold something already in the
        merchant's hands — the control would be claiming a power it does not
        have. The panel above still reports the open findings. */
     if (clearance.released) return null
+
+    /* THE RELEASE GATE — what makes the button on the panel above an actual
+       control rather than an ornament.
+    
+       Clearance passing is NOT permission to ship; it only means nothing is in
+       the way. Before this existed the run played straight through on a clean
+       file and booked a carrier, so the screen credited an acquirer decision
+       nobody had made. The block is what holds the four logistics tasks until
+       the commit is given.
+    
+       NEUTRAL, deliberately. Nothing has failed and nothing is being withheld
+       from the acquirer — the file is waiting on them, which is the ordinary
+       and intended state of a cleared shipment. Amber here would put a warning
+       on every file that is working perfectly. */
+    if (clearance.release.kind === "awaiting") {
+      return {
+        badge: "Cleared",
+        action: "Awaiting your release",
+        reason: `${clearanceLine(clearance)} Nothing is holding this file — the parcels move when you release them.`,
+        tone: "neutral",
+      }
+    }
+    if (clearance.granted) return null
     return {
       badge: "Held",
       action: "Release withheld",
@@ -2205,14 +2247,68 @@ function StepCockpit({
           been taken at all. */}
       {step.lane === "spine" && step.id === REJOIN_STEP && (
         <div className="border-b border-border px-5 py-4">
-          {clearance.granted ? (
+          {clearance.release.kind === "awaiting" ? (
+            /* CLEARED, AND WAITING ON THE ACQUIRER. The state the old model
+               could not express: it went straight from "cleared" to shipped,
+               so this panel reported a decision as the reason ten parcels were
+               in transit while no one had taken it.
+            
+               Neutral framing on purpose — this is not a warning. The file is
+               in good order and the only thing outstanding is the commit. */
+            <div className="rounded-lg border border-border bg-muted/30 px-3 py-2.5">
+              <div className="flex gap-2.5">
+                <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-success" />
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-foreground">
+                    Cleared — your release
+                  </p>
+                  <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                    All {clearance.checked.length} prior steps across both lanes have passed, so
+                    nothing is holding this file. Clearance is automatic; the release is not.
+                    Ingenico books the carrier once you give it.
+                  </p>
+                </div>
+              </div>
+              {/* The commit. Names the consequence rather than saying "Confirm"
+                  — the act is hardware leaving a warehouse at your instruction,
+                  and it cannot be recalled from this screen. */}
+              <div className="mt-3 flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  onClick={onReleaseShipment}
+                  className="rounded-lg bg-primary px-3.5 py-2 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
+                >
+                  Release the shipment
+                </button>
+                <p className="text-[11px] leading-relaxed text-muted-foreground">
+                  Authorises Ingenico to dispatch. Not reversible from here once the carrier
+                  collects.
+                </p>
+              </div>
+            </div>
+          ) : clearance.release.kind === "given" ? (
+            /* RELEASED HERE, with the time we actually stamped. */
             <div className="flex gap-2.5 rounded-lg border border-success/40 bg-success/[0.07] px-3 py-2.5">
               <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-success" />
               <div>
-                <p className="text-sm font-semibold text-foreground">Cleared to release</p>
+                <p className="text-sm font-semibold text-foreground">Released by you</p>
                 <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
-                  All {clearance.checked.length} prior steps across both lanes have passed, so
-                  clearance was granted automatically — there was nothing left to decide. Ingenico
+                  {fmtDateTime(clearance.release.atIso)} · all {clearance.checked.length} prior
+                  steps had passed. Ingenico books the carrier and ships from here.
+                </p>
+              </div>
+            </div>
+          ) : clearance.release.kind === "onFile" ? (
+            /* ALREADY GONE, BEFORE THIS SESSION. Released — but nobody here
+               released it, and printing a time would invent the decision. Says
+               so, in the same terms `step-gate` uses for a missing approver. */
+            <div className="flex gap-2.5 rounded-lg border border-success/40 bg-success/[0.07] px-3 py-2.5">
+              <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-success" />
+              <div>
+                <p className="text-sm font-semibold text-foreground">Released</p>
+                <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                  All {clearance.checked.length} prior steps across both lanes have passed. This
+                  shipment left before the file reached you — no release on record here. Ingenico
                   books the carrier and ships from here.
                 </p>
               </div>
@@ -2271,11 +2367,16 @@ function StepCockpit({
                   {/* Says what makes it move, so a withheld release does not
                       read as a dead end. */}
                   <p className="mt-2.5 text-xs text-muted-foreground">
+                    {/* "Release is granted automatically once every step
+                        passes" was true of the old model and is now false: what
+                        arrives automatically is CLEARANCE, and the release
+                        still has to be given. Left unedited, this line would
+                        promise the shipment moves on its own. */}
                     {clearance.released
                       ? "Resolve the findings above. Doing so will not change this shipment, which has already left."
                       : clearance.failing
-                        ? "Resolve the findings above. Release is granted automatically once every step passes."
-                        : "No action needed here — release is granted automatically as the remaining steps pass."}
+                        ? "Resolve the findings above. Once every step passes, this file clears and the release is yours to give."
+                        : "Nothing to do here yet — this file clears as the remaining steps pass, and the release is yours to give once it does."}
                   </p>
                 </div>
               </div>

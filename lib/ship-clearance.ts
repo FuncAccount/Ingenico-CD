@@ -15,13 +15,37 @@
  *    parcels to leave — so that is the only thing modelled as a gate, and none
  *    of the four logistics tasks is dressed up as an acquirer action.
  *
- * 2. CLEARANCE IS COMPUTED, NOT CLICKED. It follows from the file: when every
- *    prior step on both lanes has passed there is nothing left to decide, so
- *    it is granted automatically. There is deliberately no "approve" button on
- *    a clean file — a control whose only correct use is to be pressed every
- *    time trains people to press it, and would let this screen take credit for
- *    a judgement the checks already made. The control therefore only ever
- *    appears in its WITHHELD state, where it has something real to say.
+ * 2. CLEARANCE IS COMPUTED. THE RELEASE IS CLICKED. These are two different
+ *    things and this file used to collapse them into one.
+ *
+ *    Clearance is eligibility, and it genuinely follows from the file: when
+ *    every prior step on both lanes has passed, nothing is blocking, and no
+ *    button should ask a human to restate what the checks already determined.
+ *    That much of the original reasoning stands and is unchanged below.
+ *
+ *    What it got wrong was concluding that therefore nothing is left to do.
+ *    The checks decide whether the parcels MAY go. They cannot decide that the
+ *    parcels DO go, or when — that is a commit, not a judgement, and it spends
+ *    money and puts hardware on a van. So the old objection ("a control whose
+ *    only correct use is to be pressed every time trains people to press it")
+ *    is right about an APPROVAL and wrong about a RELEASE: being pressed every
+ *    time is what a release IS, the same way Send is pressed on every mail
+ *    that has already been read back. Nothing is rubber-stamped, because the
+ *    judgement is not the thing being asked for.
+ *
+ *    The tell was in the step's own data. `acquirerRole` on Ship has read
+ *    "releases" all along — a role naming an act nobody performed, while the
+ *    screen said "clearance was granted automatically, there was nothing left
+ *    to decide" over four logistics tasks that had already run and ten parcels
+ *    already in transit. Same defect as a status tag asserting a check that
+ *    never ran, one level up: the app claimed an acquirer decision as the
+ *    reason hardware moved, and no acquirer had made one.
+ *
+ *    So: clearance stays derived and is the PRECONDITION. The release is an
+ *    act with a time on it, and it GATES the four logistics tasks — until it
+ *    is given, Ingenico does not book the carrier. A release button that did
+ *    not hold the run back would be decoration, which is the failure mode this
+ *    replaces, not a second copy of it.
  */
 
 import type { Merchant, PipelineStep, StepId } from "@/lib/acquirer-data"
@@ -62,6 +86,45 @@ export type ClearanceHold =
   /** Not finished yet. Nothing is wrong; it is simply not done. */
   | { kind: "incomplete"; step: PipelineStep; started: boolean }
 
+/**
+ * The acquirer's own commit: permission for this estate to leave.
+ *
+ * Stamped ONCE, when the button is pressed, never formatted from `new Date()`
+ * at render — a release re-clocked on every paint would report an old decision
+ * with today's time.
+ *
+ * There is no `by`. This app has no signed-in identity, and inventing a name
+ * on a record of who authorised a shipment would be the worst possible field
+ * to fabricate. `step-gate` already sets the precedent with "no approver on
+ * record" where attribution is genuinely absent.
+ */
+export interface ShipRelease {
+  atIso: string
+}
+
+/** merchantId → the release, if one has been given this session. */
+export type ShipReleases = Record<string, ShipRelease>
+
+/**
+ * Where the shipment stands with respect to the acquirer's commit.
+ *
+ * Four states, and the two easy to merge are `given` and `onFile`. A file the
+ * fixture placed at Install shipped before this gate existed: it is released,
+ * but nobody here released it, and printing a timestamp for it would invent a
+ * decision. `blocked` and `awaiting` are equally distinct — one is "not yours
+ * yet", the other is "yours now, and nothing else is in the way" — and they
+ * carry opposite instructions to the reader.
+ */
+export type ShipReleaseState =
+  /** Prerequisites are holding it. There is nothing to release yet. */
+  | { kind: "blocked" }
+  /** Cleared, nothing shipped, waiting on the acquirer. The button lives here. */
+  | { kind: "awaiting" }
+  /** Released here, this session, at a known time. */
+  | { kind: "given"; atIso: string }
+  /** Already gone before this session. Released, but no record of by whom. */
+  | { kind: "onFile" }
+
 export type ShipClearance = {
   /** Granted automatically the moment nothing is holding it. */
   granted: boolean
@@ -92,6 +155,15 @@ export type ShipClearance = {
    * and it needs saying rather than rounding to either clean or blocked.
    */
   released: boolean
+  /**
+   * The acquirer's commit, which is a DIFFERENT question from `released`.
+   *
+   * `released` asks whether the parcels have gone. This asks whether anyone
+   * authorised them to. They came apart the moment the button existed: a
+   * cleared file with nothing shipped and no release given is the state the
+   * old model had no way to express, and so ran straight through.
+   */
+  release: ShipReleaseState
 }
 
 export function shipClearance(
@@ -131,6 +203,15 @@ export function shipClearance(
    * set is a confident claim that nothing was reset.
    */
   wasReset: ReadonlySet<StepId>,
+  /**
+   * The acquirer's release for THIS merchant, if given.
+   *
+   * REQUIRED, for the fourth time in this signature and the same reason: a
+   * defaulted `undefined` is a confident claim that nobody released anything,
+   * and here that claim would hold a shipment on a surface that simply forgot
+   * to pass the record.
+   */
+  releaseRecord: ShipRelease | undefined,
 ): ShipClearance {
   const holds: ClearanceHold[] = []
 
@@ -234,16 +315,34 @@ export function shipClearance(
     holds.push({ kind: "failed", step: shipStep, headline: shipFinding.headline })
   }
 
+  // Also progress-aware: a Ship completed in this session has released its
+  // parcels just as surely as one the fixture placed at Install, and reading
+  // only the fixture would keep offering to withhold a dispatch that has
+  // already gone.
+  const gone = laneState(merchant, shipStep, progressed, halted, wasReset) === "done"
+  const granted = holds.length === 0
+
+  /* ORDER MATTERS: the session record is consulted BEFORE `gone`.
+  
+     Press release, then play the run, and both are true — but only one of them
+     knows when the decision was taken. Reading `gone` first would downgrade a
+     release we timestamped ourselves into "no record of by whom", throwing away
+     the very evidence the button exists to create. */
+  const release: ShipReleaseState = releaseRecord
+    ? { kind: "given", atIso: releaseRecord.atIso }
+    : gone
+      ? { kind: "onFile" }
+      : granted
+        ? { kind: "awaiting" }
+        : { kind: "blocked" }
+
   return {
-    granted: holds.length === 0,
+    granted,
     holds,
     checked: SHIP_PREREQUISITES,
     failing: holds.some((h) => h.kind === "failed"),
-    // Also progress-aware: a Ship completed in this session has released its
-    // parcels just as surely as one the fixture placed at Install, and reading
-    // only the fixture would keep offering to withhold a dispatch that has
-    // already gone.
-    released: laneState(merchant, shipStep, progressed, halted, wasReset) === "done",
+    released: gone,
+    release,
   }
 }
 
