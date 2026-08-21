@@ -13,7 +13,6 @@ import {
   Store,
 } from "lucide-react"
 import type { Merchant, StepId } from "@/lib/acquirer-data"
-import { stepById } from "@/lib/acquirer-data"
 import { physicalUnits } from "@/lib/artifacts"
 import { decisionAtStep, liveDecisionAtStep, type Decision } from "@/lib/decisions"
 import { useDecisions } from "@/components/acquirer/decisions-provider"
@@ -136,6 +135,17 @@ interface Props {
    *  defaulted `true` restores the bug this exists to prevent, and a defaulted
    *  `false` would blank out settled history. */
   hasRun: boolean
+  /** Whether the STATE MODEL — not the fixture's raw position — calls this step
+   *  done. Must be `laneState(...) === "done"`, the same value the rail draws
+   *  and the cockpit's task counter starts from.
+   *
+   *  REQUIRED, and a prop rather than a local derivation on purpose. This panel
+   *  used to work the position out for itself and so could contradict the card
+   *  it sits inside: "Ready · 0/4 tasks · Play agent run" above two green
+   *  settled handoffs. Anything that makes `laneState` withhold "done" — a
+   *  blocked predecessor, a reset, a finding — must withhold these ticks too,
+   *  and the only way to guarantee that is to read the same value. */
+  laneDone: boolean
   /** A fingerprint of what an approval taken here would be about, stored on the
    *  decision so a later edit to the same artefact can supersede it. */
   basis: string | null
@@ -151,6 +161,7 @@ export function StepGate({
   wasReset = false,
   hasFinding,
   hasRun,
+  laneDone,
   basis,
 }: Props) {
   // Keyed by step AND by what was ordered: steps 7 and 8 otherwise promise a
@@ -199,12 +210,34 @@ export function StepGate({
      every branch. It reads the SAME `stepHasRun` the findings and the check
      counts use, so the badge, the panel and the gate cannot disagree about
      whether this step has executed. */
-  const settledByPosition = stepById(step).lane !== "risk"
-    ? step < merchant.currentStep
-    : // Risk steps carry no meaningful id order, so position cannot be read off
-      // `currentStep` at all. The lane's own verdict is the only honest source.
-      merchant.riskLane.verdict === "cleared"
-  const isPast = settledByPosition && hasRun && !wasReset && !hasFinding
+  /* AND THE FOURTH ROUTE, WHICH IS WHY THIS IS NOW A PROP AND NOT A SUM.
+  
+     This line used to re-derive the step's position for itself:
+  
+       lane !== "risk" ? step < merchant.currentStep
+                       : merchant.riskLane.verdict === "cleared"
+  
+     Both halves were wrong in the same way — they read the FIXTURE'S RAW
+     ASSERTION rather than the state model. `laneState` applies rules on top of
+     that assertion (a blocked predecessor, a reset, a finding) and can
+     therefore call a step "upcoming" that the raw verdict calls settled. The
+     cockpit's task counter reads `laneState`; this panel read the verdict; so
+     one card rendered "R3 Underwriting · Ready · 0/4 tasks · Play agent run"
+     with two green settled handoffs beneath it, one of them "Approved by you ·
+     date not recorded" — an approval attributed to the acquirer on a step the
+     same card was inviting them to start.
+  
+     `hasRun` was added to stop exactly this and could not, because on the risk
+     lane `stepHasRun` bottoms out in `stepEvidenced`, whose cleared-lane branch
+     is the SAME `riskLane.verdict === "cleared"` expression. The guard was
+     `X && X`: it read the one fact it was meant to check independently. That is
+     the general trap — a second opinion is only worth having when it comes from
+     a different source.
+  
+     So the position now arrives as `laneDone`, the very value the rail draws and
+     the task counter starts from. The three surfaces cannot disagree because
+     there is only one answer. */
+  const isPast = laneDone && hasRun && !wasReset && !hasFinding
 
   // The acquirer's own decision is held in the shared record, not in this
   // component's handoff state — otherwise signing off here and signing off on

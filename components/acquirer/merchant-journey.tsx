@@ -2541,6 +2541,14 @@ function StepCockpit({
                  sent. Same `stepHasRun` the finding above and the check count
                  beside it read. */
               hasRun={stepHasRun(merchant, step.id, played)}
+              /* The state model's own verdict, and the SAME `state` that decides
+                 whether this card opens at 0/4 tasks or fully run. The panel
+                 used to re-derive this from `merchant.currentStep` and
+                 `riskLane.verdict`, which is the fixture's raw assertion before
+                 `laneState` has applied the rules that can overturn it — so the
+                 header could say "Ready · 0/4 tasks" while the handoffs beneath
+                 it showed green and claimed an approval nobody had given. */
+              laneDone={state === "done"}
               // What an approval taken here would be ABOUT, so the record can
               // later tell whether the design has moved underneath it.
               basis={decisionBasis(step.id, merchant, theme)}
