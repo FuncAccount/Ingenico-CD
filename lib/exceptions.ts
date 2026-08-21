@@ -172,7 +172,7 @@ const EXCEPTIONS: Record<string, MerchantException> = {
       limit: "The agent will not add the refund permission to the profile itself.",
       owner: "acquirer",
       why:
-        "Refund acceptance is a commercial permission you grant, not a configuration defect to be patched — it decides whether this merchant can move money back to a cardholder. The agent can see that the profile omits it, but not whether the omission was an error or your deliberate decision for this merchant category.",
+        "Refund acceptance is a commercial permission you grant, not a configuration defect to be patched �� it decides whether this merchant can move money back to a cardholder. The agent can see that the profile omits it, but not whether the omission was an error or your deliberate decision for this merchant category.",
     },
   },
 }
@@ -191,9 +191,27 @@ export function exceptionOnStep(merchant: Merchant, step: StepId): MerchantExcep
   return e && e.step === step ? e : null
 }
 
-/** A merchant flagged as an exception with no detail recorded is itself worth
- *  saying out loud, rather than rendering a clean screen that implies nothing
- *  is wrong. Used to caption that gap honestly. */
-export function exceptionDetailMissing(merchant: Merchant): boolean {
-  return merchant.status === "Exception" && !EXCEPTIONS[merchant.id]
+/**
+ * A merchant flagged as an exception with no detail recorded anywhere.
+ *
+ * Worth saying out loud rather than rendering a clean screen — but only when it
+ * is TRUE, and `EXCEPTIONS` is not the only place a reason can live.
+ *
+ * `hasDerivedFinding` exists because status became derived from the findings.
+ * The moment it did, a merchant halted by a live rule was promoted to
+ * "Exception", found no hand-authored `EXCEPTIONS` entry, and announced that no
+ * detail had been recorded — directly above the step that was, at that moment,
+ * displaying the detail. A banner whose whole job is to report a gap in the
+ * record must not fire when the record is complete; doing so teaches people to
+ * dismiss the one caption that means something.
+ *
+ * Defaults to false so an un-updated caller degrades to the old behaviour rather
+ * than silently suppressing a genuine gap.
+ */
+export function exceptionDetailMissing(
+  merchant: Merchant,
+  hasDerivedFinding = false,
+): boolean {
+  if (merchant.status !== "Exception") return false
+  return !EXCEPTIONS[merchant.id] && !hasDerivedFinding
 }

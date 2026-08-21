@@ -891,7 +891,18 @@ function StepCockpit({
   // the failing task and the panel cannot disagree about whether the step
   // is blocked.
   const blocker = exceptionOnStep(merchant, step.id)
-  const detailMissing = exceptionDetailMissing(merchant)
+  /* The "no detail recorded" caption must know about DERIVED findings too, not
+     just the hand-authored `EXCEPTIONS` map. Once status became derived, a
+     merchant halted by a live brand rule was flagged Exception, found no
+     authored entry, and announced that nothing had been recorded — on the very
+     step that was displaying the reason. Read from the same theme the rules are
+     measured against, so the caption and the finding cannot disagree. */
+  const { themeFor: liveThemeFor } = useBrandTheme()
+  const hasDerivedFinding = useMemo(
+    () => haltedSteps(merchant, { brandRules: checkBrand(liveThemeFor(merchant)) }).size > 0,
+    [merchant, liveThemeFor],
+  )
+  const detailMissing = exceptionDetailMissing(merchant, hasDerivedFinding)
 
   // Handoff progress, keyed by merchant + step + position, so a chase sent
   // about one merchant never shows against another.

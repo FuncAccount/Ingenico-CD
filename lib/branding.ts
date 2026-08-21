@@ -142,19 +142,35 @@ export function defaultTheme(merchant: Merchant): BrandTheme {
   }
 }
 
-/** Per-merchant starting points. Verde starts on a pale yellow that FAILS the
- *  contrast gate, so the block is demonstrable rather than theoretical. */
+/**
+ * Per-merchant starting points — what the merchant ASKED for.
+ *
+ * Read only while `brandingApprovedAgainst` is null. Once a band has been
+ * approved onto hardware that wins, so a seed differing from the approved band
+ * on a settled merchant is unreachable data and should be corrected, not left
+ * to imply a design nobody can see.
+ *
+ * The docblock here used to claim Verde's pale yellow FAILED the contrast gate.
+ * It does not, and could not: the ink is auto-selected against whatever band is
+ * chosen, so `amount-contrast` was downgraded to an advisory that can never
+ * fail. Verde passes every rule. The one seeded breach is Nordwind's.
+ */
 const SEEDS: Record<string, { primary: string; logo: boolean }> = {
   "m-atlas": { primary: "#7A1E2B", logo: true },
   "m-verde": { primary: "#E8C547", logo: false },
-  "m-nordwind": { primary: "#1F6F4A", logo: true },
-  /* SolMar's seed IS the acquirer's cyan, and that is DELIBERATE — it is the
-     fixture that demonstrates the collision rule biting on a real submission.
-     Note its `brandingApprovedAgainst` is a different, legal teal: the merchant
-     asked for our cyan, was refused, and shipped on the corrected band. Seed and
-     approved band are allowed to differ precisely because one is a request and
-     the other is what got built. */
-  "m-solmar": { primary: "#00B9E4", logo: false },
+  /* THE ONE SEEDED BREACH, and it lives here deliberately: Nordwind is sitting
+     ON B2 Branding with nothing approved yet, so a submission of the acquirer's
+     own cyan halts the step the merchant is actually standing on. That is the
+     honest version of the screenshot that started this — a halt at the step it
+     belongs to, with the remedy ("choose another band") genuinely available.
+     Do not move this to a merchant whose terminals have shipped. */
+  "m-nordwind": { primary: "#00B9E4", logo: true },
+  /* Was `#00B9E4`. SolMar's terminals are INSTALLED, so `brandingApprovedAgainst`
+     always wins and this seed could never be read — dead data under a comment
+     claiming it demonstrated the collision rule, which it no longer could once
+     the approved band took precedence. Set to the band SolMar actually shipped
+     on, so seed and hardware agree. */
+  "m-solmar": { primary: "#00736D", logo: false },
   "m-brightline": { primary: "#2B2F77", logo: true },
   "m-tavo": { primary: "#B04A2F", logo: false },
   /* Was `#0A1E3C` — the acquirer's own navy, character for character. Not a
