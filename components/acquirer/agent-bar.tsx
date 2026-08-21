@@ -3,7 +3,10 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { ArrowRight, CornerDownLeft, Search, Sparkles, X } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { MERCHANTS, PIPELINE, portfolioKpis } from "@/lib/acquirer-data"
+import { PIPELINE, portfolioKpis } from "@/lib/acquirer-data"
+import { applyDecisions } from "@/lib/decisions"
+import { useDecisions } from "@/components/acquirer/decisions-provider"
+import { useBook } from "@/components/acquirer/book-provider"
 import type { Screen } from "@/components/acquirer/top-nav"
 
 interface Answer {
@@ -58,7 +61,7 @@ export function AgentBar({ onNavigate }: { onNavigate: (s: Screen) => void }) {
     return [
       {
         q: "What needs me today?",
-        trace: `queue.scan → ${MERCHANTS.length} merchants, ${waiting.length} awaiting you`,
+        trace: `queue.scan → ${merchants.length} merchants, ${waiting.length} awaiting you`,
         body: waiting.length
           ? `${waiting.length} decisions are waiting on your signature: ${waiting
               .map((m) => m.name)
@@ -68,7 +71,7 @@ export function AgentBar({ onNavigate }: { onNavigate: (s: Screen) => void }) {
       },
       {
         q: "Where is my book stuck?",
-        trace: `exception.detect → ${stuck.length} blocked of ${MERCHANTS.length}`,
+        trace: `exception.detect → ${stuck.length} blocked of ${merchants.length}`,
         body: stuck.length
           ? `${stuck.map((m) => `${m.name} is held at step ${String(m.currentStep).padStart(2, "0")}`).join(", ")}. I have retried automatically and escalated what I could not clear on my own.`
           : "Nothing is blocked right now. Every merchant is moving through the pipeline on schedule.",
@@ -89,7 +92,10 @@ export function AgentBar({ onNavigate }: { onNavigate: (s: Screen) => void }) {
         cta: { label: "See the pipeline", screen: "journey" },
       },
     ]
-  }, [])
+    // An empty dep array here would have re-frozen everything one layer down:
+    // the answers would be computed once at mount and go on quoting the book as
+    // it was when the page loaded, which is the same defect in a new place.
+  }, [book, decisions])
 
   // ⌘K / Ctrl+K to summon, Esc to dismiss.
   useEffect(() => {
