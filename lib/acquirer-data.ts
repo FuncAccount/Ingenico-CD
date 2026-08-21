@@ -981,6 +981,40 @@ export function laneState(
     return "upcoming"
   }
 
+  /* AND THE SAME PRECEDENCE WITHIN A LANE, for exactly the reason above.
+  
+     The trunk gate was hoisted over this step's own halt on the argument that
+     "cannot have started" outranks "stopped". That argument is not special to
+     the trunk, but the hoist was: the two intra-lane ordering rules stayed
+     BELOW the halt, in the risk and build branches. So a step carrying its own
+     finding took the `active` return before its lane order was ever consulted,
+     and the ordering veto it was meant to receive became unreachable.
+  
+     Read down the rail on Orchard Lane: R1 KYC in progress, R2 Pricing not
+     started, R3 Underwriting IN PROGRESS. Underwriting was reported as live
+     work while pricing — which must precede it — had not begun, on a lane that
+     R1 was blocking anyway. The claim is not merely out of order, it is
+     impossible, and it read as one step having overtaken another. Pricing was
+     the only one of the three telling the truth, because it was the only one
+     with no finding of its own to jump the queue with.
+  
+     Both lanes had it (build showed B1 active, B2 upcoming, B3 active), so the
+     rule is hoisted once here for every path rather than patched twice. The
+     branches below keep their own ordering rules: those still decide done vs
+     active among steps that ARE reachable, which is a different question.
+  
+     DELIBERATELY NARROW — an earlier HALTED step, not an earlier unfinished
+     one. The wider test is what `isLaneStepDone` answers, and it decides a risk
+     step from `currentStep` without ever consulting `riskLane`; used here it
+     demoted Pricing to "upcoming" on a file referred AT Underwriting, where
+     KYC and Pricing are precisely the steps that ARE done. Only the halt has to
+     be hoisted, because only the halt was being jumped. */
+  const ownPath = pathOf(step)
+  const ownIndex = ownPath.findIndex((s) => s.id === step.id)
+  if (ownIndex > 0 && ownPath.slice(0, ownIndex).some((s) => halted.has(s.id))) {
+    return "upcoming"
+  }
+
   /* THE WITHHOLDING RULE: an incomplete step draws no tick.
   
      One set now serves both this and the ordering rules, which is the point.
