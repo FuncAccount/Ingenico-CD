@@ -918,6 +918,22 @@ export function laneState(
      still active work — and the amber marker already separates held from
      working. "upcoming" would be worse than the tick it replaces: it would file
      a step that ran and failed as one that never started. */
+  /* THE TRUNK IS TESTED FIRST, ahead of this step's own halt.
+  
+     Ordering matters here and cost a pass to find. On Orchard Lane, capture is
+     halted on an incomplete bundle and R1 KYC carries an unresolved check of
+     its own, so `halted` contains both — and this veto returned "active" for
+     R1 before any ordering rule ran. The rail showed screening under way on an
+     application that had not been assembled.
+  
+     A step that cannot legitimately have STARTED outranks the question of
+     whether it stopped: "not reached yet" is the truer claim, and it keeps the
+     alarm on the trunk step where the work actually is. Lane-relative, so it
+     applies to the fork's two lanes and never to the trunk itself. */
+  if (step.lane !== "spine" && PRE_FORK.some((s) => !isLaneStepDone(merchant, s, progressed, halted))) {
+    return "upcoming"
+  }
+
   if (halted.has(step.id)) return "active"
 
   /* A RESET STAGE IS NOT DONE EITHER — same reasoning, different claim.
@@ -937,6 +953,11 @@ export function laneState(
   if (step.lane === "risk") {
     const lane = merchant.riskLane
     const here = riskIndex(step.id)
+
+    // The trunk gate at the top of this function already covers this lane —
+    // deliberately hoisted there rather than repeated per branch, since the
+    // risk branch returns before `pathOf` and would otherwise need its own copy
+    // of a rule that must not be able to differ between lanes.
 
     /* AN OPEN STEP HOLDS EVERYTHING BEHIND IT ON THIS LANE.
     
@@ -1198,9 +1219,41 @@ export const SPINE_PATH: PipelineStep[] = (() => {
 
 /** The path a step travels on — the same three definitions `laneState` uses,
  *  named once so a caller cannot pick a different one and disagree with it. */
+/**
+ * The spine steps BEFORE the fork — the trunk both lanes descend from.
+ *
+ * Derived from the same `rejoinAt` index `SPINE_PATH` uses, so the three paths
+ * cannot come to disagree about where the fork opens.
+ */
+export const PRE_FORK: PipelineStep[] = SPINE_LANE.slice(
+  0,
+  SPINE_LANE.findIndex((s) => s.id === REJOIN_STEP),
+).filter((s) => !BUILD_LANE.some((b) => b.id === s.id))
+
+/** The risk lane WITH the trunk in front of it. */
+export const RISK_PATH: PipelineStep[] = [...PRE_FORK, ...RISK_LANE]
+
+/** The build lane WITH the trunk in front of it. */
+export const BUILD_PATH: PipelineStep[] = [...PRE_FORK, ...BUILD_LANE]
+
+/**
+ * A step's full line of travel, from the start of the journey.
+ *
+ * THE LANES USED TO BEGIN AT THE FORK. `SPINE_PATH` correctly prefixed capture,
+ * but `RISK_LANE` and `BUILD_LANE` started at R1 and B1, so neither lane could
+ * see the trunk step feeding it. Orchard Lane Veterinary sat at 0/11 steps with
+ * capture halted on an incomplete document bundle, and the rail drew R1 KYC and
+ * B1 Order as live work directly beneath it — screening and an equipment order
+ * running against an application that had not been assembled yet.
+ *
+ * A fork does not start until the step above it finishes, so both lanes now
+ * carry that step and every ordering rule downstream picks it up for free —
+ * including `blockingPredecessor`, which can now NAME capture as the thing a
+ * lane head is waiting on.
+ */
 export function pathOf(step: PipelineStep): PipelineStep[] {
-  if (step.lane === "risk") return RISK_LANE
-  if (step.lane === "build") return BUILD_LANE
+  if (step.lane === "risk") return RISK_PATH
+  if (step.lane === "build") return BUILD_PATH
   return SPINE_PATH
 }
 

@@ -70,7 +70,7 @@ import { useProgress } from "@/components/acquirer/progress-provider"
 import { useBook } from "@/components/acquirer/book-provider"
 import { defaultAcceptance, type AcceptanceState } from "@/lib/scheme-acceptance"
 import { pendingReleases, type Releases } from "@/lib/releases"
-import { edgeResolved, outstandingDocuments, type EdgeResolution } from "@/lib/underwriting"
+import { CAPTURE_STEP, edgeResolved, outstandingDocuments, type EdgeResolution } from "@/lib/underwriting"
 import { withClearedFindings } from "@/lib/demo-fixes"
 import { useDemo, useLiveMerchant, responseKey } from "@/components/acquirer/demo-provider"
 import { DemoInbound } from "@/components/acquirer/demo-control"
@@ -1372,7 +1372,25 @@ function StepCockpit({
     findingsCleared,
     clearFinding,
     restoreFinding,
+    documentsArrived,
+    supplyDocuments,
+    resetDocuments,
   } = useDemo()
+
+  /* THE DOCUMENT GAP IS ITS OWN DEAD END, and the only one with no way out.
+  
+     An incomplete bundle halts capture BEFORE anything runs, so the file opens
+     at 0/5 tasks with the run refused. The lever that delivers the documents
+     existed, but only inside the handoff card — which renders once a run has
+     produced handoffs. A file halted on arrival therefore had no handoff, no
+     lever, and nothing on the page that could move it: Orchard Lane read
+     "Halted · Bundle incomplete" with an empty control row.
+  
+     Same demo treatment as its three siblings above, and worded as the merchant
+     SENDING the documents rather than as an override — the gap closes because
+     the paperwork arrived, not because anyone waived it. */
+  const missingDocuments = useMemo(() => outstandingDocuments(merchant), [merchant])
+  const documentsSupplied = Boolean(documentsArrived[merchant.id])
   const responseSimulated = Boolean(responsesIn[responseKey(merchant.id, step.id)])
   /* Same key shape, separate map: a step can have been waiting AND come back
      without an answer, so one flag could not describe both. */
@@ -1802,7 +1820,18 @@ function StepCockpit({
                     // passed.
                     runBlocked
                     ? runBlocked.badge
-                    : "Ready"}
+                    : /* Third instance of the same defect, and the one the
+                         screenshot caught: "Ready" sat directly above a task
+                         row reading "Halted · Bundle incomplete". `blocker`
+                         and `runBlocked` both missed it — the first sees only
+                         findings authored against this step, the second only
+                         gates on the run — so a step halted BEFORE its first
+                         run fell through every branch to the all-clear. The
+                         count beside it already said "1 halted"; the badge is
+                         now reading the same fact. */
+                      finding
+                      ? "Halted"
+                      : "Ready"}
           </span>
         </div>
 
@@ -2151,6 +2180,31 @@ function StepCockpit({
               onTrigger={() => restoreFinding(merchant.id, step.id)}
             />
           )}
+
+          {/* THE FOURTH DEAD-END, and the only one that blocked a step before
+              it had run at all. The three levers above all answer something a
+              run produced; this answers a gap that stops the run happening.
+              Scoped to the capture step because that is where the bundle is
+              assembled and where the chase is owned — offering it beside a
+              downstream step would let the paperwork arrive somewhere that
+              never asked for it. */}
+          {status !== "running" && step.id === CAPTURE_STEP && missingDocuments.length > 0 && (
+            <DemoInbound
+              label={`Simulate: merchant sends the ${missingDocuments.length} outstanding document${
+                missingDocuments.length === 1 ? "" : "s"
+              }`}
+              onTrigger={() => supplyDocuments(merchant.id)}
+            />
+          )}
+          {status !== "running" &&
+            step.id === CAPTURE_STEP &&
+            documentsSupplied &&
+            missingDocuments.length === 0 && (
+              <DemoInbound
+                label="Undo simulated documents"
+                onTrigger={() => resetDocuments(merchant.id)}
+              />
+            )}
         </div>
         {/* The denominator counts tasks that CAN run here. On a software-only
             order the ship step has four tasks and none of them apply, so a
