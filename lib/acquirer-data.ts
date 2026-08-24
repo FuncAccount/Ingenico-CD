@@ -369,7 +369,7 @@ export const PIPELINE: PipelineStep[] = [
     // The non-blocking point, said once and in the right place: this lane runs
     // beside the build, so a KYC still in flight does not stop the kit.
     handback:
-      "Compliance sign-off is yours. The build lane keeps moving while this resolves — only Ship waits on it.",
+      "Compliance sign-off is yours. The build track keeps moving while this resolves — only Ship waits on it.",
   },
   {
     id: 11,

@@ -502,11 +502,17 @@ export function MerchantJourney({
             className="flex flex-col gap-1.5"
             style={{ flex: Math.max(riskLane.length, buildLane.length) }}
           >
-            {([["Risk", riskLane], ["Build", buildLane]] as const).map(
-              ([label, lane]) => (
-                <div key={label} className="flex items-center gap-2">
-                  <span className="w-8 shrink-0 text-[9px] font-semibold uppercase tracking-wider text-muted-foreground">
-                    {label}
+            {/* Short form here — the gutter is 32px and the full name needs 57,
+                so "Risk track" would clip. Read off TRACKS all the same, so the
+                two labellings of one thing cannot drift apart. */}
+            {([[TRACKS.risk, riskLane], [TRACKS.build, buildLane]] as const).map(
+              ([track, lane]) => (
+                <div key={track.short} className="flex items-center gap-2">
+                  <span
+                    title={track.full}
+                    className="w-8 shrink-0 text-[9px] font-semibold uppercase tracking-wider text-muted-foreground"
+                  >
+                    {track.short}
                   </span>
                   <span className="w-7 shrink-0 font-mono text-[9px] tabular-nums text-muted-foreground">
                     {doneIn(lane)}/{lane.length}
@@ -598,8 +604,8 @@ export function MerchantJourney({
               aria-hidden
               className="absolute bottom-0 left-1/2 top-0 w-px -translate-x-1/2 bg-border"
             />
-            <LaneHeader label="Risk" />
-            <LaneHeader label="Build" />
+            <LaneHeader label={TRACKS.risk.full} />
+            <LaneHeader label={TRACKS.build.full} />
           </div>
 
           {/* THE FORK. Two columns side by side, because the whole point is
@@ -986,6 +992,31 @@ function StepRow({
 
 /** Names a branch of the fork. Without it the two columns are just two lists
  *  and the reader has to infer why they sit side by side. */
+/** THE TWO PARALLEL TRACKS, NAMED ONCE.
+ *
+ *  Two surfaces on this screen label them — the fork header over the columns,
+ *  and the compact strip above it — so the names live here rather than as
+ *  literals in both places, where one could be renamed and leave the other
+ *  behind saying something different about the same thing.
+ *
+ *  `short` is a MEASUREMENT, not a preference. The strip's label gutter is 32px
+ *  and "Risk track" needs 57px there, so the full name would clip, and a clipped
+ *  label reads as a broken render. Nothing is lost: that row already reads
+ *  "Risk 2/3 ▮▮▯", so "track" adds no information a reader does not have. The
+ *  fork header has 146px, takes the full name, and there it does real work —
+ *  it says the two columns ARE two tracks, which is the concurrency claim the
+ *  fork exists to make.
+ *
+ *  The CODE still says "lane" throughout (`riskLane`, `LaneColumn`, and
+ *  `merchant.riskLane`, whose values many fixtures depend on). That is
+ *  deliberate: these strings are the reader's words, and renaming the data model
+ *  to chase them would churn fixtures for no reader benefit. Do not "align" one
+ *  to the other. */
+const TRACKS = {
+  risk: { full: "Risk track", short: "Risk" },
+  build: { full: "Build track", short: "Build" },
+} as const
+
 function LaneHeader({ label }: { label: string }) {
   return (
     <p className="min-w-0 flex-1 text-center text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
@@ -2363,7 +2394,7 @@ function StepCockpit({
                   <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
                     {clearance.released
                       ? "The parcels have already gone — this file cleared Ship before the findings below were raised, so there is no shipment left to hold. Whether the terminals stay on site is a recall decision now, not a clearance one."
-                      : "Ingenico cannot dispatch without your clearance, and clearance needs every prior step on both lanes to pass. Reaching this step is not itself an approval — the build lane does not wait for the risk lane."}
+                      : "Ingenico cannot dispatch without your clearance, and clearance needs every prior step on both tracks to pass. Reaching this step is not itself an approval — the build track does not wait for the risk track."}
                   </p>
 
                   {/* Each hold NAMED. A count alone ("2 outstanding") tells the
