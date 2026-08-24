@@ -116,6 +116,32 @@ const SECTOR_BASE: Record<string, { points: number; why: string }> = {
   },
   Leisure: { points: 15, why: "Deposits taken well ahead of delivery" },
   Automotive: { points: 14, why: "High average ticket concentrates loss on any single dispute" },
+  // Healthcare and Transport are both live in the book and were both missing
+  // here, so every one of those merchants was silently scored on the "no sector
+  // baseline on file" default. A default is the right behaviour for a trade
+  // nobody has assessed; it is the wrong behaviour for two we carry.
+  Healthcare: {
+    points: 16,
+    why: "Treatment plans and procedures billed before the course of care completes",
+  },
+  Transport: { points: 15, why: "Tickets sold well ahead of travel, and refundable on cancellation" },
+}
+
+/** Trades where the customer pays now and receives later.
+ *
+ *  This list is the "high-risk category list" the acceptance panel cites. It
+ *  previously did not exist: the panel answered "No — not a deferred-delivery
+ *  category" for every merchant in the book, including the ones whose own
+ *  sector baseline above says deposits are taken ahead of delivery.
+ *
+ *  Keyed by sector because that is known from the application, which is what
+ *  makes this test answerable even on a file the engine cannot score.
+ */
+export const DEFERRED_DELIVERY: Record<string, string> = {
+  Leisure: "deposits taken well ahead of the stay or sailing",
+  "Health & Fitness": "memberships billed in advance of the months they cover",
+  Healthcare: "treatment plans billed before the course of care completes",
+  Transport: "tickets sold ahead of travel and refundable on cancellation",
 }
 
 /** Parse the annual volume band into a number of major units, currency-agnostic:
@@ -331,6 +357,129 @@ export function riskAssessment(merchant: Merchant): RiskAssessment {
   const rawTotal = factors.reduce((s, f) => s + f.points, 0)
   const score = Math.max(0, Math.min(100, rawTotal))
   return { factors, score, band: bandFor(score), clamped: score !== rawTotal, rawTotal }
+}
+
+/* --------------------------------------------------- exposure and acceptance */
+
+/** One row of the acceptance panel: what the engine returned, and on whose
+ *  authority. `value: null` is a withheld figure and always carries a source
+ *  saying why — never a blank, and never a zero. */
+export interface LimitRow {
+  value: string | null
+  source: string
+}
+
+export interface AcceptanceLimit {
+  category: LimitRow
+  dailyLimit: LimitRow
+  settlementWindow: LimitRow
+  fullerReview: LimitRow
+  /** True when the file cannot be scored, so category and limit are withheld. */
+  unscored: boolean
+}
+
+/** Working days used to turn an annual band into a daily one. */
+const WORKING_DAYS = 250
+
+/** Headroom over average daily takings, by band. A limit set at the average
+ *  would decline a merchant on their best day, so the multiple falls as risk
+ *  rises rather than the limit being cut to the average. */
+const HEADROOM: Record<RiskBand, number> = { Low: 1.6, Medium: 1.3, Elevated: 1.0 }
+
+const CATEGORY: Record<RiskBand, string> = {
+  Low: "Standard",
+  Medium: "Standard — monitored",
+  Elevated: "Elevated",
+}
+
+/** The merchant's own currency symbol, read off the declared volume band.
+ *  `annualVolume` is deliberately currency-agnostic — it reads a magnitude —
+ *  so the symbol has to be carried separately or a euro merchant gets quoted a
+ *  sterling limit. */
+function currencyOf(size: string): string {
+  return /([^\d\s.,]+)/.exec(size)?.[1] ?? ""
+}
+
+/**
+ * What the acquirer's risk engine and credit policy return for this merchant.
+ *
+ * DERIVED FROM `riskAssessment`, which is the authority every other surface
+ * already uses — the risk desk, the sign-off panel and the score breakdown.
+ * This panel used to ask a different question: whether a score had been typed
+ * into the fixture (`recordedScore`). On a file scored from its factors but
+ * never hand-annotated, the two disagreed, so the sign-off screen showed a real
+ * score and band while the acceptance panel beside it reported the category and
+ * limit as "not on file". One question, two answers, on adjacent panels.
+ *
+ * There is exactly one reason to withhold: the file cannot be scored because
+ * mandatory documents are missing. That is the same condition that drives the
+ * halt banner, the chase and the sign-off gate, so the panel can no longer
+ * disagree with any of them about whether this file is ready.
+ */
+export function acceptanceLimit(merchant: Merchant): AcceptanceLimit {
+  const assessment = riskAssessment(merchant)
+
+  /* Answerable WITHOUT a score. The deferred-delivery test reads the trade,
+     which is known from the application, so this row stays populated even on a
+     blocked file. Previously it was hardcoded "No", which on an unscored file
+     also contradicted the row above it: the panel said the category could not
+     be assigned and then answered a question about the category. */
+  const deferred = DEFERRED_DELIVERY[merchant.sector]
+  const fullerReview: LimitRow = {
+    value: deferred ? `Yes — ${merchant.sector.toLowerCase()} is a deferred-delivery trade` : "No",
+    source: deferred
+      ? `your credit policy — high-risk category list: ${deferred}`
+      : `your credit policy — high-risk category list does not name ${merchant.sector.toLowerCase()}`,
+  }
+
+  /* A settlement cycle is a commercial term of the merchant's contract, not an
+     output of the risk model, so it is knowable on any file. */
+  const settlementWindow: LimitRow = {
+    value: "2 working days",
+    source: "your settlement cycle for this merchant type",
+  }
+
+  if (assessment.blocked) {
+    return {
+      unscored: true,
+      // Withheld, not zeroed. A limit of £0 reads as a decision to accept
+      // nothing, which is a rejection nobody made.
+      category: { value: null, source: "cannot be assigned until the file can be scored" },
+      dailyLimit: {
+        value: null,
+        source: `your policy returns no limit until the file is scored — ${assessment.blocked.missing.length} document(s) outstanding`,
+      },
+      settlementWindow,
+      fullerReview,
+    }
+  }
+
+  const vol = annualVolume(merchant.size)
+  const symbol = currencyOf(merchant.size)
+  const daily =
+    vol === null ? null : Math.round((vol / WORKING_DAYS) * HEADROOM[assessment.band] / 500) * 500
+
+  return {
+    unscored: false,
+    category: {
+      value: CATEGORY[assessment.band],
+      source: `your credit policy — category rules, on a score of ${assessment.score} (${assessment.band})`,
+    },
+    dailyLimit:
+      daily === null
+        ? {
+            // A volume band that cannot be parsed is a gap in the application,
+            // not a limit of zero, and it is named as such.
+            value: null,
+            source: `declared volume "${merchant.size}" could not be read, so no limit can be sized`,
+          }
+        : {
+            value: `${symbol}${daily.toLocaleString("en-GB")} / day`,
+            source: `your credit policy — ${assessment.band.toLowerCase()}-band rule at ${HEADROOM[assessment.band]}× average daily takings on ${merchant.size}`,
+          },
+    settlementWindow,
+    fullerReview,
+  }
 }
 
 /* ---------------------------------------------------------------- edge cases */

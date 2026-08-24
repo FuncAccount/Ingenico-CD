@@ -36,9 +36,9 @@ import { countryOf, distanceKm } from "@/lib/geo"
 // No cycle: `underwriting` only reaches back to `acquirer-data`.
 import { outstandingDocuments } from "@/lib/underwriting"
 import {
+  acceptanceLimit,
   CAPTURE_STEP,
   DOCUMENT_PASS_TASK,
-  recordedScore,
   riskAssessment,
   SCORE_THE_RISK_TASK,
   UNDERWRITING_STEP,
@@ -2688,7 +2688,13 @@ export function artifactFor(
       // source. Every figure is RETURNED BY THE ACQUIRER'S OWN RISK ENGINE —
       // the step delegates to it (`delegate.system: "Your risk model"`), so
       // nothing here is Ingenico's view to offer, revise or replace.
-      const scored = recordedScore(merchant) !== null
+      // Every row comes from `acceptanceLimit`, which derives from the same
+      // assessment the risk desk and the sign-off panel read. The figures were
+      // previously hardcoded — one category, one limit, one blanket "No" — and
+      // gated on whether a score had been typed into the record, so a file the
+      // engine had scored still reported its category and limit as "not on
+      // file" while the sign-off screen beside it showed the score.
+      const limit = acceptanceLimit(merchant)
       return {
         kind: "records",
         title: "Exposure and acceptance limit",
@@ -2699,32 +2705,12 @@ export function artifactFor(
           change: "To move a limit, change the rule in your credit policy and re-run this step — the new figure flows through here.",
         },
         rows: [
-          {
-            label: "Risk category",
-            value: scored ? "Standard retail" : null,
-            source: scored ? "your credit policy — category rules" : "cannot be assigned on an unscored file",
-          },
-          {
-            // Not "Recommended" — a recommendation is something the reader may
-            // decline, and this is their own engine's ruling coming back.
-            label: "Daily limit",
-            // Withheld, not zeroed. A limit of £0 reads as a decision to accept
-            // nothing, which is a rejection nobody made.
-            value: scored ? "£14,000 / day" : null,
-            source: scored
-              ? "your credit policy — standard retail rule, on projected volume"
-              : "your policy returns no limit until the file is scored",
-          },
-          {
-            label: "Settlement exposure window",
-            value: "2 working days",
-            source: "your settlement cycle for this merchant type",
-          },
-          {
-            label: "Fuller review required",
-            value: "No — not a deferred-delivery category",
-            source: "your credit policy — high-risk category list",
-          },
+          { label: "Risk category", ...limit.category },
+          // Not "Recommended" — a recommendation is something the reader may
+          // decline, and this is their own engine's ruling coming back.
+          { label: "Daily limit", ...limit.dailyLimit },
+          { label: "Settlement exposure window", ...limit.settlementWindow },
+          { label: "Fuller review required", ...limit.fullerReview },
         ],
       }
     }
