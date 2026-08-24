@@ -456,6 +456,31 @@ export interface DeviceUnit {
   tid: string
 }
 
+/** How long this file took, submission to go-live.
+ *
+ *  `merchant.submitted` is a relative age ("14 days ago"), so the elapsed time
+ *  is already in the record and the duration is whole days — the precision of
+ *  the source is carried through rather than dressed up with hours it cannot
+ *  support. This row is written at the go-live write-back, which is why "since
+ *  submission" and "submission to go-live" are the same span here.
+ *
+ *  Withheld only when the timestamp genuinely will not parse, and it says so. */
+function onboardingDuration(merchant: Merchant): { value: string | null; source: string } {
+  const m = /^(\d+)\s+(hour|day)s?\s+ago$/.exec(merchant.submitted.trim())
+  if (!m) {
+    return {
+      value: null,
+      source: `submission timestamp "${merchant.submitted}" could not be read as an elapsed time`,
+    }
+  }
+  const n = Number(m[1])
+  const unit = `${m[2]}${n === 1 ? "" : "s"}`
+  return {
+    value: `${n} ${unit}, submission to go-live`,
+    source: "measured from the submission timestamp on this record",
+  }
+}
+
 function tidBase(merchantId: string): number {
   let h = 0
   for (let i = 0; i < merchantId.length; i++) h = (h * 31 + merchantId.charCodeAt(i)) % 90000
@@ -3308,7 +3333,11 @@ export function artifactFor(
           { label: "Destination", value: `${ACQUIRER.name} CRM — merchant record`, source: "your system of record" },
           { label: "Merchant ID", value: merchant.id.replace("m-", "MID-").toUpperCase(), source: "acquirer host" },
           { label: "Devices written", value: String(deviceUnits(merchant).length), source: "counted from the activation table" },
-          { label: "Onboarding duration", value: null, source: "submission timestamp not carried on this record" },
+          // The record DOES carry a submission timestamp (`merchant.submitted`),
+          // so "not carried on this record" was a false absence — the panel
+          // reported a gap for a figure the fixture already held. It is only
+          // withheld now when the timestamp genuinely cannot be read.
+          { label: "Onboarding duration", ...onboardingDuration(merchant) },
           { label: "Underwriting decision", value: "Attached, with the signatory", source: "step 02 sign-off" },
         ],
       }

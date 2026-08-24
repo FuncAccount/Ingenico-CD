@@ -18,6 +18,7 @@ import {
   UNDERWRITING_STEP,
 } from "@/lib/underwriting"
 import { RISK_LANE } from "@/lib/acquirer-data"
+import { artifactFor } from "@/lib/artifacts"
 
 const merchantIsDeferred = (sector: string) => Boolean(DEFERRED_DELIVERY[sector])
 
@@ -170,6 +171,25 @@ for (const m of ALL_JOURNEYS) {
   }
 }
 
+/* -------------------------------- false absences on the go-live write-back */
+
+/* 10. A row must not report a gap for a figure the record already holds.
+       Tested through the real artefact rather than a copy of its parsing rule,
+       so this checks what the reader is actually shown. */
+console.log("\n--- go-live write-back: onboarding duration ---")
+for (const m of ALL_JOURNEYS) {
+  const art = artifactFor(9, 2, m)
+  if (!art || art.kind !== "records") continue
+  const row = art.rows.find((r) => r.label === "Onboarding duration")
+  if (!row) continue
+  const holdsTimestamp = /\d+\s+(hour|day)s?\s+ago/.test(m.submitted)
+  check(
+    !(holdsTimestamp && row.value === null),
+    `${m.name}: submitted "${m.submitted}" is on the record, but the write-back reports the duration as absent`,
+  )
+  if (m.currentStep >= 9) console.log(`  ${m.name.padEnd(26)} ${row.value ?? "— withheld"}`)
+}
+
 console.log("\n--- unscored files (limit panel withholds) ---")
 notes.forEach((n) => console.log("  " + n))
 
@@ -202,7 +222,21 @@ console.log(
     : "  BROKEN HARNESS: fuller review withheld — it reads the sector, which is always known",
 )
 
-// (c) The deferred-delivery list must actually discriminate. If every sector
+// (c) The false-absence check must be able to see a false absence: feed the
+//     write-back a record whose timestamp will not parse and confirm the row
+//     withholds, which is the only state check 10 permits.
+const noStamp = artifactFor(9, 2, { ...live, submitted: "recently" } as never)
+const noStampRow =
+  noStamp && noStamp.kind === "records"
+    ? noStamp.rows.find((r) => r.label === "Onboarding duration")
+    : undefined
+console.log(
+  noStampRow && noStampRow.value === null && /could not be read/.test(noStampRow.source)
+    ? "  OK: an unparseable timestamp withholds the duration and names why"
+    : `  BROKEN HARNESS: expected a withheld duration, got "${noStampRow?.value}"`,
+)
+
+// (d) The deferred-delivery list must actually discriminate. If every sector
 //     answered the same way, check 8 would pass vacuously.
 const answers = new Set(ALL_JOURNEYS.map((m) => acceptanceLimit(m).fullerReview.value!.startsWith("Yes")))
 console.log(
