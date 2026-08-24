@@ -398,7 +398,12 @@ export const PIPELINE: PipelineStep[] = [
     code: "R2",
     name: "Pricing",
     lane: "risk",
-    band: "Augment",
+    // Assisted, not augmented: the agent models the economics and proposes a
+    // tariff, and the acquirer types the rate that ships. That is a pass the
+    // agent completes and a human commits, which is what this band records.
+    // The role stays "owns" — the band says how the work is divided, the role
+    // says whose decision it is, and here both belong to the acquirer.
+    band: "Assist",
     acquirerRole: "owns",
     blurb: "Acquirer sets the commercial model: monthly fee, setup fee and per-transaction rates by method.",
     agentMission: "Recommend a tariff for this merchant type and show what it costs in sign-ups.",
