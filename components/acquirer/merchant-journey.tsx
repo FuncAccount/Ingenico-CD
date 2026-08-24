@@ -9,7 +9,6 @@ import {
   Clock,
   Cpu,
   FileSearch,
-  Lock,
   Minus,
   Store,
   Pause,
@@ -953,23 +952,31 @@ function StepRow({
             {awaitingChip && (
               <InProgressTag label={dense ? "In progress" : `${awaiting} in progress`} />
             )}
-            {/* LABEL THE EXCEPTION, MARK THE NORM. The acquirer chip said
-                "Your role" beside a UserCheck, directly under a title already
-                marked with that same UserCheck — one claim, from one predicate
-                (`ownerOf(step) === "acquirer"`), drawn twice in one card, with
-                the icon repeated so it read as two separate facts.
+            {/* THE CHIP NAMES SOMEONE OUTSIDE YOU WHO MUST ACT. Nothing else.
             
-                The icon is what survives, because the dense lane cards already
-                resolve this the same way: they hide the chip and keep the mark,
-                so this brings the trunk into line rather than inventing a rule.
-                It also puts the words where they carry information — this is
-                the acquirer's own screen, so their ownership is the default and
-                naming it on every step is noise, while Ingenico, Merchant and
-                No handoff are the departures a reader must actually notice.
+                It used to render for all four owners, which made it two
+                different kinds of statement at once. "Your role" duplicated the
+                UserCheck already beside the title — one claim from one
+                predicate, drawn twice, the repeated icon making it read as two
+                facts. "No handoff" was worse: a chip, with a lock icon, whose
+                content is that there is nobody to name. An absence rendered
+                with the same weight as a party gives the eye something to
+                resolve and then nothing to do with it.
             
-                Only `01 Merchant capture` changes: it is the one non-dense step
-                the acquirer owns. */}
-            {!dense && ownerOf(step.id) !== "acquirer" && (
+                So the test is positive — ingenico or merchant — and not a pair
+                of `!==` exclusions. Exclusions read as "everything except these
+                two" and would silently admit any owner added later; this chip
+                should only ever speak for a party outside your organisation, so
+                a new internal role must stay out by default.
+            
+                Absence of the chip is now itself legible: nobody outside you is
+                involved. The claim is not lost, because the step panel states
+                it in full — "No handoff on this step … nobody else has anything
+                to do here and there is nobody to chase" (step-gate.tsx) — which
+                is where a reader goes to find out what happens next, and where
+                a sentence can say it properly instead of a lock icon implying
+                it. Dense lane cards were already chip-free and are unchanged. */}
+            {!dense && (ownerOf(step.id) === "ingenico" || ownerOf(step.id) === "merchant") && (
               <OwnerBadge step={step.id} compact />
             )}
           </div>
@@ -1025,19 +1032,16 @@ function OwnerBadge({
     },
   } as const
 
-  if (!owner) {
-    return (
-      <span
-        className={cn(
-          "inline-flex items-center gap-1 rounded-md bg-secondary px-1.5 py-0.5 font-medium text-muted-foreground",
-          compact ? "text-[9px]" : "text-[10px]",
-        )}
-      >
-        <Lock className="h-3 w-3" />
-        No handoff
-      </span>
-    )
-  }
+  /* A BADGE THAT NAMES NOBODY IS NOT A BADGE. This slot exists to say who
+     outside your organisation has to act; with no owner it had nobody to name,
+     so it drew a lock and the words "No handoff" at the same weight as a real
+     party. On the detail view that also put the claim on screen twice, since
+     the panel below already says "No handoff on this step" and explains what it
+     means — a sentence that can carry the reason, which a chip cannot.
+  
+     Withheld here rather than at each call site so the rule holds for both, and
+     so a future third caller cannot reintroduce it. */
+  if (!owner) return null
 
   const { label, Icon, cls } = meta[owner]
   return (
