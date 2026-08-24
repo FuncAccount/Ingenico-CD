@@ -452,7 +452,16 @@ export const PIPELINE: PipelineStep[] = [
     code: "R3",
     name: "Underwriting",
     lane: "risk",
-    band: "Augment",
+    // Assisted, matching this step's own blurb: the agent assembles and
+    // reconciles the file and runs it through the risk engine, and the acquirer
+    // signs the regulated decision. A pass the agent completes and a human
+    // commits is Assist.
+    //
+    // The role stays "signs-off" — band and role are separate claims. The band
+    // says how the work is divided; the role says whose decision it is, and
+    // this one is regulated, so it can only be the acquirer's. Nothing here
+    // weakens the sign-off gate, which is driven by `acquirerRole`, never band.
+    band: "Assist",
     acquirerRole: "signs-off",
     blurb: "Agent assembles the evidence and runs it through your risk engine. Acquirer signs the regulated decision.",
     agentMission:
