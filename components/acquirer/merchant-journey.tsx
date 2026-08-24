@@ -952,33 +952,26 @@ function StepRow({
             {awaitingChip && (
               <InProgressTag label={dense ? "In progress" : `${awaiting} in progress`} />
             )}
-            {/* THE CHIP NAMES SOMEONE OUTSIDE YOU WHO MUST ACT. Nothing else.
+            {/* NO OWNER CHIP ON THE RAIL — deliberately, and this is the end of
+                a sequence rather than a one-off. The slot rendered all four
+                owners and each came off for its own reason: "Your role"
+                duplicated the UserCheck already beside the title, "No handoff"
+                was a chip whose content is that there is nobody to name, and
+                now Ingenico and Merchant go too.
             
-                It used to render for all four owners, which made it two
-                different kinds of statement at once. "Your role" duplicated the
-                UserCheck already beside the title — one claim from one
-                predicate, drawn twice, the repeated icon making it read as two
-                facts. "No handoff" was worse: a chip, with a lock icon, whose
-                content is that there is nobody to name. An absence rendered
-                with the same weight as a party gives the eye something to
-                resolve and then nothing to do with it.
+                What they had in common is that the rail is a MAP OF THE ROUTE,
+                not a register of who does what. Someone scanning it is asking
+                where the file has got to; ownership is what they need once they
+                stop ON a step, and the detail view answers it better than a
+                chip can — the same badge there also reports "Waiting · Ingenico"
+                when the step is actually sitting with them, which is the part
+                that prompts an action, and step-gate lists the handoff with the
+                party named in full and says what is owed.
             
-                So the test is positive — ingenico or merchant — and not a pair
-                of `!==` exclusions. Exclusions read as "everything except these
-                two" and would silently admit any owner added later; this chip
-                should only ever speak for a party outside your organisation, so
-                a new internal role must stay out by default.
-            
-                Absence of the chip is now itself legible: nobody outside you is
-                involved. The claim is not lost, because the step panel states
-                it in full — "No handoff on this step … nobody else has anything
-                to do here and there is nobody to chase" (step-gate.tsx) — which
-                is where a reader goes to find out what happens next, and where
-                a sentence can say it properly instead of a lock icon implying
-                it. Dense lane cards were already chip-free and are unchanged. */}
-            {!dense && (ownerOf(step.id) === "ingenico" || ownerOf(step.id) === "merchant") && (
-              <OwnerBadge step={step.id} compact />
-            )}
+                So a node now carries the band (Automate / Assist / Augment) and,
+                on capture, the UserCheck marking the one step that is yours.
+                Two marks per node instead of three, and the one that goes is the
+                one the rail was never the right place to make. */}
           </div>
         </div>
       </button>
@@ -1004,13 +997,14 @@ function LaneHeader({ label }: { label: string }) {
 /** Who owns the step, read off the handoff map rather than asserted twice.
  *  `waiting` overrides it when the step is yours but currently parked on
  *  someone else — "your role" and "you can act now" are different claims. */
+/* `compact` is gone with the rail chip that was its only caller — the detail
+   header is now the sole place this renders, so a second size is a variant
+   nothing can ask for, and leaving it would suggest the rail still has a copy. */
 function OwnerBadge({
   step,
-  compact = false,
   waiting,
 }: {
   step: StepId
-  compact?: boolean
   waiting?: "acquirer" | "ingenico" | "merchant" | null
 }) {
   const owner = waiting ?? ownerOf(step)
@@ -1049,7 +1043,7 @@ function OwnerBadge({
       className={cn(
         "inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 font-semibold",
         cls,
-        compact ? "text-[9px]" : "text-[10px]",
+        "text-[10px]",
       )}
     >
       <Icon className="h-3 w-3" />
