@@ -923,8 +923,18 @@ function StepRow({
             >
               {step.name}
             </span>
+            {/* The mark that says this one is yours. It carries the claim
+                alone, so it needs a real accessible name: this button takes its
+                name from its contents, and a bare <svg> contributes nothing —
+                dropping the chip below without this would have removed the
+                claim from the accessibility tree entirely rather than
+                de-duplicating it. */}
             {ownerOf(step.id) === "acquirer" && (
-              <UserCheck className="h-3.5 w-3.5 shrink-0 text-primary" />
+              <UserCheck
+                role="img"
+                aria-label="Your role"
+                className="h-3.5 w-3.5 shrink-0 text-primary"
+              />
             )}
           </div>
           <div className="mt-1 flex flex-wrap items-center justify-center gap-1">
@@ -943,7 +953,25 @@ function StepRow({
             {awaitingChip && (
               <InProgressTag label={dense ? "In progress" : `${awaiting} in progress`} />
             )}
-            {!dense && <OwnerBadge step={step.id} compact />}
+            {/* LABEL THE EXCEPTION, MARK THE NORM. The acquirer chip said
+                "Your role" beside a UserCheck, directly under a title already
+                marked with that same UserCheck — one claim, from one predicate
+                (`ownerOf(step) === "acquirer"`), drawn twice in one card, with
+                the icon repeated so it read as two separate facts.
+            
+                The icon is what survives, because the dense lane cards already
+                resolve this the same way: they hide the chip and keep the mark,
+                so this brings the trunk into line rather than inventing a rule.
+                It also puts the words where they carry information — this is
+                the acquirer's own screen, so their ownership is the default and
+                naming it on every step is noise, while Ingenico, Merchant and
+                No handoff are the departures a reader must actually notice.
+            
+                Only `01 Merchant capture` changes: it is the one non-dense step
+                the acquirer owns. */}
+            {!dense && ownerOf(step.id) !== "acquirer" && (
+              <OwnerBadge step={step.id} compact />
+            )}
           </div>
         </div>
       </button>
