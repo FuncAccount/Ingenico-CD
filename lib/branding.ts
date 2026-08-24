@@ -67,11 +67,18 @@ export interface BrandTheme {
   receiptFooter: string
 }
 
-/** The acquirer's own identity, fixed. This is the co-brand's other half. */
+/** The acquirer's own identity, fixed. This is the co-brand's other half.
+ *
+ *  The name MUST match `PERSONAS.acquirer.org`, `HOME_ACQUIRER` and the key
+ *  in `REMOTE_KEY_INJECTION`. It used to read "Northgate Payments" here and
+ *  "Northgate Acquiring" everywhere else — one organisation under two names,
+ *  which put a different company on the receipt proof from the one in the
+ *  nav, and made `needsPhysicalKeying()` miss its own row and fall through to
+ *  the physical-injection default. */
 export const ACQUIRER = {
-  name: "Northgate Payments",
+  name: "Northgate Acquiring",
   /** Printed on every receipt under licence. Not editable — it is a legal line. */
-  legalLine: "Processed by Northgate Payments Ltd · FCA 784412",
+  legalLine: "Processed by Northgate Acquiring Ltd · FCA 784412",
   mark: "#0A1E3C",
   /** The authorised reversed variant, for dark grounds. Using it is not a
    *  recolour: both variants are part of the supplied brand asset set. */
@@ -93,12 +100,40 @@ export function colourDistance(a: string, b: string): number {
 /** Terminal hardware constraint, not a style choice. */
 export const DISPLAY_NAME_LIMIT = 24
 
+/**
+ * The band a merchant starts on when they have supplied nothing.
+ *
+ * THIS USED TO BE `#0A1E3C` — the acquirer's own navy, and one of the two
+ * colours `brand-collision` exists to forbid. Every merchant without a `SEEDS`
+ * entry was therefore born in breach: 8 of 19 files opened with a blocking
+ * brand rule they had done nothing to earn, and the studio's own default was a
+ * colour the studio's own gate refused. A default has to be legal, or the rule
+ * is reporting on the platform rather than on the merchant.
+ *
+ * Deliberately a neutral graphite rather than a "nice" colour: it reads as
+ * unset, which is what it is, and it clears both identity colours by a wide
+ * margin (79 and 203 against a 50 clearance).
+ */
+export const UNBRANDED_BAND = "#4A4A4A"
+
 /** Seed a theme from the merchant record so nothing starts blank. */
 export function defaultTheme(merchant: Merchant): BrandTheme {
-  const seed = SEEDS[merchant.id] ?? { primary: "#0A1E3C", logo: false }
+  const seed = SEEDS[merchant.id] ?? { primary: UNBRANDED_BAND, logo: false }
+  /* An approved band OUTRANKS the seed, because it is the one that physically
+     exists. For a merchant whose terminals have shipped, the seed describes a
+     design intention while `brandingApprovedAgainst` describes the hardware on
+     the counter — opening the studio on anything else would show the acquirer a
+     device that is not the one their merchant has.
+
+     Resolved into a local BEFORE `ink` reads it: the ink is auto-selected for
+     legibility against the band, so deriving it from `seed.primary` while the
+     band came from the approved colour would pair an approved ground with ink
+     chosen for a different one — the single case the contrast rule cannot catch,
+     because it measures the pair it is given. */
+  const primary = merchant.brandingApprovedAgainst ?? seed.primary
   return {
-    primary: seed.primary,
-    ink: readableOn(seed.primary),
+    primary,
+    ink: readableOn(primary),
     displayName: merchant.name.slice(0, DISPLAY_NAME_LIMIT),
     receiptHeader: merchant.name,
     logoSupplied: seed.logo,
@@ -107,16 +142,43 @@ export function defaultTheme(merchant: Merchant): BrandTheme {
   }
 }
 
-/** Per-merchant starting points. Verde starts on a pale yellow that FAILS the
- *  contrast gate, so the block is demonstrable rather than theoretical. */
+/**
+ * Per-merchant starting points — what the merchant ASKED for.
+ *
+ * Read only while `brandingApprovedAgainst` is null. Once a band has been
+ * approved onto hardware that wins, so a seed differing from the approved band
+ * on a settled merchant is unreachable data and should be corrected, not left
+ * to imply a design nobody can see.
+ *
+ * The docblock here used to claim Verde's pale yellow FAILED the contrast gate.
+ * It does not, and could not: the ink is auto-selected against whatever band is
+ * chosen, so `amount-contrast` was downgraded to an advisory that can never
+ * fail. Verde passes every rule. The one seeded breach is Nordwind's.
+ */
 const SEEDS: Record<string, { primary: string; logo: boolean }> = {
   "m-atlas": { primary: "#7A1E2B", logo: true },
   "m-verde": { primary: "#E8C547", logo: false },
-  "m-nordwind": { primary: "#1F6F4A", logo: true },
-  "m-solmar": { primary: "#00B9E4", logo: false },
+  /* THE ONE SEEDED BREACH, and it lives here deliberately: Nordwind is sitting
+     ON B2 Branding with nothing approved yet, so a submission of the acquirer's
+     own cyan halts the step the merchant is actually standing on. That is the
+     honest version of the screenshot that started this — a halt at the step it
+     belongs to, with the remedy ("choose another band") genuinely available.
+     Do not move this to a merchant whose terminals have shipped. */
+  "m-nordwind": { primary: "#00B9E4", logo: true },
+  /* Was `#00B9E4`. SolMar's terminals are INSTALLED, so `brandingApprovedAgainst`
+     always wins and this seed could never be read — dead data under a comment
+     claiming it demonstrated the collision rule, which it no longer could once
+     the approved band took precedence. Set to the band SolMar actually shipped
+     on, so seed and hardware agree. */
+  "m-solmar": { primary: "#00736D", logo: false },
   "m-brightline": { primary: "#2B2F77", logo: true },
   "m-tavo": { primary: "#B04A2F", logo: false },
-  "m-fjord": { primary: "#0A1E3C", logo: true },
+  /* Was `#0A1E3C` — the acquirer's own navy, character for character. Not a
+     near-miss the clearance rule was tuned to catch but the identity colour
+     itself, so this merchant's file opened permanently in breach of a rule it
+     could never satisfy. Moved to a deep slate-blue that is recognisably their
+     own: 74 clear of our navy, against a 50 minimum. */
+  "m-fjord": { primary: "#12456B", logo: true },
   "m-lumen": { primary: "#3C3C3C", logo: false },
   "m-cedar": { primary: "#7A1E2B", logo: true },
   "m-havenport": { primary: "#1F6F4A", logo: false },
@@ -210,7 +272,7 @@ export function checkBrand(theme: BrandTheme): BrandRule[] {
     state: nearest.d < IDENTITY_CLEARANCE ? "fail" : "pass",
     detail:
       nearest.d < IDENTITY_CLEARANCE
-        ? `The band is within ${nearest.d.toFixed(0)} of your own ${nearest.c}, against a ${IDENTITY_CLEARANCE} clearance. The terminal would read as a Northgate device, not the merchant's.`
+        ? `The band is within ${nearest.d.toFixed(0)} of your own ${nearest.c}, against a ${IDENTITY_CLEARANCE} clearance. The terminal would read as a ${ACQUIRER.name} device, not the merchant's.`
         : `${nearest.d.toFixed(0)} clear of the nearest identity colour (${nearest.c}), against a ${IDENTITY_CLEARANCE} minimum.`,
     source: "Acquirer brand standard",
     blocking: true,
@@ -289,6 +351,38 @@ export function checkBrand(theme: BrandTheme): BrandRule[] {
  *  stops you: it is information, not a verdict. */
 export function blockers(rules: BrandRule[]): BrandRule[] {
   return rules.filter((r) => r.blocking && r.state === "fail")
+}
+
+/**
+ * The current design no longer matches the hardware already in the field.
+ *
+ * A SEPARATE CLAIM FROM A BLOCKING RULE, and the distinction is the whole point.
+ * A brand rule asks "may we build this?"; drift asks "does what we already built
+ * still match?". Collapsing them is how a colour change in the studio came to
+ * halt six merchants on a Branding step they had passed weeks earlier — a
+ * terminal on a shop counter was branded under the standard in force at the
+ * time, and editing a swatch today does not un-approve it. What it creates is a
+ * refresh backlog, which needs a visit, not an approval.
+ *
+ * Returns null when there is nothing to say — either nothing has shipped, or the
+ * estate still matches. Never returns a "no drift" object: an advisory that
+ * renders even when it has no finding trains people to ignore it.
+ */
+export interface EstateDrift {
+  /** What the terminals in the field actually carry. */
+  approved: string
+  /** What the studio is currently showing. */
+  proposed: string
+  terminalCount: number
+}
+
+export function estateDrift(merchant: Merchant, theme: BrandTheme): EstateDrift | null {
+  const approved = merchant.brandingApprovedAgainst
+  // Nothing approved means nothing is out there to have drifted. This is not the
+  // same as "matches" — hence null rather than a cleared result.
+  if (!approved) return null
+  if (approved.toLowerCase() === theme.primary.toLowerCase()) return null
+  return { approved, proposed: theme.primary, terminalCount: merchant.terminalCount }
 }
 
 /* ----------------------------------------------------------------- receipt */

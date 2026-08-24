@@ -58,16 +58,46 @@ export const STEP_HANDOFFS: Record<StepId, Handoff[]> = {
   1: [
     {
       party: "acquirer",
-      ask: "Confirm the recommended setup before it becomes an application.",
-      action: "Confirm setup and onboard",
+      ask: "Confirm the shaped profile and recommended setup before it becomes an application.",
+      action: "Confirm setup",
+      /* Names the INFERENCE explicitly. Capture now reads documents, corroborates
+         them against the register, and reads the merchant's website — and only
+         that last one is a judgement rather than a record. This is the moment
+         the acquirer takes ownership of it, so it has to be stated here rather
+         than left in a panel they may not have opened. */
       commits:
-        "You are accepting this merchant as your customer and the recommended device mix as the basis of the order.",
+        "You are accepting this merchant as your customer, the business profile the agent inferred from web research, and the recommended device mix as the basis of the order.",
     },
   ],
+  // The risk lane. KYC (10) and Pricing (11) run BEFORE Underwriting (2)
+  // despite the ids — see StepId.
+  10: [
+    {
+      party: "acquirer",
+      ask: "Clear the compliance screening, or judge an escalated hit.",
+      action: "Clear KYC",
+      commits:
+        "You are accepting the entity as screened under your own AML policy. Anything the agent escalated stays yours to judge — it does not clear itself.",
+    },
+  ],
+  11: [
+    {
+      party: "acquirer",
+      ask: "Set the commercial terms for this merchant.",
+      action: "Set pricing",
+      commits:
+        "You are fixing the monthly, setup and per-transaction rates this merchant will be billed. Ingenico applies them; it does not set or discount them.",
+    },
+  ],
+  // The document chase stays HERE rather than moving to KYC with the identity
+  // items, because this is the step that cannot proceed without them and the
+  // list spans both (an ownership statement AND a bank statement). Splitting it
+  // would send the merchant two competing emails for one pile of paperwork.
+  // The ask no longer says "for KYB" — that step now exists separately.
   2: [
     {
       party: "merchant",
-      ask: "Supply the incorporation and ownership documents for KYB.",
+      ask: "Supply the documents underwriting needs to score the file.",
       subject: "Documents needed to complete your merchant application",
       items: [
         "Certificate of incorporation",
@@ -86,20 +116,39 @@ export const STEP_HANDOFFS: Record<StepId, Handoff[]> = {
         "This is the regulated decision and it is recorded against your licence, not Ingenico's. The agent's screening is evidence, not the decision.",
     },
   ],
+  // YOU PLACE THE ORDER; INGENICO THEN CONFIRMS IT. This ran the other way
+  // round — the run opened the step by putting the basket into Ingenico's
+  // order-desk queue, with the acquirer's own decision sitting "queued"
+  // underneath it. Three things were wrong with that:
+  //
+  //  - The basket is the acquirer's to change; quantities are editable right
+  //    there on the step. So the order desk was being asked to commit stock,
+  //    an allocation and a delivery date against numbers that could move
+  //    underneath them, and any later edit silently voided the answer they
+  //    sent back — a confirmation for a basket that no longer existed.
+  //  - It is an OUTWARD act. The run put a request into another company's
+  //    queue, in the acquirer's name, before the acquirer had agreed to any of
+  //    it. Same shape as a notice that sends itself.
+  //  - It is not how ordering works. A supplier acknowledges an ORDER: there
+  //    is nothing to confirm availability *for* until one has been placed.
+  //
+  // Reordering is the whole fix — the panel already withholds controls from
+  // any row that is not the blocking one, so Ingenico's SLA clock, chase and
+  // inbound simulation now stay hidden until the order is actually placed.
   3: [
     {
+      party: "acquirer",
+      ask: "Approve the basket and place the order against your rate card.",
+      action: "Place the order",
+      commits:
+        "You are fixing the basket as it stands and committing to its value on your contracted rate card. Quantities are yours to change up to this point; afterwards you are changing a live order.",
+    },
+    {
       party: "ingenico",
-      ask: "Order desk validates the basket, stock and lead time.",
+      ask: "Order desk confirms stock and a delivery date for the order you placed.",
       team: "Ingenico order desk",
       slaDays: 1,
       returns: "Confirmed availability, warehouse allocation and a committed delivery date",
-    },
-    {
-      party: "acquirer",
-      ask: "Place and confirm the order against your rate card.",
-      action: "Place the order",
-      commits:
-        "You are committing to the order value on your contracted rate card and releasing it to fulfilment.",
     },
   ],
   // Branding is the acquirer's alone. This step previously led with an
@@ -160,12 +209,98 @@ export const STEP_HANDOFFS: Record<StepId, Handoff[]> = {
   9: [],
 }
 
+/**
+ * The step-7 and step-8 handoffs for an order with no hardware.
+ *
+ * `STEP_HANDOFFS` is keyed by step alone, which is right for eight of the nine
+ * steps but wrong for the two that assume a parcel: a software-only merchant
+ * was told "Logistics packs the estate and books the carrier" and "Plug in the
+ * terminals", neither of which will ever happen. The party does not change —
+ * Ingenico still issues the licence, the merchant still activates — so this
+ * substitutes the ASK, leaving `ownerOf` and `statusPossibleAt` untouched.
+ */
+const SOFTWARE_ONLY_HANDOFFS: Partial<Record<StepId, Handoff[]>> = {
+  7: [
+    {
+      party: "ingenico",
+      ask: "Licensing issues the softPOS entitlement to the merchant's account.",
+      team: "Ingenico licensing",
+      slaDays: 1,
+      returns: "An entitlement reference; there is no consignment to track",
+    },
+  ],
+  8: [
+    {
+      party: "merchant",
+      ask: "Install the app and complete activation.",
+      subject: "Your softPOS licence is ready — how to start taking payments",
+      items: [
+        "Install the payment app on a supported phone",
+        "Sign in with the activation code emailed to you",
+        "Run the £0.01 test payment when prompted",
+      ],
+      chaseAfterDays: 2,
+      portalAction: "completes activation in the app",
+    },
+  ],
+}
+
+/**
+ * The handoffs for a step ON A GIVEN ORDER. Prefer this over reading
+ * `STEP_HANDOFFS` directly anywhere a merchant is in hand.
+ */
+export function handoffsFor(step: StepId, softwareOnly: boolean): Handoff[] {
+  if (softwareOnly) return SOFTWARE_ONLY_HANDOFFS[step] ?? STEP_HANDOFFS[step]
+  return STEP_HANDOFFS[step]
+}
+
+/**
+ * The handoffs for a step on a given MERCHANT, narrowed to what that merchant
+ * actually still owes.
+ *
+ * The step-2 list is the full KYB set, which is the right ask when nothing has
+ * arrived. Once the agent has parsed four of six documents, sending that same
+ * list asks the merchant to re-supply what they already sent — the single
+ * fastest way to make an automated chase look unread, and to lose the two
+ * documents that matter in a list of four they can ignore. So where the file
+ * names its outstanding items, the request is narrowed to exactly those.
+ */
+export function handoffsForMerchant(
+  step: StepId,
+  merchant: Merchant,
+  softwareOnly: boolean,
+): Handoff[] {
+  const base = handoffsFor(step, softwareOnly)
+  const outstanding = merchant.underwriting?.documentsOutstanding
+  if (step !== 2 || !outstanding?.length) return base
+
+  return base.map((h) =>
+    h.party === "merchant"
+      ? {
+          ...h,
+          ask: `Supply the ${outstanding.length} outstanding document${
+            outstanding.length === 1 ? "" : "s"
+          }. Underwriting cannot score the file without them.`,
+          // Counted, not spelled. "Two documents" in a literal goes on saying
+          // two after one of them lands.
+          subject: `${outstanding.length} document${
+            outstanding.length === 1 ? "" : "s"
+          } still needed to complete your application`,
+          items: outstanding,
+        }
+      : h,
+  )
+}
+
 /** The party a step is waiting on, before anyone has done anything.
  *
- *  Deliberately NOT just the first handoff: step 3 opens with an Ingenico
- *  validation but the step exists so that YOU place the order, and labelling it
- *  "Ingenico" hid the acquirer's own decision behind a supplier's queue. Where
- *  the acquirer has a decision anywhere in the step, the step is theirs. */
+ *  Deliberately NOT just the first handoff. This began as a patch for step 3,
+ *  which opened with an Ingenico validation even though the step exists so
+ *  that YOU place the order — so the header read "Waiting · Ingenico" over the
+ *  acquirer's own untaken decision. That ORDER has since been corrected at
+ *  source, and the rule is kept for the general reason rather than the
+ *  specific one: wherever the acquirer holds a decision anywhere in a step,
+ *  the step is theirs, and no supplier's queue ahead of it may say otherwise. */
 export function ownerOf(step: StepId): Party | null {
   const list = STEP_HANDOFFS[step]
   if (list.some((h) => h.party === "acquirer")) return "acquirer"
@@ -183,8 +318,22 @@ export function waitingOn(
    *  starts empty and an unrecorded handoff is indistinguishable from an
    *  unfinished one. A step the journey has moved past is settled by fact. */
   currentStep?: StepId,
+  /** This step is carrying an unresolved blocking finding.
+   *
+   *  REQUIRED, because the shortcut below is the thing it has to override and a
+   *  defaulted `false` would silently restore the bug. */
+  hasFinding?: boolean,
 ): Party | null {
-  if (currentStep !== undefined && step < currentStep) return null
+  /* A HALT OUTRANKS POSITION. The shortcut below reasons "the journey has moved
+     past this step, so it is settled by fact" — sound for an unrecorded handoff
+     on finished work, false for a step that is stopped. It also uses the raw id
+     comparison the rest of the codebase has been removing.
+  
+     Left in place rather than replaced because it is doing a real job: handoff
+     state starts empty, so without it every completed step reports "waiting on
+     merchant" forever. Only the halted case is carved out, and a halted step is
+     waiting on whoever can clear it — which the line below works out properly. */
+  if (currentStep !== undefined && step < currentStep && !hasFinding) return null
   const i = blockingIndex(step, merchantId, states)
   return i === null ? null : STEP_HANDOFFS[step][i].party
 }

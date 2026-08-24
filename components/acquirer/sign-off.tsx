@@ -13,13 +13,17 @@ import {
   TriangleAlert,
 } from "lucide-react"
 import {
-  MERCHANTS,
   bandTone,
+  BAND_LABEL,
   stepById,
   type Merchant,
 } from "@/lib/acquirer-data"
-import { decisionAtStep, signOffQueue } from "@/lib/decisions"
+import { liveDecisionAtStep, signOffQueue } from "@/lib/decisions"
+import { riskAssessment } from "@/lib/underwriting"
+import { decisionBasis } from "@/lib/decision-basis"
 import { useDecisions } from "@/components/acquirer/decisions-provider"
+import { useBrandTheme } from "@/components/acquirer/brand-theme-provider"
+import { useBook } from "@/components/acquirer/book-provider"
 import { fmtDateTime } from "@/lib/handoffs"
 import { cn } from "@/lib/utils"
 
@@ -30,17 +34,33 @@ export function SignOff({
   focusId?: string
   onBackToPortfolio: () => void
 }) {
-  // The working set: everyone who was waiting on you. Membership is stable on
-  // purpose — a merchant disappearing the instant you sign would take the
-  // confirmation with it and you could not review what you just did. What
-  // changes is each one's recorded decision, read from the shared store.
-  const queue = useMemo(() => signOffQueue(MERCHANTS), [])
+  const { merchants } = useBook()
+
+  // MEMBERSHIP IS FROZEN AT MOUNT; CONTENT IS NOT. Those are two different
+  // claims and conflating them was the bug: the `[]` dep froze the whole
+  // merchant OBJECTS, so a basket edited back on the Order stage left this
+  // screen approving the device count as it stood when the screen opened.
+  //
+  // The ids are captured once — a merchant vanishing the instant you sign would
+  // take the confirmation with it, and you could not review what you just did.
+  // Everything else is re-read live from the book each render.
+  const [queueIds] = useState(() => signOffQueue(merchants).map((m) => m.id))
+  const queue = useMemo(
+    () =>
+      queueIds
+        .map((id) => merchants.find((m) => m.id === id))
+        // A merchant cannot leave the book mid-session today, but filtering
+        // keeps the type honest rather than rendering `undefined` as a row.
+        .filter((m): m is Merchant => Boolean(m)),
+    [queueIds, merchants],
+  )
   const [selectedId, setSelectedId] = useState<string>(
     focusId && queue.some((m) => m.id === focusId)
       ? focusId
       : (queue[0]?.id ?? ""),
   )
   const { decisions, record } = useDecisions()
+  const { themeFor } = useBrandTheme()
 
   const selected = queue.find((m) => m.id === selectedId)
 
@@ -68,9 +88,17 @@ export function SignOff({
 
   // Scoped to the gate the merchant is actually standing at, so an underwriting
   // sign-off cannot silently satisfy a branding approval further down the line.
-  const decision = decisionAtStep(decisions, selected.id, selected.currentStep)
+  // Live, so a superseded approval puts the merchant back in front of you here
+  // too rather than showing as already decided.
+  const decision = liveDecisionAtStep(decisions, selected.id, selected.currentStep)
   const isBranding = selected.currentStep === 4
   const step = stepById(selected.currentStep)
+
+  // The SAME design the cockpit shows, read from the shared provider, and the
+  // same basis function it records with. Computing a second fingerprint here
+  // would differ from the cockpit's the moment anyone edited the design, and
+  // the app would then report an edit the acquirer never made.
+  const basis = decisionBasis(selected.currentStep, selected, themeFor(selected))
 
   return (
     <div className="mx-auto max-w-7xl px-6 py-8">
@@ -87,7 +115,10 @@ export function SignOff({
         {/* Queue */}
         <aside className="flex flex-col gap-2">
           {queue.map((m) => {
-            const d = decisionAtStep(decisions, m.id, m.currentStep)
+            // Live: a superseded approval returns this row to "Open", which is
+            // the honest state — the design it covered no longer exists, so the
+            // merchant really is waiting on you again.
+            const d = liveDecisionAtStep(decisions, m.id, m.currentStep)
             const branding = m.currentStep === 4
             const active = m.id === selectedId
             return (
@@ -147,7 +178,7 @@ export function SignOff({
                     bandTone(step.band),
                   )}
                 >
-                  {step.code} {step.name} · {step.band}
+                  {step.code} {step.name} · {BAND_LABEL[step.band]}
                 </span>
               </div>
               <h2 className="mt-2 text-xl font-semibold text-foreground">
@@ -180,14 +211,19 @@ export function SignOff({
                 </p>
                 <div className="mt-4 flex flex-col gap-3 sm:flex-row">
                   <button
-                    onClick={() => record(selected.id, "signed", selected.currentStep)}
+                    onClick={() => record(selected.id, "signed", selected.currentStep, basis)}
                     className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
                   >
                     <BadgeCheck className="h-4 w-4" />
                     {isBranding ? "Approve branding" : "Sign off"}
                   </button>
                   <button
-                    onClick={() => record(selected.id, "returned", selected.currentStep)}
+                    // `null` basis, deliberately, and not an oversight: sending
+                    // it back is a request for more from the merchant, not an
+                    // approval OF anything. Editing the design afterwards does
+                    // not make the request untrue, so there is nothing here
+                    // that a later edit could invalidate.
+                    onClick={() => record(selected.id, "returned", selected.currentStep, null)}
                     className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg border border-border bg-card px-4 py-2.5 text-sm font-semibold text-foreground transition-colors hover:bg-secondary"
                   >
                     <MessageSquareReply className="h-4 w-4" />
@@ -262,10 +298,28 @@ function AgentRow({
 function UnderwritingBody({ merchant }: { merchant: Merchant }) {
   const uw = merchant.underwriting
   if (!uw) return null
+  // Derived from the documents, not from the absence of the number — a score
+  // could be missing for other reasons, and "not scored yet" and "cannot be
+  // scored" are different sentences.
+  const scoreWithheld = (uw.documentsOutstanding?.length ?? 0) > 0
+  /* THE SCORE IS DERIVED HERE, NOT READ OFF THE RECORD.
+  
+     `uw.riskScore` was a stored duplicate of something `riskAssessment` already
+     computes from the factor breakdown, and the two disagreed: the demo lever
+     wrote a flat 34 while the assessment derived 26 from the same file, so this
+     screen and the risk desk printed different numbers for one fact. Reading
+     the assessment means the figure here is always the one the breakdown adds
+     up to.
+  
+     It also removes the reason the lever had to invent a score at all. With the
+     field gone, the arrival of documents no longer has to pretend it scored
+     anything — the assessment simply becomes computable once the bundle is
+     complete, and refuses while it is not. */
+  const assessment = riskAssessment(merchant)
   const riskTone =
-    uw.riskBand === "Low"
+    assessment.band === "Low"
       ? "text-success"
-      : uw.riskBand === "Medium"
+      : assessment.band === "Medium"
         ? "text-warning"
         : "text-destructive"
   return (
@@ -276,22 +330,43 @@ function UnderwritingBody({ merchant }: { merchant: Merchant }) {
       <div className="mt-3 grid gap-3 sm:grid-cols-2">
         <AgentRow icon={Fingerprint} label="Identity" value={uw.identity} />
         <AgentRow icon={FileText} label="Documents" value={uw.documents} />
-        <div className="flex items-start gap-3 rounded-lg border border-border p-4">
-          <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-success/12 text-success">
+        {/* A score that could not be produced renders as a NAMED refusal.
+            Left as `{uw.riskScore}` it printed an empty space beside a green
+            icon — indistinguishable from a render fault, and reassuring in a
+            place that should be stopping the reader. */}
+        <div
+          className={cn(
+            "flex items-start gap-3 rounded-lg border p-4",
+            scoreWithheld ? "border-destructive/40 bg-destructive/[0.06]" : "border-border",
+          )}
+        >
+          <span
+            className={cn(
+              "mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg",
+              scoreWithheld ? "bg-destructive/12 text-destructive" : "bg-success/12 text-success",
+            )}
+          >
             <Gauge className="h-4 w-4" />
           </span>
           <div>
-            <p className="text-xs font-medium text-muted-foreground">
-              Risk score
-            </p>
-            <p className="mt-0.5 flex items-baseline gap-2">
-              <span className="font-mono text-lg font-semibold text-foreground tabular-nums">
-                {uw.riskScore}
-              </span>
-              <span className={cn("text-sm font-semibold", riskTone)}>
-                {uw.riskBand}
-              </span>
-            </p>
+            <p className="text-xs font-medium text-muted-foreground">Risk score</p>
+            {scoreWithheld ? (
+              <>
+                <p className="mt-0.5 text-sm font-semibold text-destructive">Not scored</p>
+                <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                  {`${uw.documentsOutstanding!.length} mandatory document${
+                    uw.documentsOutstanding!.length === 1 ? " is" : "s are"
+                  } outstanding. The file cannot be assessed until they arrive.`}
+                </p>
+              </>
+            ) : (
+              <p className="mt-0.5 flex items-baseline gap-2">
+                <span className="font-mono text-lg font-semibold text-foreground tabular-nums">
+                  {assessment.score}
+                </span>
+                <span className={cn("text-sm font-semibold", riskTone)}>{assessment.band}</span>
+              </p>
+            )}
           </div>
         </div>
       </div>

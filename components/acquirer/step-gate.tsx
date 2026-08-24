@@ -6,7 +6,6 @@ import {
   Building2,
   CheckCircle2,
   Clock,
-  Inbox,
   AlertTriangle,
   Mail,
   Send,
@@ -14,7 +13,8 @@ import {
   Store,
 } from "lucide-react"
 import type { Merchant, StepId } from "@/lib/acquirer-data"
-import { decisionAtStep } from "@/lib/decisions"
+import { physicalUnits } from "@/lib/artifacts"
+import { decisionAtStep, liveDecisionAtStep, type Decision } from "@/lib/decisions"
 import { useDecisions } from "@/components/acquirer/decisions-provider"
 import {
   type AcquirerDecisionState,
@@ -22,11 +22,12 @@ import {
   type HandoffState,
   type IngenicoWaitState,
   type MerchantChaseState,
-  STEP_HANDOFFS,
   addWorkingDays,
   blockingIndex,
+  SETTLED_BEFORE_RECORD,
   settledState,
   draftEmail,
+  handoffsForMerchant,
   fmtDate,
   fmtDateTime,
   handoffKey,
@@ -34,6 +35,9 @@ import {
   isResolved,
   workingDaysBetween,
 } from "@/lib/handoffs"
+import { DemoInbound } from "@/components/acquirer/demo-control"
+import { useDemo } from "@/components/acquirer/demo-provider"
+import { outstandingDocuments } from "@/lib/underwriting"
 import { cn } from "@/lib/utils"
 
 const PARTY_META = {
@@ -41,6 +45,72 @@ const PARTY_META = {
   ingenico: { label: "Ingenico", Icon: Building2, tone: "text-foreground" },
   merchant: { label: "Merchant", Icon: Store, tone: "text-warning-foreground" },
 } as const
+
+/**
+ * The status badge on a handoff row.
+ *
+ * One place, because the three parties' labels have to stay mutually
+ * consistent. Two claims used to be wrong here:
+ *
+ *  - An acquirer handoff said **"your decision"**, which names the OWNER of a
+ *    row rather than its STATE — the one thing a status badge is for. Every
+ *    other badge here reports state ("in progress"), and the row already says
+ *    "· YOU" in its own header, so the badge was spending the only status slot
+ *    restating the party. It now reads **"pending action"**.
+ *
+ *    This was also the case the previous fix missed: it keyed "blocked" on
+ *    `!active`, but an ACTIVE row can sit behind an unmet precondition too
+ *    (Underwrite, where a screening escalation must be recorded first). That
+ *    row showed "your decision" over a disabled button — putting the ball in
+ *    the reader's court while refusing the click.
+ *  - A request that had gone out and not come back showed nothing at all, so
+ *    "asked, waiting" looked identical to "not asked yet". That is now an
+ *    explicit amber **"in progress"** — and it is gated on the request
+ *    actually having been sent, so it reports work that is genuinely under
+ *    way rather than work that is merely possible.
+ */
+function statusBadge(
+  handoff: Handoff,
+  state: HandoffState,
+  done: boolean,
+  active: boolean,
+  runComplete: boolean,
+): { label: string; className: string } | null {
+  // A settled row already carries a green tick and its settlement line.
+  if (done) return null
+
+  if (handoff.party === "acquirer") {
+    // "queued", not the old "pending actions": one letter apart from the
+    // active label is not a distinction anyone can read, and these two can
+    // appear in the same list. A later acquirer row is waiting its turn
+    // behind another party, which "queued" says and "pending" does not.
+    return active
+      ? { label: "pending action", className: "bg-primary/12 text-primary" }
+      : { label: "queued", className: "bg-secondary text-muted-foreground" }
+  }
+
+  // An Ingenico request is raised BY the agent run, not by a click, so its
+  // `requestedIso` is only written when someone chases or simulates a reply.
+  // Gating the badge on that field alone made the row contradict itself: the
+  // body showed a running SLA clock ("Due 20 Aug · 1 working day") while the
+  // badge said nothing, so an active request looked unstarted.
+  //
+  // The run completing IS the request going out — but `active` DOES NOT CARRY
+  // THAT. `active` is `i === blocking`, i.e. "this row is at the front of the
+  // queue", which is true from the moment the step opens. So on an unplayed
+  // step the badge read "in progress" at 0/4 tasks, directly above its own
+  // body text saying the request goes out "once the agent run finishes" —
+  // claiming a team was working on something nobody had asked them for.
+  // `runComplete` is the fact the badge actually needed.
+  const sent =
+    handoff.party === "ingenico"
+      ? (active && runComplete) || (state as IngenicoWaitState).requestedIso !== null
+      : (state as MerchantChaseState).sentIso !== null
+
+  // Not yet asked is not "in progress" — nobody is working on it.
+  if (!sent) return null
+  return { label: "in progress", className: "bg-warning/15 text-warning-foreground" }
+}
 
 interface Props {
   step: StepId
@@ -52,6 +122,34 @@ interface Props {
   /** A named, step-specific reason the acquirer's own decision cannot be taken
    *  yet — an unresolved escalation, a failing brand check. Null means ready. */
   precondition?: string | null
+  /** The stage was reset by hand, so it is being driven live rather than read
+   *  back as history — see `isPast` below. */
+  wasReset?: boolean
+  /** This step is carrying an unresolved blocking finding.
+   *
+   *  REQUIRED, not defaulted: `false` is the claim "this step is clean", and a
+   *  forgotten argument must not be able to make it. Passed from the same
+   *  `haltedSteps` set the rail and the ship gate read, so the three cannot
+   *  disagree about one step. */
+  hasFinding: boolean
+  /** Whether this step's agent has actually run. REQUIRED, not defaulted: a
+   *  defaulted `true` restores the bug this exists to prevent, and a defaulted
+   *  `false` would blank out settled history. */
+  hasRun: boolean
+  /** Whether the STATE MODEL — not the fixture's raw position — calls this step
+   *  done. Must be `laneState(...) === "done"`, the same value the rail draws
+   *  and the cockpit's task counter starts from.
+   *
+   *  REQUIRED, and a prop rather than a local derivation on purpose. This panel
+   *  used to work the position out for itself and so could contradict the card
+   *  it sits inside: "Ready · 0/4 tasks · Play agent run" above two green
+   *  settled handoffs. Anything that makes `laneState` withhold "done" — a
+   *  blocked predecessor, a reset, a finding — must withhold these ticks too,
+   *  and the only way to guarantee that is to read the same value. */
+  laneDone: boolean
+  /** A fingerprint of what an approval taken here would be about, stored on the
+   *  decision so a later edit to the same artefact can supersede it. */
+  basis: string | null
 }
 
 export function StepGate({
@@ -61,24 +159,139 @@ export function StepGate({
   states,
   onStates,
   precondition = null,
+  wasReset = false,
+  hasFinding,
+  hasRun,
+  laneDone,
+  basis,
 }: Props) {
-  const list = STEP_HANDOFFS[step]
+  // Keyed by step AND by what was ordered: steps 7 and 8 otherwise promise a
+  // consignment and a boxed terminal to a merchant who bought only software.
+  // ...and narrowed to what THIS merchant still owes, so a chase asks for the
+  // two documents actually missing rather than re-requesting the four already
+  // parsed.
+  const list = handoffsForMerchant(step, merchant, physicalUnits(merchant).length === 0)
 
   // A step the journey has already passed is settled by fact, so its handoffs
   // default to done. Without this, completed history renders as an outstanding
   // request and offers to chase a merchant who responded weeks ago.
-  const isPast = step < merchant.currentStep
+  //
+  // Unless the stage was reset by hand. This fallback ignores `states`
+  // entirely, so clearing the handoff map left a reset stage still reporting
+  // "Step clear · Returned by Ingenico" — the reset silently did nothing to
+  // the one panel it was aimed at. Reset means "show me this running for the
+  // first time", which is a claim about the VIEW, not about the merchant's
+  // real position, so only this default flips: `merchant.currentStep` is
+  // untouched and the pipeline rail still shows the step as passed.
+  /* A HALTED STEP IS NEVER "PAST", however far the file has travelled.
+  
+     Two faults met on this line. First, `step < merchant.currentStep` is the
+     raw id comparison the rest of the codebase has spent so long eradicating —
+     the risk lane runs 10 → 11 → 2, so KYC and Pricing compared as "past" only
+     by accident of numbering. Second and worse, `isPast` does two jobs at once:
+     it forces `blocking` to null (printing "Step clear") and it makes `read()`
+     fall back to `settledState`, which SYNTHESISES an approval. That is where
+     "Approved by you · date not recorded" came from — the phrase is the tell,
+     because there is no date to record when nobody ever approved anything.
+  
+     So SolMar, sitting at 03 Install, rendered a green "Approved by you" over a
+     brand rule tagged BLOCKS APPROVAL, with the agent log directly beneath
+     reading "agent run stopped". `hasFinding` is passed in from the same
+     `haltedSteps` set the rail and the ship gate read, so all three surfaces
+     answer this from one source. */
+  /* AND THE THIRD ROUTE TO A FALSE GREEN: NO RUN AT ALL.
+  
+     `isPast` synthesises a settled handoff — "Approved by you", "Returned by
+     Ingenico" — out of position alone. That is sound for work the agent really
+     did, but the same line also greened steps whose agent had never been played,
+     which is the case the user caught: a handoff cannot be settled by a party
+     who was never asked, and the request is only made when the run goes.
+  
+     `hasRun` therefore joins `wasReset` and `hasFinding` as a precondition on
+     every branch. It reads the SAME `stepHasRun` the findings and the check
+     counts use, so the badge, the panel and the gate cannot disagree about
+     whether this step has executed. */
+  /* AND THE FOURTH ROUTE, WHICH IS WHY THIS IS NOW A PROP AND NOT A SUM.
+  
+     This line used to re-derive the step's position for itself:
+  
+       lane !== "risk" ? step < merchant.currentStep
+                       : merchant.riskLane.verdict === "cleared"
+  
+     Both halves were wrong in the same way — they read the FIXTURE'S RAW
+     ASSERTION rather than the state model. `laneState` applies rules on top of
+     that assertion (a blocked predecessor, a reset, a finding) and can
+     therefore call a step "upcoming" that the raw verdict calls settled. The
+     cockpit's task counter reads `laneState`; this panel read the verdict; so
+     one card rendered "R3 Underwriting · Ready · 0/4 tasks · Play agent run"
+     with two green settled handoffs beneath it, one of them "Approved by you ·
+     date not recorded" — an approval attributed to the acquirer on a step the
+     same card was inviting them to start.
+  
+     `hasRun` was added to stop exactly this and could not, because on the risk
+     lane `stepHasRun` bottoms out in `stepEvidenced`, whose cleared-lane branch
+     is the SAME `riskLane.verdict === "cleared"` expression. The guard was
+     `X && X`: it read the one fact it was meant to check independently. That is
+     the general trap — a second opinion is only worth having when it comes from
+     a different source.
+  
+     So the position now arrives as `laneDone`, the very value the rail draws and
+     the task counter starts from. The three surfaces cannot disagree because
+     there is only one answer. */
+  const isPast = laneDone && hasRun && !wasReset && !hasFinding
 
   // The acquirer's own decision is held in the shared record, not in this
   // component's handoff state — otherwise signing off here and signing off on
   // the sign-off screen are two unrelated events, and each surface goes on
   // saying the other one's decision has not been taken.
   const { decisions, record } = useDecisions()
-  const decision = decisionAtStep(decisions, merchant.id, step)
+  // TWO READS OF THE SAME RECORD, on purpose.
+  //
+  // `decision` is what STILL STANDS, and everything that gates behaves as
+  // though a superseded approval had never been given — which is what reopens
+  // the row so the corrected design can be approved. `superseded` is the
+  // history, and this panel is the one place entitled to read it, because it is
+  // the one place that can explain what happened. Without the explanation the
+  // approval would simply vanish, and a tick that disappears on its own reads
+  // as the app losing the decision rather than withdrawing it.
+  const decision = liveDecisionAtStep(decisions, merchant.id, step)
+  const superseded = decisionAtStep(decisions, merchant.id, step)?.supersededIso
+    ? decisionAtStep(decisions, merchant.id, step)
+    : null
 
   function read(i: number): HandoffState {
-    if (list[i].party === "acquirer" && decision?.kind === "signed") {
+    /* `!hasFinding` guards the OTHER route to a false green, and it is a
+       different case from `isPast`: this one is a real, recorded approval with
+       a real timestamp, taken when the design was clean and invalidated by a
+       later edit. The supersession machinery covers an edit to the artefact the
+       approval names, but a brand rule is evaluated live against the theme, so
+       a colour change can break the design without touching that basis. Until
+       the finding clears, the row reverts to unapproved and the controls come
+       back — which is the only way the corrected design can be signed. */
+    if (list[i].party === "acquirer" && decision?.kind === "signed" && !hasFinding) {
       return { approvedIso: decision.atIso }
+    }
+    /* AND THE FIFTH ROUTE: THE STEP THE FILE IS STILL SITTING ON.
+    
+       `isPast` is `laneDone && …`, and laneDone means THIS STEP'S WORK IS
+       FINISHED — not that the file has moved beyond it. For the current step
+       those are different facts, and the acquirer's approval is precisely what
+       separates them: it is the thing that lets the file move on. So finishing
+       the agent run flipped `isPast` true and synthesised the very decision the
+       run exists to ask for. Ravenswood Deli, whose fixture says in as many
+       words "here the agent has not finished, so there is nothing yet to
+       decide", rendered a green "Approved by you · date not recorded" the
+       moment its run completed. The user had approved nothing.
+    
+       The other two parties are unaffected on purpose. A merchant reply or an
+       Ingenico return happens OUTSIDE this app, so the journey having moved on
+       is real evidence they acted, which is what `settledState` documents. The
+       acquirer's decisions are taken IN this app and written to `decisions` —
+       so for them, absence of a record is not missing history, it is the
+       absence of the act. Their branch above already returns the real recorded
+       approval, with a real timestamp. */
+    if (list[i].party === "acquirer" && step === merchant.currentStep) {
+      return states[handoffKey(merchant.id, step, i)] ?? initialState(list[i])
     }
     return (
       states[handoffKey(merchant.id, step, i)] ??
@@ -88,20 +301,60 @@ export function StepGate({
 
   // Must resolve through the same rules as `read`, or the panel shows a handoff
   // as approved while still naming it as the thing blocking the step.
-  const rawBlocking = isPast ? null : blockingIndex(step, merchant.id, states)
-  const blocking =
+  //
+  // Signing the acquirer's row clears THAT ROW, not the step. This used to
+  // collapse straight to `null`, which was safe only while the acquirer's
+  // decision was always the LAST handoff — as soon as Order was reordered to
+  // put the order desk after it, placing the order reported "Step clear" over
+  // an Ingenico confirmation nobody had asked for yet. So advance to the next
+  // unsettled row instead, and only call the step clear when none remains.
+  /* `isPast` USED TO COLLAPSE STRAIGHT TO NULL, and that is the other half of
+     the synthesised-approval bug. Withholding the fake "Approved by you" only
+     removed the green line; the header still read "Step clear" over an acquirer
+     row that was now, correctly, unapproved — so the panel stopped claiming the
+     decision had been taken and went on claiming there was nothing to take.
+     Worse, with no row marked active, the Approve control never rendered: the
+     one thing the reader needed was the one thing removed.
+  
+     So a past step no longer asserts clear by fiat — it ASKS the rows, through
+     the same `read()` every other surface here uses. For a genuinely past step
+     each row synthesises settled and the answer is still null, so history is
+     untouched. For the current step the acquirer's outstanding decision surfaces
+     as the blocking row, which is what puts the button back. */
+  const firstUnresolved = list.findIndex((h, i) => !isResolved(h, read(i)))
+  const rawBlocking = isPast
+    ? firstUnresolved === -1
+      ? null
+      : firstUnresolved
+    : blockingIndex(step, merchant.id, states)
+  const signedAcquirerRow =
     rawBlocking !== null &&
     list[rawBlocking].party === "acquirer" &&
     decision?.kind === "signed"
+  const nextAfterSigned = signedAcquirerRow
+    ? list.findIndex((h, i) => i > (rawBlocking as number) && !isResolved(h, read(i)))
+    : -1
+  const blocking = signedAcquirerRow
+    ? nextAfterSigned === -1
       ? null
-      : rawBlocking
+      : nextAfterSigned
+    : rawBlocking
 
   function write(i: number, next: HandoffState) {
     onStates((prev) => ({ ...prev, [handoffKey(merchant.id, step, i)]: next }))
   }
 
-  // Step 9 has no handoff at all — nobody is waiting on anything. Saying so
-  // is better than an empty panel, which reads as a section that failed.
+  // Step 9 passes no work to another party. Saying so is better than an empty
+  // panel, which reads as a section that failed.
+  //
+  // A HANDOFF AND A RELEASE ARE NOT THE SAME ABSENCE. A handoff is work given
+  // to someone else; a release is work still sitting with the reader. This
+  // panel used to end "there is nothing to approve and nobody to chase",
+  // which was true of the first and false of the second — and it rendered
+  // directly beneath a live "Send the notice" button. Behind a green tick, it
+  // told the reader the step wanted nothing from them while two commits were
+  // waiting. The claim is now confined to the thing this panel actually
+  // measures: who else is involved.
   if (list.length === 0) {
     return (
       <Frame>
@@ -111,7 +364,8 @@ export function StepGate({
             <p className="text-sm font-medium text-foreground">No handoff on this step</p>
             <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
               The merchant simply trades. The first live payment reconciles itself to your
-              ledger, so there is nothing to approve and nobody to chase.
+              ledger, so nobody else has anything to do here and there is nobody to chase.
+              Anything still open is yours to release, above.
             </p>
           </div>
         </div>
@@ -125,14 +379,39 @@ export function StepGate({
         <h4 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
           Handoffs
         </h4>
-        {blocking === null ? (
+        {blocking === null && !runComplete ? (
+          /* NO GREEN BEFORE THE RUN.
+          
+             `blocking === null` only says no handoff is waiting on a named
+             party — which is trivially true before the agent has run, because
+             nothing has been requested of anyone yet. Read as "Step clear" it
+             became a green all-clear on a step that had done nothing, sitting
+             one line above a rail that correctly said "waiting on the agent
+             run". The two halves of this same header disagreed.
+          
+             An absence of blockers is not a pass. Until the run has produced
+             something, the honest reading is that the question has not been
+             asked, so this states that in neutral grey and keeps green for
+             steps that have actually earned it. */
+          <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+            <Clock className="h-3 w-3" />
+            Not yet run
+          </span>
+        ) : blocking === null ? (
           <span className="inline-flex items-center gap-1 rounded-full bg-success/12 px-2 py-0.5 text-[10px] font-medium text-success">
             <CheckCircle2 className="h-3 w-3" />
             Step clear
           </span>
         ) : (
           <span className="text-[10px] text-muted-foreground">
-            {`waiting on ${PARTY_META[list[blocking].party].label.toLowerCase()}`}
+            {/* The same claim the badge was making, one level up: naming the
+                next party before the run has finished says they are sitting on
+                something, when the only outstanding thing is the run itself —
+                which is yours. Name that instead, so the rail points at the
+                one control that can actually move the step. */}
+            {runComplete
+              ? `waiting on ${PARTY_META[list[blocking].party].label.toLowerCase()}`
+              : "waiting on the agent run"}
           </span>
         )}
       </div>
@@ -153,9 +432,11 @@ export function StepGate({
                 total={list.length}
                 merchant={merchant}
                 runComplete={runComplete}
+                hasFinding={hasFinding}
                 precondition={precondition}
                 onChange={(next) => write(i, next)}
-                onApprove={() => record(merchant.id, "signed", step)}
+                superseded={superseded}
+                onApprove={() => record(merchant.id, "signed", step, basis)}
               />
             </li>
           )
@@ -178,7 +459,9 @@ function HandoffRow({
   total,
   merchant,
   runComplete,
+  hasFinding,
   precondition,
+  superseded,
   onChange,
   onApprove,
 }: {
@@ -190,12 +473,18 @@ function HandoffRow({
   total: number
   merchant: Merchant
   runComplete: boolean
+  /** Passed through to `AcquirerPanel`, which needs to tell a run that has not
+   *  happened from one that went and stopped. */
+  hasFinding: boolean
   precondition: string | null
+  /** A previous approval at this gate that no longer stands, or null. */
+  superseded: Decision | null
   onChange: (next: HandoffState) => void
   onApprove: () => void
 }) {
   const meta = PARTY_META[handoff.party]
   const { Icon } = meta
+  const badge = statusBadge(handoff, state, done, active, runComplete)
 
   return (
     <div
@@ -222,9 +511,14 @@ function HandoffRow({
               {total > 1 ? `${index + 1} of ${total} · ` : ""}
               {meta.label}
             </span>
-            {handoff.party === "acquirer" && (
-              <span className="rounded bg-primary/12 px-1.5 py-0.5 text-[10px] font-medium text-primary">
-                your decision
+            {badge && (
+              <span
+                className={cn(
+                  "rounded px-1.5 py-0.5 text-[10px] font-medium",
+                  badge.className,
+                )}
+              >
+                {badge.label}
               </span>
             )}
           </div>
@@ -239,7 +533,9 @@ function HandoffRow({
                 <AcquirerPanel
                   handoff={handoff}
                   runComplete={runComplete}
+                  hasFinding={hasFinding}
                   precondition={precondition}
+                  superseded={superseded}
                   // Writes to the shared record, not to this component's local
                   // handoff state, so the nav badge, the portfolio KPI and the
                   // sign-off queue all move with it.
@@ -277,6 +573,25 @@ function HandoffRow({
 function Settled({ handoff, state }: { handoff: Handoff; state: HandoffState }) {
   if (handoff.party === "acquirer") {
     const s = state as AcquirerDecisionState
+    /* "APPROVED BY YOU" IS AN ATTRIBUTION, AND IT NEEDS A RECORD TO STAND ON.
+    
+       `fmtDateTime` renders the `SETTLED_BEFORE_RECORD` sentinel as "date not
+       recorded", which read as a footnote about a missing timestamp. It was
+       not: no date exists because no decision was ever taken here, so the
+       sentence named a person, an act and a consent that never happened, and
+       the weakest claim on the panel wore the same green tick as the strongest.
+    
+       For a step the file has genuinely moved beyond, something did satisfy
+       this gate — the journey is the evidence — but this app cannot say it was
+       the reader. So the settlement stands and the ATTRIBUTION is withheld,
+       which is the honest half of what was being asserted. */
+    if (s.approvedIso === SETTLED_BEFORE_RECORD) {
+      return (
+        <p className="mt-1 text-xs text-muted-foreground">
+          Cleared before this file reached your queue · no approver on record
+        </p>
+      )
+    }
     return (
       <p className="mt-1 text-xs text-muted-foreground">
         {`Approved by you · ${fmtDateTime(s.approvedIso!)}`}
@@ -318,20 +633,51 @@ function Blocked({ children }: { children: React.ReactNode }) {
 function AcquirerPanel({
   handoff,
   runComplete,
+  hasFinding,
   precondition,
+  superseded,
   onApprove,
 }: {
   handoff: Extract<Handoff, { party: "acquirer" }>
   runComplete: boolean
+  /** Whether the step carries a finding — i.e. the run went and STOPPED.
+   *  Distinguishes the two ways a run can be incomplete, which this panel used
+   *  to collapse into one sentence. */
+  hasFinding: boolean
   /** A named reason the decision cannot be taken yet, or null when it can.
    *  Passed in rather than computed here: what blocks an underwriting sign-off
    *  and what blocks a branding approval are different things. */
   precondition: string | null
+  superseded: Decision | null
   onApprove: () => void
 }) {
+  /* TWO WAYS TO BE SHORT OF A COMPLETE RUN, AND THEY ASK FOR OPPOSITE THINGS.
+  
+     Both used to print "Run the agent first". On a halted step that is simply
+     false — the agent has been, which is how the finding above got there — and
+     it sends the reader to a Play button that will stop in the same place. The
+     blocker is the finding, and it is already on screen directly above, so this
+     points at it rather than restating it. */
+  if (!runComplete && hasFinding) {
+    return <Blocked>The agent run stopped at the finding above — clear that first.</Blocked>
+  }
   if (!runComplete) return <Blocked>Run the agent first — there is nothing to approve yet.</Blocked>
   return (
     <div>
+      {/* WHY THIS IS BEING ASKED AGAIN.
+          An approval that quietly disappears looks like the app losing your
+          decision. Saying when it was given, and that the design has changed
+          since, makes the reopened gate a consequence of your own edit rather
+          than a fault — and it is the only place the superseded record is
+          shown, so it does not linger anywhere as a live-looking tick. */}
+      {superseded && (
+        <p className="mb-2 flex items-start gap-1.5 rounded-lg border border-warning/30 bg-warning/[0.07] p-2.5 text-[11px] leading-relaxed text-warning-foreground">
+          <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+          <span>
+            {`You approved this on ${fmtDateTime(superseded.atIso)}. The design has been edited since, so that approval no longer covers what is on screen — it needs approving again.`}
+          </span>
+        </p>
+      )}
       <p className="rounded-lg border border-border/70 bg-background/70 p-2.5 text-xs leading-relaxed text-muted-foreground">
         {handoff.commits}
       </p>
@@ -431,17 +777,20 @@ function IngenicoPanel({
 
       {/* The acquirer does not report Ingenico's work, so this is not an
           approval — it stands in for the inbound feed this prototype has no
-          connection to, and is labelled as such rather than dressed as a
-          control the acquirer would really have. */}
-      <button
-        onClick={() =>
+          connection to.
+
+          Uses `DemoInbound` rather than its own grey dashed button. It was
+          hand-rolled here while the merchant panel below called the shared
+          component, so two controls that fabricate an inbound reply in exactly
+          the same way rendered in two different liveries — and grey dashed is
+          the app's own "empty / not yet" vocabulary, so the one control that
+          forges evidence was wearing product colours. */}
+      <DemoInbound
+        label={`Simulate inbound: ${handoff.team} responds`}
+        onTrigger={() =>
           onChange({ ...state, requestedIso: requested, returnedIso: new Date().toISOString() })
         }
-        className="inline-flex items-center gap-2 rounded-lg border border-dashed border-border bg-transparent px-3 py-1.5 text-[11px] font-medium text-muted-foreground transition-colors hover:border-foreground/30 hover:text-foreground"
-      >
-        <Inbox className="h-3.5 w-3.5" />
-        Simulate inbound: {handoff.team} responds
-      </button>
+      />
     </div>
   )
 }
@@ -466,6 +815,7 @@ function MerchantPanel({
   const [edited, setEdited] = useState<string | null>(null)
   const body = edited ?? draft.body
   const [open, setOpen] = useState(false)
+  const { supplyDocuments } = useDemo()
 
   if (!runComplete) {
     return <Blocked>The agent drafts the request to the merchant once the run finishes.</Blocked>
@@ -556,14 +906,25 @@ function MerchantPanel({
       )}
 
       {/* Inbound half of the loop: the merchant answers in the portal, and it
-          lands here without anyone re-keying it. */}
-      <button
-        onClick={() => onChange({ ...state, receivedIso: new Date().toISOString() })}
-        className="inline-flex items-center gap-2 rounded-lg border border-dashed border-border bg-transparent px-3 py-1.5 text-[11px] font-medium text-muted-foreground transition-colors hover:border-foreground/30 hover:text-foreground"
-      >
-        <Inbox className="h-3.5 w-3.5" />
-        Simulate inbound: merchant {handoff.portalAction}
-      </button>
+          lands here without anyone re-keying it.
+
+          Styled as a demo control rather than a product one. It fabricates an
+          event that never happened, and previously wore the same dashed
+          border as the interface around it — which made a conjured reply look
+          like a received one. */}
+      <DemoInbound
+        label={`Simulate inbound: merchant ${handoff.portalAction}`}
+        onTrigger={() => {
+          onChange({ ...state, receivedIso: new Date().toISOString() })
+          // The reply and its CONTENTS are the same event. Marking the handoff
+          // received without delivering the documents left the file still
+          // halted underneath a control that had just said the merchant
+          // uploaded them — the chase closed, the gap didn't.
+          if (handoff.party === "merchant" && outstandingDocuments(merchant).length > 0) {
+            supplyDocuments(merchant.id)
+          }
+        }}
+      />
     </div>
   )
 }

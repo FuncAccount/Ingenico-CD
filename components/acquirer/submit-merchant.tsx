@@ -8,6 +8,17 @@ import {
   Loader2,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import type { Merchant } from "@/lib/acquirer-data"
+import { BAND_LABEL } from "@/lib/acquirer-data"
+import { useBook } from "@/components/acquirer/book-provider"
+import {
+  MARKETS,
+  MARKET_NAMES,
+  comparablesFor,
+  recommendedKit,
+  volumeBandsFor,
+} from "@/lib/comparables"
+import { stepById } from "@/lib/acquirer-data"
 
 const SECTORS = [
   "Hospitality",
@@ -18,53 +29,50 @@ const SECTORS = [
   "Leisure",
 ]
 
-const VOLUME_BANDS = [
-  "Under €500k / yr",
-  "€500k – €2m / yr",
-  "€2m – €5m / yr",
-  "€5m – €10m / yr",
-  "Over €10m / yr",
-]
-
-function recommend(sector: string, volume: string): string | null {
-  if (!sector && !volume) return null
-  if (sector === "Hospitality")
-    return "3× A920 + softPOS — mobile-first, pay-at-table for similar hospitality merchants."
-  if (sector === "Retail")
-    return volume.includes("10m") || volume.includes("5m")
-      ? "8× Move 5000 — multi-lane countertop for high-volume retail."
-      : "4× A920 — flexible countertop and queue-busting for retail floors."
-  if (sector === "Pharmacy")
-    return "2× Desk 5000 — fixed countertop with compliant receipt handling."
-  if (sector === "Health & Fitness")
-    return "4× softPOS — phone-based tap-to-pay, no hardware to manage."
-  if (sector === "Automotive")
-    return "6× Desk 5000 — service-desk countertop with high-ticket handling."
-  if (sector === "Leisure")
-    return "3× Move 5000 + softPOS — portable across sites plus phone backup."
-  return "Recommendation forms as you add sector and volume."
-}
+/**
+ * The kit recommendation is no longer a per-sector string. It is read off the
+ * comparable merchants themselves, so the recommendation and the examples
+ * shown beneath it are the same evidence and cannot disagree.
+ */
 
 export function SubmitMerchant({
   onSubmitted,
+  onOpenMerchant,
 }: {
   onSubmitted: () => void
+  onOpenMerchant: (m: Merchant) => void
 }) {
+  const { submit } = useBook()
+  // The record this submission created. Held so the success screen can offer to
+  // open the actual file rather than only pointing at the list.
+  const [created, setCreated] = useState<Merchant | null>(null)
   const [name, setName] = useState("")
   const [sector, setSector] = useState("")
-  const [location, setLocation] = useState("")
+  const [city, setCity] = useState("")
+  // Country is a select, not free text. The comparables and the currency both
+  // key off it, and "Manchester" typed into one box cannot be matched against
+  // a book that stores "Manchester, UK".
+  const [country, setCountry] = useState("")
   const [volume, setVolume] = useState("")
   const [terminals, setTerminals] = useState("")
   const [phase, setPhase] = useState<"form" | "kickoff" | "done">("form")
 
-  const recommendation = useMemo(
-    () => recommend(sector, volume),
-    [sector, volume],
-  )
+  const bands = useMemo(() => volumeBandsFor(country || "UK"), [country])
 
-  const canSubmit = name && sector && location && volume
+  const comparables = useMemo(
+    () => comparablesFor(sector, country, volume),
+    [sector, country, volume],
+  )
+  const recommendation = recommendedKit(comparables)
+
+  const canSubmit = name && sector && city && country && volume
 
   function handleSubmit() {
+    // Write the record FIRST, then play the kickoff. The form used to do only
+    // the animation, so everything typed here was discarded and "View in
+    // portfolio" led to a book that had never heard of the merchant.
+    const merchant = submit({ name, sector, city, country, volume, terminals, recommendation })
+    setCreated(merchant)
     setPhase("kickoff")
     setTimeout(() => setPhase("done"), 1600)
   }
@@ -94,11 +102,16 @@ export function SubmitMerchant({
               <h2 className="mt-5 text-xl font-semibold text-foreground">
                 {name} submitted
               </h2>
+              {/* Names the step the file ACTUALLY lands on. Since Underwrite
+                  was split, a submission opens at KYC — and both lanes start
+                  together, which is the behaviour worth stating here rather
+                  than implying a single queue. */}
               <p className="mt-2 text-sm text-muted-foreground">
-                The agent has started underwriting automatically. Your merchant
-                is now in the portfolio at{" "}
-                <span className="font-mono font-semibold text-primary">02 Underwrite</span>{" "}
-                and will return to you for regulated sign-off.
+                The agent has started screening automatically. Your merchant is
+                now in the portfolio at{" "}
+                <span className="font-mono font-semibold text-primary">R1 KYC</span>, with
+                the build lane running alongside it, and will return to you for
+                regulated sign-off.
               </p>
               <div className="mt-6 flex flex-col justify-center gap-3 sm:flex-row">
                 <button
@@ -108,6 +121,14 @@ export function SubmitMerchant({
                   View in portfolio
                   <ArrowRight className="h-4 w-4" />
                 </button>
+                {created && (
+                  <button
+                    onClick={() => onOpenMerchant(created)}
+                    className="inline-flex items-center justify-center gap-2 rounded-lg border border-border px-4 py-2.5 text-sm font-semibold text-foreground transition-colors hover:bg-secondary"
+                  >
+                    Open the file
+                  </button>
+                )}
               </div>
             </>
           )}
@@ -156,23 +177,48 @@ export function SubmitMerchant({
               </select>
             </Field>
 
-            <Field label="Location">
+            <Field label="City">
               <input
-                value={location}
-                onChange={(e) => setLocation(e.target.value)}
-                placeholder="City, country"
+                value={city}
+                onChange={(e) => setCity(e.target.value)}
+                placeholder="e.g. Manchester"
                 className="input-base"
               />
+            </Field>
+
+            <Field label="Country">
+              <select
+                value={country}
+                onChange={(e) => {
+                  setCountry(e.target.value)
+                  // A band carries its own currency ("£2m – £5m"), so a band
+                  // picked for one market is not a valid answer in another.
+                  // Clearing it is honest; silently re-labelling the currency
+                  // under a figure the user already chose is not.
+                  setVolume("")
+                }}
+                className="input-base"
+              >
+                <option value="">Select country</option>
+                {MARKETS.map((m) => (
+                  <option key={m} value={m}>
+                    {MARKET_NAMES[m]}
+                  </option>
+                ))}
+              </select>
             </Field>
 
             <Field label="Expected card volume">
               <select
                 value={volume}
                 onChange={(e) => setVolume(e.target.value)}
-                className="input-base"
+                disabled={!country}
+                className="input-base disabled:cursor-not-allowed disabled:opacity-50"
               >
-                <option value="">Select band</option>
-                {VOLUME_BANDS.map((v) => (
+                <option value="">
+                  {country ? "Select band" : "Pick a country first"}
+                </option>
+                {bands.map((v) => (
                   <option key={v} value={v}>
                     {v}
                   </option>
@@ -220,8 +266,11 @@ export function SubmitMerchant({
               <span className="text-sm font-semibold text-foreground">
                 Ingenico agent
               </span>
+              {/* Read off the pipeline, not typed. As a literal this was a
+                  second place the step's label lived, free to disagree with
+                  the rail after the lanes were renumbered. */}
               <span className="mt-0.5 text-[11px] font-medium text-primary">
-                Step 01 · Augment
+                {stepById(1).code} {stepById(1).name} · {BAND_LABEL[stepById(1).band]}
               </span>
             </div>
           </div>
@@ -232,12 +281,54 @@ export function SubmitMerchant({
                 <p className="text-xs font-medium text-primary">
                   Recommended kit
                 </p>
-                <p className="mt-1 text-sm text-foreground">{recommendation}</p>
+                <p className="mt-1 text-sm font-medium text-foreground">
+                  {recommendation}
+                </p>
+
+                {/* The evidence, named. The panel used to claim it drew on
+                    "similar merchants in your book" without showing which —
+                    which is how Spanish and Italian comparables ended up
+                    behind a recommendation for a Manchester merchant. */}
+                <p className="mt-3 text-[11px] font-medium text-muted-foreground">
+                  {comparables.foreign
+                    ? `No ${MARKET_NAMES[country as keyof typeof MARKET_NAMES] ?? country} ${sector.toLowerCase()} merchants in your book — nearest comparable${comparables.matches.length > 1 ? "s" : ""}:`
+                    : `Based on ${comparables.matches.length} ${MARKET_NAMES[country as keyof typeof MARKET_NAMES] ?? country} merchant${comparables.matches.length > 1 ? "s" : ""} in your book:`}
+                </p>
+
+                <ul className="mt-1.5 space-y-1.5">
+                  {comparables.matches.map((m) => (
+                    <li
+                      key={m.id}
+                      className="flex items-baseline justify-between gap-3 text-[11px]"
+                    >
+                      <span className="text-foreground">{m.name}</span>
+                      <span
+                        className={cn(
+                          "shrink-0 font-mono",
+                          comparables.foreign
+                            ? "text-warning"
+                            : "text-muted-foreground",
+                        )}
+                      >
+                        {m.location} · {m.size}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+
+                {comparables.foreign && (
+                  <p className="mt-2.5 rounded border border-warning/30 bg-warning/[0.07] px-2 py-1.5 text-[11px] leading-relaxed text-foreground">
+                    Different market — interchange, scheme mix and the terminal
+                    estate all differ. Treat this as a starting point, not a
+                    like-for-like.
+                  </p>
+                )}
               </div>
             ) : (
               <p className="text-sm text-muted-foreground">
-                Pick a sector and volume and I&apos;ll recommend terminals from
-                similar merchants in your book.
+                {sector && country
+                  ? `No ${sector.toLowerCase()} merchants in your book yet, here or anywhere — I have nothing to compare against, so pick the kit yourself.`
+                  : "Pick a sector and country and I'll recommend terminals from comparable merchants in that market."}
               </p>
             )}
 

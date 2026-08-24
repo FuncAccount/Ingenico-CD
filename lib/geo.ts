@@ -44,12 +44,59 @@ export const CITY_COORDS: Record<string, [number, number]> = {
   "Stockholm, SE": [18.07, 59.33],
   "Tartu, EE": [26.72, 58.38],
   "Prague, CZ": [14.42, 50.09],
+  // Added with the live book (lib/book.ts). Same story as the block above —
+  // the throw is what surfaced each missing one.
+  "Bremen, DE": [8.8, 53.08],
+  "Hanover, DE": [9.73, 52.37],
+  "Karlsruhe, DE": [8.4, 49.01],
+  "Munich, DE": [11.58, 48.14],
+  "Marbella, ES": [-4.89, 36.51],
+  "Seville, ES": [-5.98, 37.39],
+  "Alicante, ES": [-0.48, 38.35],
+  "Cork, IE": [-8.47, 51.9],
+  "Limerick, IE": [-8.62, 52.66],
+  "Turin, IT": [7.69, 45.07],
+  "Bologna, IT": [11.34, 44.49],
+  "Braga, PT": [-8.43, 41.55],
+  "Utrecht, NL": [5.12, 52.09],
+  "Toulon, FR": [5.93, 43.12],
+  "Salzburg, AT": [13.06, 47.81],
+  "Graz, AT": [15.44, 47.07],
+  "Trondheim, NO": [10.4, 63.43],
+  "Stavanger, NO": [5.73, 58.97],
+  "Glasgow, UK": [-4.25, 55.86],
 }
 
 export function coordsFor(city: string): [number, number] {
   const c = CITY_COORDS[city]
   if (!c) throw new Error(`geo: no coordinates for "${city}". Add it to CITY_COORDS.`)
   return c
+}
+
+/** The country suffix a location carries ("Manchester, UK" → "UK"). */
+export function countryOf(location: string): string {
+  const parts = location.split(",")
+  return (parts[parts.length - 1] ?? "").trim()
+}
+
+/**
+ * Great-circle distance in km between two cities.
+ *
+ * Used to rank look-alike merchants. Matching on sector alone put Spanish and
+ * Italian merchants at the top of the comparison set for a Manchester
+ * applicant, which is not a look-alike in any sense an underwriter would
+ * accept — acquiring economics, scheme mix and regulator all track geography.
+ */
+export function distanceKm(from: string, to: string): number {
+  const [lon1, lat1] = coordsFor(from)
+  const [lon2, lat2] = coordsFor(to)
+  const R = 6371
+  const rad = (d: number) => (d * Math.PI) / 180
+  const dLat = rad(lat2 - lat1)
+  const dLon = rad(lon2 - lon1)
+  const a =
+    Math.sin(dLat / 2) ** 2 + Math.cos(rad(lat1)) * Math.cos(rad(lat2)) * Math.sin(dLon / 2) ** 2
+  return Math.round(2 * R * Math.asin(Math.sqrt(a)))
 }
 
 /**

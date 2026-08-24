@@ -3,7 +3,13 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { ArrowRight, CornerDownLeft, Search, Sparkles, X } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { MERCHANTS, PIPELINE, portfolioKpis } from "@/lib/acquirer-data"
+import { PIPELINE, portfolioKpis } from "@/lib/acquirer-data"
+import { applyDecisions } from "@/lib/decisions"
+import { haltedByMerchant } from "@/lib/artifacts"
+import { useBrandTheme } from "@/components/acquirer/brand-theme-provider"
+import { useDecisions } from "@/components/acquirer/decisions-provider"
+import { useBook } from "@/components/acquirer/book-provider"
+import { useProgress } from "@/components/acquirer/progress-provider"
 import type { Screen } from "@/components/acquirer/top-nav"
 
 interface Answer {
@@ -36,11 +42,32 @@ export function AgentBar({ onNavigate }: { onNavigate: (s: Screen) => void }) {
   const inputRef = useRef<HTMLInputElement>(null)
   const reduced = usePrefersReducedMotion()
 
+  const { merchants: book } = useBook()
+  const { decisions } = useDecisions()
+  const { themeFor } = useBrandTheme()
+  const { playedFor } = useProgress()
+
+  /* The same halt map the portfolio derives its badges from — and, now, the
+     same played set. Omitting either makes `stuck` count a different population
+     from the table it is summarising: without the halts it sees only merchants
+     a fixture happens to LABEL "Exception", and without the played set it
+     counts findings on steps the agent has never run. Either way the docblock's
+     promise breaks by the exact mechanism it warns about. */
+  const halted = useMemo(
+    () => haltedByMerchant(book, themeFor, (m) => playedFor(m.id)),
+    [book, themeFor, playedFor],
+  )
+
   const answers = useMemo<Answer[]>(() => {
-    const k = portfolioKpis(MERCHANTS)
-    const waiting = MERCHANTS.filter((m) => m.status === "Needs sign-off")
-    const stuck = MERCHANTS.filter((m) => m.status === "Exception")
-    const nearLive = MERCHANTS.filter(
+    // The LIVE book, with decisions applied. The docblock above promises these
+    // figures cannot disagree with the table they came from, but the source was
+    // the frozen fixture — so the agent went on naming merchants you had
+    // already signed off, and had never heard of one you had just submitted.
+    const merchants = applyDecisions(book, decisions, halted)
+    const k = portfolioKpis(merchants)
+    const waiting = merchants.filter((m) => m.status === "Needs sign-off")
+    const stuck = merchants.filter((m) => m.status === "Exception")
+    const nearLive = merchants.filter(
       (m) => m.currentStep >= 7 && m.status !== "Live",
     )
     // One field, two complementary sides, so these always sum to PIPELINE.length.
@@ -50,7 +77,7 @@ export function AgentBar({ onNavigate }: { onNavigate: (s: Screen) => void }) {
     return [
       {
         q: "What needs me today?",
-        trace: `queue.scan → ${MERCHANTS.length} merchants, ${waiting.length} awaiting you`,
+        trace: `queue.scan → ${merchants.length} merchants, ${waiting.length} awaiting you`,
         body: waiting.length
           ? `${waiting.length} decisions are waiting on your signature: ${waiting
               .map((m) => m.name)
@@ -60,7 +87,7 @@ export function AgentBar({ onNavigate }: { onNavigate: (s: Screen) => void }) {
       },
       {
         q: "Where is my book stuck?",
-        trace: `exception.detect → ${stuck.length} blocked of ${MERCHANTS.length}`,
+        trace: `exception.detect → ${stuck.length} blocked of ${merchants.length}`,
         body: stuck.length
           ? `${stuck.map((m) => `${m.name} is held at step ${String(m.currentStep).padStart(2, "0")}`).join(", ")}. I have retried automatically and escalated what I could not clear on my own.`
           : "Nothing is blocked right now. Every merchant is moving through the pipeline on schedule.",
@@ -81,7 +108,16 @@ export function AgentBar({ onNavigate }: { onNavigate: (s: Screen) => void }) {
         cta: { label: "See the pipeline", screen: "journey" },
       },
     ]
-  }, [])
+    // An empty dep array here would have re-frozen everything one layer down:
+    // the answers would be computed once at mount and go on quoting the book as
+    // it was when the page loaded, which is the same defect in a new place.
+    //
+    // `halted` belongs here for the same reason. It is an input to
+    // `applyDecisions` above, so leaving it out means "Where is my book stuck?"
+    // keeps answering from the halt map as it stood at mount — and now that
+    // halts depend on which runs have been PLAYED, that set changes while the
+    // palette is open. The answer would go stale the moment you ran an agent.
+  }, [book, decisions, halted])
 
   // ⌘K / Ctrl+K to summon, Esc to dismiss.
   useEffect(() => {

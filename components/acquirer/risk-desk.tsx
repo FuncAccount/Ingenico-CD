@@ -8,6 +8,7 @@
 // paragraph of text.
 
 import { AlertTriangle, Minus, Plus } from "lucide-react"
+import { DemoSupplyDocuments } from "@/components/acquirer/demo-control"
 import { cn } from "@/lib/utils"
 import type { Merchant } from "@/lib/acquirer-data"
 import {
@@ -17,6 +18,7 @@ import {
   riskAssessment,
   type EdgeResolution,
   type EdgeVerdict,
+  outstandingDocuments,
 } from "@/lib/underwriting"
 
 function bandTone(band: string) {
@@ -30,6 +32,54 @@ function bandTone(band: string) {
 /** The score, decomposed. Rows sum to the total by construction. */
 export function RiskBreakdown({ merchant }: { merchant: Merchant }) {
   const a = riskAssessment(merchant)
+
+  // The stop. Rendered INSTEAD of the score, never above it — a withheld
+  // verdict shown next to a number is still a number on the screen, and the
+  // number is what a reader carries away.
+  if (a.blocked) {
+    return (
+      <div className="space-y-3">
+        <div className="rounded-xl border-2 border-destructive/40 bg-destructive/[0.07] px-4 py-3.5">
+          <p className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-wide text-destructive">
+            <AlertTriangle className="h-3.5 w-3.5" />
+            Cannot be scored
+          </p>
+          <p className="mt-1.5 font-mono text-3xl font-bold tabular-nums text-muted-foreground/50">
+            —<span className="text-base font-normal"> / 100</span>
+          </p>
+          <p className="mt-1.5 text-xs leading-relaxed text-foreground">{a.blocked.reason}</p>
+        </div>
+
+        <div className="overflow-hidden rounded-xl border border-border/70 bg-white/60">
+          <p className="border-b border-border/60 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            Outstanding · {a.blocked.missing.length}
+          </p>
+          {a.blocked.missing.map((d, i) => (
+            <p
+              key={d}
+              className={cn(
+                "flex items-start gap-2 px-3 py-2.5 text-xs text-foreground",
+                i > 0 && "border-t border-border/60",
+              )}
+            >
+              <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-destructive" />
+              {d}
+            </p>
+          ))}
+        </div>
+
+        <p className="text-[11px] leading-relaxed text-muted-foreground">
+          The checks that did run are recorded against{" "}
+          <span className="font-medium text-foreground">Parse the documents</span>. They are not
+          combined into a score here, because a total assembled from a partial file would read as a
+          measurement of the whole one.
+        </p>
+
+        <DemoSupplyDocuments merchant={merchant} />
+      </div>
+    )
+  }
+
   const openFactors = a.factors.filter((f) => f.open)
   const openCount = openFactors.length
   const openPoints = openFactors.reduce((s, f) => s + f.points, 0)
@@ -140,6 +190,11 @@ export function RiskBreakdown({ merchant }: { merchant: Merchant }) {
           </p>
         )}
       </div>
+
+      {/* Present here too. A score reached via the simulation must keep saying
+          so, and the presenter needs a way back to the stop — without this the
+          lever is one-way and the walkthrough cannot be run twice. */}
+      <DemoSupplyDocuments merchant={merchant} />
     </div>
   )
 }
@@ -180,6 +235,9 @@ export function EdgeCaseDesk({
     )
   }
 
+  // Same source as the risk panel's refusal, so the two cannot disagree about
+  // whether this file is decidable.
+  const blocked = outstandingDocuments(merchant).length > 0
   const chosen = resolution?.verdict
   const spec = EDGE_VERDICTS.find((v) => v.id === chosen)
   const needsNote = spec?.needsNote ?? false
@@ -199,6 +257,35 @@ export function EdgeCaseDesk({
         </div>
       </div>
 
+      {/* The determination is withheld, not merely disabled-looking, while the
+          file cannot be scored. This edge case IS the missing document: the
+          ownership chain is unknown precisely because the corporate holder's
+          statement never arrived, so every verdict here would be a ruling on
+          evidence nobody has seen. Leaving the three buttons live let an
+          acquirer "Accept as-is" an unknown beneficial owner — and resolving
+          it that way then satisfied the sign-off gate downstream. */}
+      {blocked ? (
+        <div className="rounded-xl border-2 border-destructive/40 bg-destructive/[0.07] px-3.5 py-3">
+          <p className="text-[11px] font-bold uppercase tracking-wide text-destructive">
+            Determination unavailable
+          </p>
+          <p className="mt-1.5 text-xs leading-relaxed text-foreground">
+            You cannot rule on this until the outstanding document arrives — it is the evidence the
+            question turns on. The agent is chasing it.
+          </p>
+          <ul className="mt-2 space-y-1">
+            {EDGE_VERDICTS.map((v) => (
+              <li
+                key={v.id}
+                className="flex items-center gap-2 text-[11px] text-muted-foreground line-through decoration-muted-foreground/50"
+              >
+                <span className="h-3.5 w-3.5 shrink-0 rounded-full border-2 border-border/60" />
+                {v.label}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : (
       <div>
         <p className="mb-1.5 text-[11px] font-medium text-foreground">Your determination</p>
         <div className="space-y-1.5">
@@ -230,8 +317,9 @@ export function EdgeCaseDesk({
           ))}
         </div>
       </div>
+      )}
 
-      {needsNote && (
+      {!blocked && needsNote && (
         <div>
           <label htmlFor="edge-note" className="mb-1.5 block text-[11px] font-medium text-foreground">
             {chosen === "condition" ? "The condition" : "Why you are referring it"}

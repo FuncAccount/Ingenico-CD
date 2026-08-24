@@ -1,14 +1,19 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { TopNav } from "@/components/acquirer/top-nav"
 import { PortfolioOverview } from "@/components/acquirer/portfolio-overview"
 import { SubmitMerchant } from "@/components/acquirer/submit-merchant"
 import { SignOff } from "@/components/acquirer/sign-off"
 import { MerchantJourney } from "@/components/acquirer/merchant-journey"
-import { MERCHANTS, type Merchant } from "@/lib/acquirer-data"
+import { type Merchant } from "@/lib/acquirer-data"
+import { BookProvider, useBook } from "@/components/acquirer/book-provider"
 import { applyDecisions, awaitingSignOff } from "@/lib/decisions"
 import { DecisionsProvider, useDecisions } from "@/components/acquirer/decisions-provider"
+import { ProgressProvider, useProgress } from "@/components/acquirer/progress-provider"
+import { BrandThemeProvider, useBrandTheme } from "@/components/acquirer/brand-theme-provider"
+import { haltedByMerchant } from "@/lib/artifacts"
+import { DemoProvider } from "@/components/acquirer/demo-provider"
 import { Dashboard } from "@/components/ingenico/dashboard"
 import { Deployments } from "@/components/ingenico/deployments"
 import { Estate } from "@/components/ingenico/estate"
@@ -17,11 +22,34 @@ import { estateRows, ALL_JOURNEYS, acquirerOf, laneOf } from "@/lib/estate"
 import { fleetDevices } from "@/lib/devices"
 import type { Persona } from "@/lib/persona"
 import type { AcquirerScreen, IngenicoScreen, AnyScreen } from "@/lib/nav"
+import { isAcquirerScreen, isIngenicoScreen } from "@/lib/nav"
+
+/* sessionStorage, not localStorage: the position should survive a reload of
+   THIS tab, not follow you into a new one opened days later. */
+const POSITION_KEY = "ingenico-acquirer:position"
 
 export default function Page() {
   return (
     <DecisionsProvider>
-      <PlatformApp />
+      {/* Outermost of the state providers: the book is what the others annotate.
+          Holds the writable merchant list (so a submission has somewhere to go)
+          and the order per merchant (so editing the kit survives the navigation
+          to sign-off, which unmounts the journey). */}
+      <BookProvider>
+      {/* Above the screen switch below, so completing a step survives the
+          navigation to the screen that completes it — see ProgressProvider. */}
+      <ProgressProvider>
+        {/* Same reason, for the brand design: the cockpit and the sign-off
+            screen are two screens in the switch below, and while the design
+            lived in the cockpit, "Approve branding" over on the sign-off screen
+            was committing a decision about a design it had never seen. */}
+        <BrandThemeProvider>
+          <DemoProvider>
+            <PlatformApp />
+          </DemoProvider>
+        </BrandThemeProvider>
+      </ProgressProvider>
+      </BookProvider>
     </DecisionsProvider>
   )
 }
@@ -35,14 +63,76 @@ function PlatformApp() {
   const [ingScreen, setIngScreen] = useState<IngenicoScreen>("dashboard")
 
   const [selected, setSelected] = useState<Merchant | undefined>(undefined)
+
+  /* WHERE YOU WERE SURVIVES A RELOAD.
+  
+     Every screen here is in-memory, so ANY full document load — a crash, the
+     dev server rebuilding, a tab discarded and restored, a preview refresh —
+     silently returned to the portfolio. That is what "it goes back to the main
+     page after a few minutes" looked like from outside, and while the render
+     loop that caused the crashes is fixed in book-provider, the position was
+     one reload away from being lost for reasons this app does not control.
+  
+     Deliberately NOT restored: the open merchant, the sign-off focus, and the
+     order drafts. Those are working state, and quietly reinstating a specific
+     file — or an edited basket — around a stale record is a stronger claim than
+     this can support. Returning to the right SCREEN is the modest version, and
+     the journey already falls back sensibly when it opens with nothing chosen.
+  
+     Read in an effect, not in a `useState` initialiser: this component renders
+     on the server too, where `sessionStorage` does not exist, and seeding state
+     from it directly would make the first client render disagree with the
+     server's and trip hydration. */
+  const [restored, setRestored] = useState(false)
+
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem(POSITION_KEY)
+      if (raw) {
+        const saved = JSON.parse(raw) as unknown
+        if (saved && typeof saved === "object") {
+          const { persona: p, acq, ing } = saved as Record<string, unknown>
+          if (p === "acquirer" || p === "ingenico") setPersona(p)
+          // Validated against this build's own nav, so a screen renamed since
+          // the value was written falls back rather than rendering nothing.
+          if (isAcquirerScreen(acq)) setAcqScreen(acq)
+          if (isIngenicoScreen(ing)) setIngScreen(ing)
+        }
+      }
+    } catch {
+      // A malformed or blocked store is not worth failing a page load over —
+      // the defaults above are already a correct place to start.
+    }
+    setRestored(true)
+  }, [])
+
+  useEffect(() => {
+    // Only after the read, or the first render would overwrite the saved
+    // position with the defaults before it had been consulted.
+    if (!restored) return
+    try {
+      sessionStorage.setItem(
+        POSITION_KEY,
+        JSON.stringify({ persona, acq: acqScreen, ing: ingScreen }),
+      )
+    } catch {
+      // Private modes and storage limits: losing the position is acceptable,
+      // breaking navigation is not.
+    }
+  }, [restored, persona, acqScreen, ingScreen])
+
   // The open order. Not a screen — a journey is what an order opens into, so
   // this rides ON TOP of the deployments screen rather than beside it.
   const [openOrder, setOpenOrder] = useState<Merchant | undefined>(undefined)
   const [signoffFocus, setSignoffFocus] = useState<string | undefined>(undefined)
 
   const { decisions } = useDecisions()
+  const { merchants } = useBook()
 
-  const signoffCount = useMemo(() => awaitingSignOff(MERCHANTS, decisions), [decisions])
+  const signoffCount = useMemo(
+    () => awaitingSignOff(merchants, decisions),
+    [merchants, decisions],
+  )
 
   // Badges derive from the same records their screens render, so a tab can
   // never advertise a number the page underneath disagrees with.
@@ -58,7 +148,22 @@ function PlatformApp() {
     [],
   )
 
-  const live = useMemo(() => applyDecisions(MERCHANTS, decisions), [decisions])
+  /* Halts feed the status here too. This list is what gets handed to the
+     journey, so without it a file could arrive at its own cockpit labelled
+     "On track" while the rail beneath the label drew the halt. */
+  const { themeFor } = useBrandTheme()
+  /* `playedFor` travels with `themeFor`, for the same reason: a brand finding
+     needs both the live theme it is measured against AND the fact that the
+     agent ran. Without the second, the rules convict a step nobody has played. */
+  const { playedFor } = useProgress()
+  const halted = useMemo(
+    () => haltedByMerchant(merchants, themeFor, (m) => playedFor(m.id)),
+    [merchants, themeFor, playedFor],
+  )
+  const live = useMemo(
+    () => applyDecisions(merchants, decisions, halted),
+    [merchants, decisions, halted],
+  )
   const selectedLive = selected ? live.find((m) => m.id === selected.id) : undefined
 
   function navigate(s: AnyScreen) {
@@ -101,10 +206,25 @@ function PlatformApp() {
                 setSignoffFocus(m.id)
                 setAcqScreen("signoff")
               }}
+              // No focus id — the tile counts the queue, it does not name a
+              // merchant, so opening it must not pick one on your behalf.
+              onOpenQueue={() => {
+                setSignoffFocus(undefined)
+                setAcqScreen("signoff")
+              }}
             />
           )}
           {acqScreen === "submit" && (
-            <SubmitMerchant onSubmitted={() => setAcqScreen("portfolio")} />
+            <SubmitMerchant
+              // The form owns the fields; the book owns the record. Passing the
+              // created merchant back means "View in portfolio" can land on a
+              // book that already contains it, rather than on the old one.
+              onSubmitted={() => setAcqScreen("portfolio")}
+              onOpenMerchant={(m) => {
+                setSelected(m)
+                setAcqScreen("journey")
+              }}
+            />
           )}
           {acqScreen === "signoff" && (
             <SignOff focusId={signoffFocus} onBackToPortfolio={() => setAcqScreen("portfolio")} />

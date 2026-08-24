@@ -13,14 +13,18 @@
 // cannot disagree about who owes what.
 
 import {
+  laneState,
+  NO_HALTS,
+  NO_SESSION_PROGRESS,
   MERCHANTS,
   PIPELINE,
   stepById,
   type Merchant,
   type StepId,
 } from "./acquirer-data"
-import { ownerOf, statusPossibleAt, STEP_HANDOFFS, type Party } from "./handoffs"
-import { applyDecisions, decisionAtStep, type Decisions } from "./decisions"
+import { handoffsFor, ownerOf, statusPossibleAt, STEP_HANDOFFS, type Party } from "./handoffs"
+import { physicalUnits } from "./artifacts"
+import { applyDecisions, liveDecisionAtStep, type Decisions } from "./decisions"
 
 // ---------------------------------------------------------------------------
 // Scope
@@ -45,6 +49,8 @@ const OTHER_BOOKS: Merchant[] = [
     size: "€1.8m / yr",
     terminals: "2× A920",
     terminalCount: 2,
+    riskLane: { verdict: "cleared" },
+    brandingApprovedAgainst: "#4A4A4A",
     currentStep: 6,
     status: "On track",
     submitted: "5 days ago",
@@ -61,6 +67,8 @@ const OTHER_BOOKS: Merchant[] = [
     size: "kr 9.2m / yr",
     terminals: "4× A920 + softPOS",
     terminalCount: 5,
+    riskLane: { verdict: "cleared" },
+    brandingApprovedAgainst: "#4A4A4A",
     currentStep: 5,
     status: "On track",
     submitted: "4 days ago",
@@ -77,6 +85,8 @@ const OTHER_BOOKS: Merchant[] = [
     size: "€890k / yr",
     terminals: "2× A920",
     terminalCount: 2,
+    riskLane: { verdict: "cleared" },
+    brandingApprovedAgainst: "#4A4A4A",
     currentStep: 7,
     status: "On track",
     submitted: "11 days ago",
@@ -93,6 +103,10 @@ const OTHER_BOOKS: Merchant[] = [
     size: "€3.3m / yr",
     terminals: "8× A920",
     terminalCount: 8,
+    // Its own events say identity is verified and documents are parsed, so the
+    // lane is past KYC and sitting on the credit decision.
+    riskLane: { verdict: "in-flight", at: 2 },
+    brandingApprovedAgainst: null,
     currentStep: 2,
     status: "Needs sign-off",
     submitted: "1 day ago",
@@ -109,6 +123,8 @@ const OTHER_BOOKS: Merchant[] = [
     size: "£1.2m / yr",
     terminals: "3× A920",
     terminalCount: 3,
+    riskLane: { verdict: "cleared" },
+    brandingApprovedAgainst: "#4A4A4A",
     currentStep: 8,
     status: "On track",
     submitted: "14 days ago",
@@ -135,6 +151,9 @@ const OTHER_BOOKS: Merchant[] = [
     size: "kr 6.4m / yr",
     terminals: "3× A920",
     terminalCount: 3,
+    // Intake only 8 hours ago, so the risk lane has barely opened.
+    riskLane: { verdict: "in-flight", at: 10 },
+    brandingApprovedAgainst: null,
     currentStep: 1,
     status: "On track",
     submitted: "8 hours ago",
@@ -155,6 +174,8 @@ const OTHER_BOOKS: Merchant[] = [
     size: "€2.9m / yr",
     terminals: "5× A920 + 3× Move 5000",
     terminalCount: 8,
+    riskLane: { verdict: "cleared" },
+    brandingApprovedAgainst: null,
     currentStep: 3,
     status: "On track",
     submitted: "4 days ago",
@@ -174,6 +195,8 @@ const OTHER_BOOKS: Merchant[] = [
     size: "€740k / yr",
     terminals: "2× Desk 5000",
     terminalCount: 2,
+    riskLane: { verdict: "cleared" },
+    brandingApprovedAgainst: "#4A4A4A",
     currentStep: 5,
     status: "Exception",
     submitted: "9 days ago",
@@ -192,6 +215,8 @@ const OTHER_BOOKS: Merchant[] = [
     size: "€520k / yr",
     terminals: "1× A920",
     terminalCount: 1,
+    riskLane: { verdict: "cleared" },
+    brandingApprovedAgainst: "#4A4A4A",
     currentStep: 8,
     status: "With merchant",
     submitted: "21 days ago",
@@ -209,8 +234,10 @@ const OTHER_BOOKS: Merchant[] = [
     sector: "Hospitality",
     location: "Prague, CZ",
     size: "Kč 18m / yr",
-    terminals: "4× A920",
+    terminals: "4�� A920",
     terminalCount: 4,
+    riskLane: { verdict: "cleared" },
+    brandingApprovedAgainst: "#4A4A4A",
     currentStep: 9,
     status: "Live",
     submitted: "27 days ago",
@@ -291,7 +318,11 @@ export function acquirerOf(m: Merchant): string {
 export type IngenicoRole = "inbound" | "owned" | "field"
 
 export function ingenicoRole(step: StepId): IngenicoRole {
-  if (step === 1 || step === 2 || step === 4) return "inbound"
+  // 10 KYC and 11 Pricing joined the risk lane when Underwrite (2) was split.
+  // Both are decided in the acquirer's own systems, so they are inbound for the
+  // same reason 2 always was — omitting them would have filed two acquirer
+  // decisions under Ingenico's own work and put a service level on them.
+  if (step === 1 || step === 2 || step === 4 || step === 10 || step === 11) return "inbound"
   if (step === 8) return "field"
   return "owned"
 }
@@ -374,7 +405,10 @@ export function waitingParty(m: Merchant, decisions: Decisions): Party | null {
   // through to `ownerOf`, which reports the acquirer as the owner of a
   // decision they have already taken, and the lane never empties. This is the
   // same stale-claim bug as the sign-off badge, one layer down.
-  if (decisionAtStep(decisions, m.id, m.currentStep)?.kind === "signed") return null
+  // Read live: a superseded approval hands the step BACK to the acquirer, so
+  // reading the raw record here would drop the merchant out of the lane on the
+  // strength of a decision that no longer stands.
+  if (liveDecisionAtStep(decisions, m.id, m.currentStep)?.kind === "signed") return null
 
   return ownerOf(m.currentStep)
 }
@@ -393,7 +427,9 @@ function askFor(m: Merchant, party: Party | null): string {
       ? "Live and reconciled. Nothing outstanding."
       : "Signed off. The agent is progressing to the next step."
   }
-  const h = STEP_HANDOFFS[m.currentStep].find((x) => x.party === party)
+  // Order-aware, so Ingenico's own lane does not read "Logistics packs the
+  // estate" for a merchant whose entire order is a softPOS licence.
+  const h = handoffsFor(m.currentStep, physicalUnits(m).length === 0).find((x) => x.party === party)
   return h?.ask ?? stepById(m.currentStep).blurb
 }
 
@@ -475,10 +511,26 @@ export function automationCensus(rows: EstateRow[]): AutomationCensus {
   let stepsCleared = 0
   let unattended = 0
   for (const r of rows) {
-    // Steps strictly before the current one are done. The current step is
-    // still in flight, so counting it would credit work not yet finished.
     for (const step of PIPELINE) {
-      if (step.id >= r.merchant.currentStep) continue
+      // Asks the step's OWN lane whether it is finished. The old
+      // `step.id >= currentStep` test read every step off the build position,
+      // which since the split would never credit KYC or Pricing at all (ids 10
+      // and 11 sit above every currentStep) while still crediting Underwriting
+      // whenever the kit had moved on — undercounting one lane and overclaiming
+      // the other. Only "done" counts; an in-flight step is not cleared work.
+      // NO_SESSION_PROGRESS explicitly: this is a census of the whole book, so
+      // there is no one journey whose in-session progress it could consult.
+      // NO_HALTS for the same reason, one field along: the brand rule is
+      // measured against a theme held in session, and a census of every book
+      // has no session to measure. The alternative is not a better number here
+      // but a fabricated one.
+      // `NO_HALTS` twice: this rollup can evaluate neither findings nor
+      // unresolved checks, so it has nothing to say about either question.
+      if (
+        laneState(r.merchant, step, NO_SESSION_PROGRESS, NO_HALTS, NO_SESSION_PROGRESS) !==
+        "done"
+      )
+        continue
       stepsCleared += 1
       if (step.band === "Automate") unattended += 1
     }

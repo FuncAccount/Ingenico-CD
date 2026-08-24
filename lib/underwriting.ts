@@ -8,7 +8,7 @@
 // So the score here is the SUM of the factors shown. It cannot disagree with
 // its own breakdown, because it is computed from it.
 
-import type { Merchant } from "@/lib/acquirer-data"
+import { PIPELINE, type Merchant } from "@/lib/acquirer-data"
 
 /** A merchant past underwriting has, by definition, had its KYC completed —
  *  the fixture just doesn't carry the detail for merchants seeded mid-journey.
@@ -16,16 +16,55 @@ import type { Merchant } from "@/lib/acquirer-data"
  *  put ten merchants in Medium for want of data rather than for cause, while
  *  their own timelines said "Underwriting signed off". Read the completion from
  *  the journey position, so the two can never disagree. */
-const UNDERWRITING_STEP = 2
+export const UNDERWRITING_STEP = 2
+
+/**
+ * Index of the task that actually refuses when documents are missing.
+ *
+ * Derived from the task's own label rather than written as `3`. A literal
+ * would keep pointing at position 3 if the task list were ever reordered,
+ * putting the halt marker on whichever task happened to move into that slot —
+ * a stop rendered against the wrong row is worse than no stop, because it
+ * accuses a check that passed. Falls back to -1, which matches no row, so a
+ * rename shows nothing rather than mislabelling something.
+ */
+export const SCORE_THE_RISK_TASK: number =
+  PIPELINE.find((s) => s.id === UNDERWRITING_STEP)?.tasks.findIndex((t) =>
+    /score the risk/i.test(t.label),
+  ) ?? -1
+
+export const CAPTURE_STEP = 1
+
+/**
+ * Index of capture's document pass — the task that assembles the bundle and is
+ * therefore the one that comes up short when the required set is incomplete.
+ *
+ * Derived from the label for the same reason as `SCORE_THE_RISK_TASK` above,
+ * and this step has just been reorganised once (five document tasks collapsed
+ * into one), which is exactly the edit a literal index would have survived
+ * while silently pointing at the registry lookup.
+ */
+export const DOCUMENT_PASS_TASK: number =
+  PIPELINE.find((s) => s.id === CAPTURE_STEP)?.tasks.findIndex((t) =>
+    /document bundle/i.test(t.label),
+  ) ?? -1
 
 function pastUnderwriting(merchant: Merchant): boolean {
-  return merchant.currentStep > UNDERWRITING_STEP
+  // Reads the RISK LANE, not the build position. `currentStep > 2` was sound
+  // while the pipeline was a single file, but the lanes now run in parallel:
+  // a merchant can be at Configure with underwriting still open, and that test
+  // would have called the file approved because the KIT had moved on. The lane
+  // is the only thing that carries this verdict.
+  return merchant.riskLane.verdict === "cleared"
 }
 
 /** The score actually recorded for this merchant — from the underwriting block
  *  where it exists, otherwise from the sign-off line in its own timeline. Read
  *  rather than re-derived, so the breakdown and the timeline cannot disagree. */
 export function recordedScore(merchant: Merchant): number | null {
+  // An unscoreable file has no recorded score, and must not acquire one by
+  // regex from a timeline entry written before the gap was found.
+  if ((merchant.underwriting?.documentsOutstanding?.length ?? 0) > 0) return null
   if (typeof merchant.underwriting?.riskScore === "number") return merchant.underwriting.riskScore
   for (const e of merchant.events) {
     const m = /risk score\s+(\d+)/i.exec(e.text)
@@ -77,6 +116,32 @@ const SECTOR_BASE: Record<string, { points: number; why: string }> = {
   },
   Leisure: { points: 15, why: "Deposits taken well ahead of delivery" },
   Automotive: { points: 14, why: "High average ticket concentrates loss on any single dispute" },
+  // Healthcare and Transport are both live in the book and were both missing
+  // here, so every one of those merchants was silently scored on the "no sector
+  // baseline on file" default. A default is the right behaviour for a trade
+  // nobody has assessed; it is the wrong behaviour for two we carry.
+  Healthcare: {
+    points: 16,
+    why: "Treatment plans and procedures billed before the course of care completes",
+  },
+  Transport: { points: 15, why: "Tickets sold well ahead of travel, and refundable on cancellation" },
+}
+
+/** Trades where the customer pays now and receives later.
+ *
+ *  This list is the "high-risk category list" the acceptance panel cites. It
+ *  previously did not exist: the panel answered "No — not a deferred-delivery
+ *  category" for every merchant in the book, including the ones whose own
+ *  sector baseline above says deposits are taken ahead of delivery.
+ *
+ *  Keyed by sector because that is known from the application, which is what
+ *  makes this test answerable even on a file the engine cannot score.
+ */
+export const DEFERRED_DELIVERY: Record<string, string> = {
+  Leisure: "deposits taken well ahead of the stay or sailing",
+  "Health & Fitness": "memberships billed in advance of the months they cover",
+  Healthcare: "treatment plans billed before the course of care completes",
+  Transport: "tickets sold ahead of travel and refundable on cancellation",
 }
 
 /** Parse the annual volume band into a number of major units, currency-agnostic:
@@ -101,11 +166,48 @@ export interface RiskAssessment {
    *  rather than silently presented as the arithmetic result. */
   clamped: boolean
   rawTotal: number
+  /**
+   * When set, the file COULD NOT be scored and `score`/`band` are meaningless.
+   * A risk model weighs the evidence it has against the evidence it needs, and
+   * a missing mandatory document is not a low signal — it is the absence of
+   * one, so the honest output is a refusal, not a number. Callers must branch
+   * on this before showing a score.
+   */
+  blocked?: {
+    missing: string[]
+    reason: string
+  }
+}
+
+/** The documents that must be on file before a score can exist at all. Read
+ *  from the merchant, so the same list drives the refusal, the stop banner and
+ *  the chase — one source, so they cannot disagree about what is missing. */
+export function outstandingDocuments(merchant: Merchant): string[] {
+  return merchant.underwriting?.documentsOutstanding ?? []
 }
 
 export function riskAssessment(merchant: Merchant): RiskAssessment {
   const factors: RiskFactor[] = []
   const uw = merchant.underwriting
+
+  // The stop. Assembling factors and clamping a total would manufacture a
+  // number the file does not support — the very thing that let an incomplete
+  // application read as "Low". Refuse before scoring, and say what is missing.
+  const missing = outstandingDocuments(merchant)
+  if (missing.length > 0) {
+    return {
+      factors: [],
+      score: 0,
+      band: "Elevated",
+      clamped: false,
+      rawTotal: 0,
+      blocked: {
+        missing,
+        reason:
+          "Risk cannot be scored until every mandatory document is on file. The agent has parsed what was supplied and is chasing the rest — scoring now would put a number on evidence that does not exist yet.",
+      },
+    }
+  }
 
   const sector = SECTOR_BASE[merchant.sector] ?? {
     points: 12,
@@ -255,6 +357,129 @@ export function riskAssessment(merchant: Merchant): RiskAssessment {
   const rawTotal = factors.reduce((s, f) => s + f.points, 0)
   const score = Math.max(0, Math.min(100, rawTotal))
   return { factors, score, band: bandFor(score), clamped: score !== rawTotal, rawTotal }
+}
+
+/* --------------------------------------------------- exposure and acceptance */
+
+/** One row of the acceptance panel: what the engine returned, and on whose
+ *  authority. `value: null` is a withheld figure and always carries a source
+ *  saying why — never a blank, and never a zero. */
+export interface LimitRow {
+  value: string | null
+  source: string
+}
+
+export interface AcceptanceLimit {
+  category: LimitRow
+  dailyLimit: LimitRow
+  settlementWindow: LimitRow
+  fullerReview: LimitRow
+  /** True when the file cannot be scored, so category and limit are withheld. */
+  unscored: boolean
+}
+
+/** Working days used to turn an annual band into a daily one. */
+const WORKING_DAYS = 250
+
+/** Headroom over average daily takings, by band. A limit set at the average
+ *  would decline a merchant on their best day, so the multiple falls as risk
+ *  rises rather than the limit being cut to the average. */
+const HEADROOM: Record<RiskBand, number> = { Low: 1.6, Medium: 1.3, Elevated: 1.0 }
+
+const CATEGORY: Record<RiskBand, string> = {
+  Low: "Standard",
+  Medium: "Standard — monitored",
+  Elevated: "Elevated",
+}
+
+/** The merchant's own currency symbol, read off the declared volume band.
+ *  `annualVolume` is deliberately currency-agnostic — it reads a magnitude —
+ *  so the symbol has to be carried separately or a euro merchant gets quoted a
+ *  sterling limit. */
+function currencyOf(size: string): string {
+  return /([^\d\s.,]+)/.exec(size)?.[1] ?? ""
+}
+
+/**
+ * What the acquirer's risk engine and credit policy return for this merchant.
+ *
+ * DERIVED FROM `riskAssessment`, which is the authority every other surface
+ * already uses — the risk desk, the sign-off panel and the score breakdown.
+ * This panel used to ask a different question: whether a score had been typed
+ * into the fixture (`recordedScore`). On a file scored from its factors but
+ * never hand-annotated, the two disagreed, so the sign-off screen showed a real
+ * score and band while the acceptance panel beside it reported the category and
+ * limit as "not on file". One question, two answers, on adjacent panels.
+ *
+ * There is exactly one reason to withhold: the file cannot be scored because
+ * mandatory documents are missing. That is the same condition that drives the
+ * halt banner, the chase and the sign-off gate, so the panel can no longer
+ * disagree with any of them about whether this file is ready.
+ */
+export function acceptanceLimit(merchant: Merchant): AcceptanceLimit {
+  const assessment = riskAssessment(merchant)
+
+  /* Answerable WITHOUT a score. The deferred-delivery test reads the trade,
+     which is known from the application, so this row stays populated even on a
+     blocked file. Previously it was hardcoded "No", which on an unscored file
+     also contradicted the row above it: the panel said the category could not
+     be assigned and then answered a question about the category. */
+  const deferred = DEFERRED_DELIVERY[merchant.sector]
+  const fullerReview: LimitRow = {
+    value: deferred ? `Yes — ${merchant.sector.toLowerCase()} is a deferred-delivery trade` : "No",
+    source: deferred
+      ? `your credit policy — high-risk category list: ${deferred}`
+      : `your credit policy — high-risk category list does not name ${merchant.sector.toLowerCase()}`,
+  }
+
+  /* A settlement cycle is a commercial term of the merchant's contract, not an
+     output of the risk model, so it is knowable on any file. */
+  const settlementWindow: LimitRow = {
+    value: "2 working days",
+    source: "your settlement cycle for this merchant type",
+  }
+
+  if (assessment.blocked) {
+    return {
+      unscored: true,
+      // Withheld, not zeroed. A limit of £0 reads as a decision to accept
+      // nothing, which is a rejection nobody made.
+      category: { value: null, source: "cannot be assigned until the file can be scored" },
+      dailyLimit: {
+        value: null,
+        source: `your policy returns no limit until the file is scored — ${assessment.blocked.missing.length} document(s) outstanding`,
+      },
+      settlementWindow,
+      fullerReview,
+    }
+  }
+
+  const vol = annualVolume(merchant.size)
+  const symbol = currencyOf(merchant.size)
+  const daily =
+    vol === null ? null : Math.round((vol / WORKING_DAYS) * HEADROOM[assessment.band] / 500) * 500
+
+  return {
+    unscored: false,
+    category: {
+      value: CATEGORY[assessment.band],
+      source: `your credit policy — category rules, on a score of ${assessment.score} (${assessment.band})`,
+    },
+    dailyLimit:
+      daily === null
+        ? {
+            // A volume band that cannot be parsed is a gap in the application,
+            // not a limit of zero, and it is named as such.
+            value: null,
+            source: `declared volume "${merchant.size}" could not be read, so no limit can be sized`,
+          }
+        : {
+            value: `${symbol}${daily.toLocaleString("en-GB")} / day`,
+            source: `your credit policy — ${assessment.band.toLowerCase()}-band rule at ${HEADROOM[assessment.band]}× average daily takings on ${merchant.size}`,
+          },
+    settlementWindow,
+    fullerReview,
+  }
 }
 
 /* ---------------------------------------------------------------- edge cases */
