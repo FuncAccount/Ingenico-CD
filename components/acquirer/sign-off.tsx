@@ -14,6 +14,7 @@ import {
 } from "lucide-react"
 import {
   bandTone,
+  BAND_LABEL,
   stepById,
   type Merchant,
 } from "@/lib/acquirer-data"
@@ -177,7 +178,7 @@ export function SignOff({
                     bandTone(step.band),
                   )}
                 >
-                  {step.code} {step.name} · {step.band}
+                  {step.code} {step.name} · {BAND_LABEL[step.band]}
                 </span>
               </div>
               <h2 className="mt-2 text-xl font-semibold text-foreground">

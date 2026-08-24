@@ -27,6 +27,7 @@ import {
 import {
   PIPELINE,
   bandTone,
+  BAND_LABEL,
   statusTone,
   type Merchant,
   type PipelineStep,
@@ -949,7 +950,7 @@ function StepRow({
                 bandTone(step.band),
               )}
             >
-              {step.band}
+              {BAND_LABEL[step.band]}
             </span>
             {/* The words, on the rail itself. The pulsing marker says
                 something is still moving but not what, and this is the one
@@ -2015,7 +2016,7 @@ function StepCockpit({
                     bandTone(step.band),
                   )}
                 >
-                  {step.band}
+                  {BAND_LABEL[step.band]}
                 </span>
                 {/* Name the party who actually owns the step. "Agent-run" was
                     covering three different situations — Ingenico's work, the

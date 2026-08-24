@@ -4,6 +4,28 @@
 
 export type Band = "Augment" | "Assist" | "Automate"
 
+/** HOW THE BAND IS SPOKEN, which is not the same as what the band is called.
+ *
+ *  The band itself is the client's own taxonomy — Automate, Assist, Augment —
+ *  and `estate.ts` counts unattended steps with `step.band === "Automate"`, so
+ *  the KEY has to keep the client's spelling. What appears against a STEP is a
+ *  different statement: the band is Automate, and a step in it is automated.
+ *  Past participles are the honest form here, because they describe how the
+ *  step is handled rather than instructing anyone to handle it.
+ *
+ *  Note this makes no claim about progress. "Automated" is a standing property
+ *  of the step — true before it runs and after — which is why it can sit on a
+ *  not-yet-started node without asserting that anything has happened. Progress
+ *  is carried separately by the step's own state ("Complete", "Halted").
+ *
+ *  Kept as a map rather than renaming the union, so that the 12 authored steps,
+ *  the census comparison and `bandTone` are untouched by a wording change. */
+export const BAND_LABEL: Record<Band, string> = {
+  Augment: "Augmented",
+  Assist: "Assisted",
+  Automate: "Automated",
+}
+
 /** Stable keys, NOT positions. 10 and 11 are KYC and Pricing, which were split
  *  out of Underwriting (2) and sit BEFORE it on the risk lane — the numbers are
  *  out of running order on purpose, because 63 artefact cases and every fixture

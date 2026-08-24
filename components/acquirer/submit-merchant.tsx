@@ -9,6 +9,7 @@ import {
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { Merchant } from "@/lib/acquirer-data"
+import { BAND_LABEL } from "@/lib/acquirer-data"
 import { useBook } from "@/components/acquirer/book-provider"
 import {
   MARKETS,
@@ -269,7 +270,7 @@ export function SubmitMerchant({
                   second place the step's label lived, free to disagree with
                   the rail after the lanes were renumbered. */}
               <span className="mt-0.5 text-[11px] font-medium text-primary">
-                {stepById(1).code} {stepById(1).name} · {stepById(1).band}
+                {stepById(1).code} {stepById(1).name} · {BAND_LABEL[stepById(1).band]}
               </span>
             </div>
           </div>
