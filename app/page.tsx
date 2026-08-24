@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { TopNav } from "@/components/acquirer/top-nav"
 import { PortfolioOverview } from "@/components/acquirer/portfolio-overview"
 import { SubmitMerchant } from "@/components/acquirer/submit-merchant"
@@ -22,6 +22,11 @@ import { estateRows, ALL_JOURNEYS, acquirerOf, laneOf } from "@/lib/estate"
 import { fleetDevices } from "@/lib/devices"
 import type { Persona } from "@/lib/persona"
 import type { AcquirerScreen, IngenicoScreen, AnyScreen } from "@/lib/nav"
+import { isAcquirerScreen, isIngenicoScreen } from "@/lib/nav"
+
+/* sessionStorage, not localStorage: the position should survive a reload of
+   THIS tab, not follow you into a new one opened days later. */
+const POSITION_KEY = "ingenico-acquirer:position"
 
 export default function Page() {
   return (
@@ -58,6 +63,64 @@ function PlatformApp() {
   const [ingScreen, setIngScreen] = useState<IngenicoScreen>("dashboard")
 
   const [selected, setSelected] = useState<Merchant | undefined>(undefined)
+
+  /* WHERE YOU WERE SURVIVES A RELOAD.
+  
+     Every screen here is in-memory, so ANY full document load — a crash, the
+     dev server rebuilding, a tab discarded and restored, a preview refresh —
+     silently returned to the portfolio. That is what "it goes back to the main
+     page after a few minutes" looked like from outside, and while the render
+     loop that caused the crashes is fixed in book-provider, the position was
+     one reload away from being lost for reasons this app does not control.
+  
+     Deliberately NOT restored: the open merchant, the sign-off focus, and the
+     order drafts. Those are working state, and quietly reinstating a specific
+     file — or an edited basket — around a stale record is a stronger claim than
+     this can support. Returning to the right SCREEN is the modest version, and
+     the journey already falls back sensibly when it opens with nothing chosen.
+  
+     Read in an effect, not in a `useState` initialiser: this component renders
+     on the server too, where `sessionStorage` does not exist, and seeding state
+     from it directly would make the first client render disagree with the
+     server's and trip hydration. */
+  const [restored, setRestored] = useState(false)
+
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem(POSITION_KEY)
+      if (raw) {
+        const saved = JSON.parse(raw) as unknown
+        if (saved && typeof saved === "object") {
+          const { persona: p, acq, ing } = saved as Record<string, unknown>
+          if (p === "acquirer" || p === "ingenico") setPersona(p)
+          // Validated against this build's own nav, so a screen renamed since
+          // the value was written falls back rather than rendering nothing.
+          if (isAcquirerScreen(acq)) setAcqScreen(acq)
+          if (isIngenicoScreen(ing)) setIngScreen(ing)
+        }
+      }
+    } catch {
+      // A malformed or blocked store is not worth failing a page load over —
+      // the defaults above are already a correct place to start.
+    }
+    setRestored(true)
+  }, [])
+
+  useEffect(() => {
+    // Only after the read, or the first render would overwrite the saved
+    // position with the defaults before it had been consulted.
+    if (!restored) return
+    try {
+      sessionStorage.setItem(
+        POSITION_KEY,
+        JSON.stringify({ persona, acq: acqScreen, ing: ingScreen }),
+      )
+    } catch {
+      // Private modes and storage limits: losing the position is acceptable,
+      // breaking navigation is not.
+    }
+  }, [restored, persona, acqScreen, ingScreen])
+
   // The open order. Not a screen — a journey is what an order opens into, so
   // this rides ON TOP of the deployments screen rather than beside it.
   const [openOrder, setOpenOrder] = useState<Merchant | undefined>(undefined)

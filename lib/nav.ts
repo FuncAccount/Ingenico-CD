@@ -61,3 +61,23 @@ export const INGENICO_NAV: { id: IngenicoScreen; label: string; icon: typeof Lay
 export function homeScreen(p: Persona): AnyScreen {
   return p === "acquirer" ? "portfolio" : "dashboard"
 }
+
+/**
+ * IS THIS A SCREEN THIS BUILD STILL HAS?
+ *
+ * Used when restoring a saved position after a reload. A stored id is only a
+ * string from an earlier session, so it cannot be trusted: rename or retire a
+ * screen and the old value would set state matching no branch in the switch,
+ * rendering a blank page under a working nav — which reads as a crash rather
+ * than as stale state.
+ *
+ * DERIVED from the nav lists above rather than restated, so adding a screen
+ * cannot leave a validator behind that silently rejects it.
+ */
+export function isAcquirerScreen(v: unknown): v is AcquirerScreen {
+  return typeof v === "string" && ACQUIRER_NAV.some((n) => n.id === v)
+}
+
+export function isIngenicoScreen(v: unknown): v is IngenicoScreen {
+  return typeof v === "string" && INGENICO_NAV.some((n) => n.id === v)
+}

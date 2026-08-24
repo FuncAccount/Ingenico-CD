@@ -123,7 +123,37 @@ export function BookProvider({ children }: { children: React.ReactNode }) {
         // slot needed a reset-on-switch effect to paper over exactly that, and
         // the effect also discarded edits you meant to keep.
         const base = prev[merchant.id] ?? defaultOrder(merchant)
-        return { ...prev, [merchant.id]: typeof next === "function" ? next(base) : next }
+        const draft = typeof next === "function" ? next(base) : next
+
+        /* A NO-OP WRITE MUST NOT PRODUCE NEW STATE. This used to allocate
+           `{ ...prev }` unconditionally, so an updater that returned its own
+           input — the standard way to say "nothing to change" — still published
+           a new orders object.
+        
+           That was an infinite render loop, and the log shows it firing: the
+           delivery artefact defaults the requested date once, guarded by
+           `if (d.requestedIso) return d`. The guard was correct and got thrown
+           away here. The new object changed the context value, which gave
+           `themeFor`/`playedFor` new identities, which recomputed `halted` and
+           `live` in app/page.tsx, which handed the cockpit a NEW merchant object,
+           which rebuilt `setDraft`, whose identity is the effect's dependency —
+           so the effect ran again, wrote again, and round it went until React
+           threw "Maximum update depth exceeded" and tore down the tree. Since
+           every screen and provider here is in-memory, the remount landed back
+           on the portfolio: the "it goes back to the main page" report.
+        
+           Bailing out on an unchanged draft cuts the cycle at its first link and
+           honours the signal callers were already sending. `resetOrder` below
+           has always done this; `setOrder` was the outlier.
+        
+           Compared against `base`, not against the stored entry, so that a
+           no-op against a merchant with no override yet does not CREATE one —
+           `orderEdited` is "is there an entry", so writing an unchanged draft
+           would report the kit as edited by the acquirer when nobody touched
+           it. */
+        if (draft === base) return prev
+
+        return { ...prev, [merchant.id]: draft }
       })
     },
     [],
